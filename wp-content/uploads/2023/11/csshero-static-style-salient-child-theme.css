@@ -1,0 +1,23 @@
+#fws_65305d549d374 > div:nth-child(2) > div > div > div > div > div > div > ul > li:nth-child(1) > a {
+  font-weight: 500;
+}
+#fws_65305d549d374 > div:nth-child(2) > div > div > div > div > div > div > ul > li:nth-child(2) > a {
+  font-weight: 500;
+}
+#fws_65305d549d374 > div:nth-child(2) > div > div > div > div > div > div > ul > li:nth-child(3) > a {
+  font-weight: 500;
+}
+.page-submenu li > a {
+  font-weight: 500 !important;
+}
+.container .entry-title {
+  padding-top: 51px;
+  line-height: 73px !important;
+}
+.active span > .inner {
+  line-height: 60px !important;
+  font-size: 52px;
+}
+.active .full-slide-link {
+  line-height: 39px !important;
+}
