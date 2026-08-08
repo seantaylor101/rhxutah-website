@@ -791,6 +791,8 @@ function ArchiveView({ leads }) {
 }
 
 function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingTime, setEditingTime] = useState(false);
   const [timeDraft, setTimeDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
@@ -800,6 +802,13 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
+
+  const saveName = () => {
+    const trimmed = nameDraft.trim();
+    if (trimmed) onEditField(lead.id, "name", trimmed);
+    else setNameDraft(lead.name);
+    setEditingName(false);
+  };
 
   const openTimeEdit = () => {
     const d = new Date(lead.createdAt);
@@ -830,9 +839,59 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
       <div style={{ ...ticketStub, background: stage?.color || COLORS.chalk }} />
       <div style={{ flex: 1, padding: "12px 14px 12px 10px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, color: COLORS.ink }}>{lead.name}</div>
-          {editable &&
-            (!confirmDel ? (
+          {!editingName ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 16,
+                  color: COLORS.ink,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {lead.name}
+              </div>
+              {editable && (
+                <button
+                  onClick={() => {
+                    setNameDraft(lead.name);
+                    setEditingName(true);
+                  }}
+                  style={iconBtnGhost}
+                  aria-label="Edit name"
+                >
+                  <Pencil size={12} color="#9A9184" />
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveName()}
+                style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 15, flex: 1 }}
+              />
+              <button onClick={saveName} style={{ ...iconBtn, background: COLORS.green }} aria-label="Save name">
+                <Check size={13} color="#fff" />
+              </button>
+              <button
+                onClick={() => {
+                  setNameDraft(lead.name);
+                  setEditingName(false);
+                }}
+                style={{ ...iconBtn, background: "#B8B0A0" }}
+                aria-label="Cancel name edit"
+              >
+                <X size={13} color="#fff" />
+              </button>
+            </div>
+          )}
+          {editable && !editingName && (
+            !confirmDel ? (
               <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
                 <Trash2 size={15} color="#9A9184" />
               </button>
@@ -845,7 +904,8 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                   <X size={13} color="#fff" />
                 </button>
               </div>
-            ))}
+            )
+          )}
         </div>
 
         {/* received timestamp */}

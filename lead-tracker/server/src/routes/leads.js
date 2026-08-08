@@ -110,6 +110,10 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "No editable fields given" });
   }
+  if ("name" in updates) {
+    updates.name = String(updates.name).trim();
+    if (!updates.name) return res.status(400).json({ error: "Name can't be empty" });
+  }
 
   const fields = Object.keys(updates);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
