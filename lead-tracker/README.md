@@ -57,7 +57,29 @@ Open the client dev server URL (Vite prints it, typically http://localhost:5173)
 The `data/` folder (mounted as a volume) holds `leads.db`. Back that file up periodically —
 it's the only copy of your data.
 
-## Deploying to a hosting platform (Render, Railway, Fly.io, etc.)
+## Deploying to Render
+
+A `render.yaml` Blueprint at the repo root already describes the service: Docker build from
+`lead-tracker/`, a persistent 1GB disk mounted at `/app/data` (so `leads.db` survives restarts
+and redeploys), and the `SESSION_SECRET`/`OWNER_PASSCODE`/`VIEWER_PASSCODE` env vars. This
+requires Render's **Starter plan** ($7/mo) — the free tier doesn't support persistent disks, so
+the database would get wiped on every redeploy or restart on free.
+
+1. In the Render dashboard: **New +** → **Blueprint**.
+2. Connect the `seantaylor101/rhxutah-website` GitHub repo (install the Render GitHub App if it
+   asks, and grant it access to this repo).
+3. Render reads `render.yaml` and shows the `rhx-lead-tracker` service it's about to create —
+   confirm it.
+4. It'll pause on `OWNER_PASSCODE` and `VIEWER_PASSCODE` (marked `sync: false`, so they're not
+   stored in git) — fill in two different secret values. `SESSION_SECRET` is generated for you
+   automatically.
+5. Click **Apply**. Render builds the Docker image and deploys. First build takes a few minutes.
+6. Once it's live, open the service URL and sign in with the `OWNER_PASSCODE` you set.
+
+Any future push to the branch Render is tracking auto-redeploys. The disk persists across those
+deploys — only deleting the disk itself in Render's dashboard would lose the data.
+
+## Deploying elsewhere (Railway, Fly.io, a VPS, etc.)
 
 All of these work the same way with this repo, since it's one Dockerfile:
 
@@ -65,7 +87,7 @@ All of these work the same way with this repo, since it's one Dockerfile:
 2. Set the environment variables from `.env.example` (`SESSION_SECRET`, `OWNER_PASSCODE`,
    `VIEWER_PASSCODE`) in the platform's dashboard.
 3. Attach a **persistent disk/volume** mounted at `/app/data` — without this, the SQLite file
-   is wiped on every redeploy. (Render: "Disks"; Railway: "Volumes"; Fly.io: `fly volumes create`.)
+   is wiped on every redeploy. (Railway: "Volumes"; Fly.io: `fly volumes create`.)
 4. Deploy. The container serves both the API and the built frontend on the same port
    (`PORT`, default 4000), so there's nothing else to configure — no separate frontend host,
    no CORS setup.

@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: rhx-lead-tracker
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./lead-tracker/Dockerfile
+    dockerContext: ./lead-tracker
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DB_PATH
+        value: /app/data/leads.db
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OWNER_PASSCODE
+        sync: false
+      - key: VIEWER_PASSCODE
+        sync: false
+    disk:
+      name: rhx-lead-tracker-data
+      mountPath: /app/data
+      sizeGB: 1
