@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      SESSION_SECRET: ${SESSION_SECRET}
+      OWNER_PASSCODE: ${OWNER_PASSCODE}
+      VIEWER_PASSCODE: ${VIEWER_PASSCODE}
+      DB_PATH: /app/data/leads.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
