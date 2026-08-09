@@ -147,16 +147,10 @@ function sourceLabel(lead) {
   return s ? s.label : lead.source;
 }
 
-function fmtDateTime(iso) {
+function fmtDateOnly(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function fmtDate(iso) {
@@ -816,8 +810,8 @@ function ArchiveView({ leads }) {
 function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
-  const [editingTime, setEditingTime] = useState(false);
-  const [timeDraft, setTimeDraft] = useState("");
+  const [editingReceived, setEditingReceived] = useState(false);
+  const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
   const [editingRevenue, setEditingRevenue] = useState(false);
@@ -833,17 +827,17 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
     setEditingName(false);
   };
 
-  const openTimeEdit = () => {
+  const openReceivedEdit = () => {
     const d = new Date(lead.createdAt);
     const off = d.getTimezoneOffset();
     const local = new Date(d.getTime() - off * 60000);
-    setTimeDraft(local.toISOString().slice(0, 16));
-    setEditingTime(true);
+    setReceivedDraft(local.toISOString().slice(0, 10));
+    setEditingReceived(true);
   };
 
-  const saveTime = () => {
-    if (timeDraft) onEditField(lead.id, "createdAt", new Date(timeDraft).toISOString());
-    setEditingTime(false);
+  const saveReceived = () => {
+    if (receivedDraft) onEditField(lead.id, "createdAt", new Date(receivedDraft + "T00:00:00").toISOString());
+    setEditingReceived(false);
   };
 
   const saveStart = () => {
@@ -935,11 +929,11 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         {/* received timestamp */}
         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Received</span>
-          {!editingTime ? (
+          {!editingReceived ? (
             <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateTime(lead.createdAt)}</span>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
               {editable && (
-                <button onClick={openTimeEdit} style={iconBtnGhost} aria-label="Edit received time">
+                <button onClick={openReceivedEdit} style={iconBtnGhost} aria-label="Edit received date">
                   <Pencil size={12} color="#9A9184" />
                 </button>
               )}
@@ -947,15 +941,15 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
           ) : (
             <>
               <input
-                type="datetime-local"
-                value={timeDraft}
-                onChange={(e) => setTimeDraft(e.target.value)}
+                type="date"
+                value={receivedDraft}
+                onChange={(e) => setReceivedDraft(e.target.value)}
                 style={inlineInput}
               />
-              <button onClick={saveTime} style={{ ...iconBtn, background: COLORS.accent }}>
+              <button onClick={saveReceived} style={{ ...iconBtn, background: COLORS.accent }}>
                 <Check size={13} color="#fff" />
               </button>
-              <button onClick={() => setEditingTime(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
+              <button onClick={() => setEditingReceived(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
                 <X size={13} color="#fff" />
               </button>
             </>
@@ -1047,7 +1041,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
 
         {lead.stage === "paid" && lead.paidAt && (
           <div style={{ marginTop: 10, fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>
-            Paid {fmtDateTime(lead.paidAt)} · clears next month
+            Paid {fmtDateOnly(lead.paidAt)} · clears next month
           </div>
         )}
 
