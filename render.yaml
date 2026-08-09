@@ -19,6 +19,14 @@ services:
         sync: false
       - key: VIEWER_PASSCODE
         sync: false
+      - key: FORM_INTAKE_KEY
+        sync: false
+      - key: WEB3FORMS_ACCESS_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
     disk:
       name: rhx-lead-tracker-data
       mountPath: /app/data

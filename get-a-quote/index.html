@@ -273,10 +273,30 @@
 </footer>
 
 <script>
+function notifyJobBoard(fields) {
+  try {
+    fetch('https://rhxutah-website.onrender.com/api/public/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Intake-Key': 'c3ab1ba3d9461aedd1ee4f254057f7b8d403da0bf879812c' },
+      body: JSON.stringify(fields)
+    }).catch(function () {});
+  } catch (e) {}
+}
+
 document.getElementById('lp-quote-form').addEventListener('submit', function (e) {
   e.preventDefault();
   var form = e.target;
   var data = new FormData(form);
+
+  notifyJobBoard({
+    name: data.get('name') || '',
+    phone: data.get('phone') || '',
+    email: data.get('email') || '',
+    service: data.get('service_needed') || '',
+    message: data.get('message') || '',
+    page: 'Get a Quote'
+  });
+
   fetch(form.action, { method: 'POST', body: data, headers: { 'Accept': 'application/json' } })
     .then(function (res) { return res.json(); })
     .then(function (result) {

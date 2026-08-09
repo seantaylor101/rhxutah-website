@@ -29,4 +29,7 @@ export const api = {
     }),
   editLead: (id, patch) => request(`/leads/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteLead: (id) => request(`/leads/${id}`, { method: "DELETE" }),
+  vapidPublicKey: () => request("/push/vapid-public-key"),
+  pushSubscribe: (subscription) => request("/push/subscribe", { method: "POST", body: JSON.stringify(subscription) }),
+  pushUnsubscribe: (endpoint) => request("/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }) }),
 };
