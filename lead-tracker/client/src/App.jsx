@@ -102,28 +102,34 @@ const Archive = (p) => (
 );
 
 // ---- design tokens ----
-// Blueprint / job-ticket concept: navy blueprint ground, chalk-line accents,
-// each lead rendered as a torn work-order ticket you move down the board.
+// Matches the main RHX site: light content area, dark green header band,
+// brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
 const COLORS = {
-  navy: "#152A3D",
-  navyDeep: "#0E1F2E",
-  paper: "#F3EFE4",
-  chalk: "#8FB4CE",
-  rust: "#C25B2E",
-  green: "#4F7A55",
+  bg: "#F7F7F5",
+  surface: "#FFFFFF",
+  surfaceMuted: "#EEF1EC",
+  header: "#32473D",
+  headerLine: "rgba(255,255,255,0.16)",
+  accent: "#47936B",
+  ink: "#242926",
+  muted: "#6E7A6F",
+  mutedOnDark: "rgba(255,255,255,0.75)",
+  border: "#E1E5DD",
+  rust: "#C0483B",
   amber: "#C79A3D",
-  ink: "#20242A",
-  line: "#2C4256",
+  lost: "#9B9686",
+  progress: "#BD7238",
+  info: "#6E8CA0",
 };
 
 const STAGES = [
-  { key: "new", label: "New Lead", short: "New", color: COLORS.chalk },
+  { key: "new", label: "New Lead", short: "New", color: COLORS.info },
   { key: "bid", label: "Bid Complete / Waiting", short: "Bid Sent", color: COLORS.amber },
-  { key: "lost", label: "Lost", short: "Lost", color: "#8A8478" },
-  { key: "won", label: "Job Won — Not Started", short: "Won", color: COLORS.green },
-  { key: "progress", label: "Jobs In Progress", short: "In Progress", color: COLORS.rust },
-  { key: "completed", label: "Completed This Month", short: "Completed", color: COLORS.chalk },
-  { key: "paid", label: "Paid", short: "Paid", color: COLORS.green },
+  { key: "lost", label: "Lost", short: "Lost", color: COLORS.lost },
+  { key: "won", label: "Job Won — Not Started", short: "Won", color: COLORS.accent },
+  { key: "progress", label: "Jobs In Progress", short: "In Progress", color: COLORS.progress },
+  { key: "completed", label: "Completed This Month", short: "Completed", color: COLORS.info },
+  { key: "paid", label: "Paid", short: "Paid", color: COLORS.accent },
 ];
 
 const SOURCES = [
@@ -198,10 +204,10 @@ class ErrorBoundary extends React.Component {
     if (this.state.error) {
       return (
         <div style={{ ...shell, alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
-          <div style={{ fontFamily: FONT_DISPLAY, color: COLORS.paper, fontSize: 18, marginBottom: 8 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 18, marginBottom: 8 }}>
             The board hit a snag
           </div>
-          <div style={{ fontFamily: FONT_BODY, color: COLORS.chalk, fontSize: 13, marginBottom: 16, maxWidth: 320 }}>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13, marginBottom: 16, maxWidth: 320 }}>
             Something went wrong while loading. Reloading usually fixes it — if it keeps happening, let me know what
             this says:
           </div>
@@ -210,8 +216,8 @@ class ErrorBoundary extends React.Component {
               fontFamily: FONT_UTIL,
               fontSize: 11,
               color: COLORS.rust,
-              background: COLORS.navy,
-              border: `1px solid ${COLORS.line}`,
+              background: "#FBEAE7",
+              border: "1px solid #F0C9C2",
               borderRadius: 8,
               padding: 12,
               maxWidth: 340,
@@ -371,7 +377,7 @@ function App() {
   if (!authChecked) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: COLORS.chalk, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
+        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
           CHECKING SESSION…
         </div>
       </div>
@@ -385,7 +391,7 @@ function App() {
   if (leads === null) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: COLORS.chalk, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
+        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
           LOADING BOARD…
         </div>
       </div>
@@ -398,7 +404,7 @@ function App() {
         * { box-sizing: border-box; }
         input, textarea, button { font-family: inherit; }
         input:focus, textarea:focus, button:focus-visible {
-          outline: 2px solid ${COLORS.chalk}; outline-offset: 2px;
+          outline: 2px solid ${COLORS.accent}; outline-offset: 2px;
         }
         ::placeholder { color: #9AA6AD; }
         .scrollx::-webkit-scrollbar { display: none; }
@@ -410,12 +416,20 @@ function App() {
 
       <header style={header}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Ticket size={20} color={COLORS.paper} strokeWidth={1.75} />
+          <Ticket size={20} color={COLORS.surface} strokeWidth={1.75} />
           <div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, color: COLORS.paper, letterSpacing: "0.01em" }}>
+            <div
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 700,
+                fontSize: 19,
+                color: COLORS.surface,
+                letterSpacing: "0.01em",
+              }}
+            >
               RHX Job Board
             </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.chalk, letterSpacing: "0.06em" }}>
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.mutedOnDark, letterSpacing: "0.06em" }}>
               LEAD → BID → WON/LOST → PROGRESS → PAID
             </div>
           </div>
@@ -428,7 +442,7 @@ function App() {
             </button>
           ) : (
             <div style={viewBadge}>
-              <Eye size={13} color={COLORS.chalk} />
+              <Eye size={13} color={COLORS.mutedOnDark} />
               <span>View only</span>
             </div>
           )}
@@ -437,10 +451,14 @@ function App() {
             style={iconBtnGhost}
             aria-label={view === "board" ? "View archive" : "Back to board"}
           >
-            {view === "board" ? <Archive size={15} color={COLORS.chalk} /> : <Ticket size={15} color={COLORS.chalk} />}
+            {view === "board" ? (
+              <Archive size={15} color={COLORS.mutedOnDark} />
+            ) : (
+              <Ticket size={15} color={COLORS.mutedOnDark} />
+            )}
           </button>
           <button onClick={() => setShowAccountModal(true)} style={iconBtnGhost} aria-label="Account">
-            <Unlock size={15} color={COLORS.chalk} />
+            <Unlock size={15} color={COLORS.mutedOnDark} />
           </button>
         </div>
       </header>
@@ -462,7 +480,7 @@ function App() {
       </div>
 
       {error && (
-        <div style={{ background: "#4A2323", color: "#F3D8D8", fontSize: 13, padding: "8px 16px", fontFamily: FONT_BODY }}>
+        <div style={{ background: "#FBEAE7", color: "#8C2F24", fontSize: 13, padding: "8px 16px", fontFamily: FONT_BODY }}>
           {error}
         </div>
       )}
@@ -480,12 +498,12 @@ function App() {
                   style={{
                     ...tabBtn,
                     background: active ? s.color : "transparent",
-                    color: active ? COLORS.navyDeep : COLORS.paper,
+                    color: COLORS.ink,
                     borderColor: s.color,
                   }}
                 >
                   {s.short}
-                  <span style={{ ...countPill, background: active ? "rgba(14,31,46,0.25)" : "rgba(243,239,228,0.14)" }}>
+                  <span style={{ ...countPill, background: active ? "rgba(0,0,0,0.12)" : "rgba(0,0,0,0.06)" }}>
                     {counts[s.key] || 0}
                   </span>
                 </button>
@@ -501,9 +519,18 @@ function App() {
               disabled={stageIdx === 0}
               aria-label="Previous stage"
             >
-              <ChevronLeft size={18} color={COLORS.paper} />
+              <ChevronLeft size={18} color={COLORS.ink} />
             </button>
-            <div style={{ fontFamily: FONT_DISPLAY, color: COLORS.paper, fontSize: 16, textAlign: "center", flex: 1 }}>
+            <div
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 700,
+                color: COLORS.ink,
+                fontSize: 16,
+                textAlign: "center",
+                flex: 1,
+              }}
+            >
               {STAGES[stageIdx].label}
             </div>
             <button
@@ -512,7 +539,7 @@ function App() {
               disabled={stageIdx === STAGES.length - 1}
               aria-label="Next stage"
             >
-              <ChevronRight size={18} color={COLORS.paper} />
+              <ChevronRight size={18} color={COLORS.ink} />
             </button>
           </div>
 
@@ -520,10 +547,12 @@ function App() {
           <main style={cardsWrap}>
             {visible.length === 0 && (
               <div style={emptyState}>
-                <div style={{ fontFamily: FONT_DISPLAY, color: COLORS.paper, fontSize: 15, marginBottom: 4 }}>
+                <div
+                  style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
+                >
                   Nothing here yet
                 </div>
-                <div style={{ fontFamily: FONT_BODY, color: COLORS.chalk, fontSize: 13 }}>
+                <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
                   {activeStage === "new"
                     ? "Tap “New Lead” to log one."
                     : "Leads land here once they move through the board."}
@@ -582,12 +611,14 @@ function LoginScreen({ onLogin }) {
       <style>{`
         * { box-sizing: border-box; }
         input, button { font-family: inherit; }
-        input:focus, button:focus-visible { outline: 2px solid ${COLORS.chalk}; outline-offset: 2px; }
+        input:focus, button:focus-visible { outline: 2px solid ${COLORS.accent}; outline-offset: 2px; }
       `}</style>
       <div style={{ width: "100%", maxWidth: 340 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, justifyContent: "center" }}>
-          <Ticket size={22} color={COLORS.paper} strokeWidth={1.75} />
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: COLORS.paper }}>RHX Job Board</div>
+          <Ticket size={22} color={COLORS.accent} strokeWidth={1.75} />
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
+            RHX Job Board
+          </div>
         </div>
         <label style={modalLabel}>Passcode</label>
         <input
@@ -599,7 +630,7 @@ function LoginScreen({ onLogin }) {
           style={modalInput}
           placeholder="Enter your passcode"
         />
-        {err && <div style={{ color: "#F3D8D8", fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
         <button
           onClick={submit}
           disabled={busy || !passcode}
@@ -634,13 +665,13 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, color: COLORS.paper }}>Account</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Account</div>
           <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-            <X size={18} color={COLORS.chalk} />
+            <X size={18} color={COLORS.muted} />
           </button>
         </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.chalk, marginBottom: 16 }}>
-          Signed in as <strong style={{ color: COLORS.paper }}>{role === "owner" ? "Editor" : "Viewer"}</strong> on
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Signed in as <strong style={{ color: COLORS.ink }}>{role === "owner" ? "Editor" : "Viewer"}</strong> on
           this device.
         </div>
         <label style={modalLabel}>Switch access with a different passcode</label>
@@ -652,7 +683,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
           style={modalInput}
           placeholder="Enter passcode"
         />
-        {err && <div style={{ color: "#F3D8D8", fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
         <button
           onClick={submit}
           disabled={busy || !passcode}
@@ -662,9 +693,9 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
         </button>
         <button
           onClick={onLogout}
-          style={{ ...roleOption, marginTop: 16, justifyContent: "center", borderColor: COLORS.line, cursor: "pointer" }}
+          style={{ ...roleOption, marginTop: 16, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
         >
-          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.paper, fontSize: 14 }}>
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
             Log out on this device
           </span>
         </button>
@@ -718,9 +749,9 @@ function ArchiveView({ leads }) {
             onClick={() => setGranularity(g)}
             style={{
               ...tabBtn,
-              background: granularity === g ? COLORS.chalk : "transparent",
-              color: granularity === g ? COLORS.navyDeep : COLORS.paper,
-              borderColor: COLORS.chalk,
+              background: granularity === g ? COLORS.accent : "transparent",
+              color: granularity === g ? COLORS.surface : COLORS.ink,
+              borderColor: COLORS.accent,
             }}
           >
             {g[0].toUpperCase() + g.slice(1)}
@@ -730,10 +761,12 @@ function ArchiveView({ leads }) {
 
       {periods.length === 0 && (
         <div style={emptyState}>
-          <div style={{ fontFamily: FONT_DISPLAY, color: COLORS.paper, fontSize: 15, marginBottom: 4 }}>
+          <div
+            style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
+          >
             Nothing archived yet
           </div>
-          <div style={{ fontFamily: FONT_BODY, color: COLORS.chalk, fontSize: 13 }}>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
             Paid jobs land here so you can look back by week, month, or year.
           </div>
         </div>
@@ -759,7 +792,9 @@ function ArchiveView({ leads }) {
               }}
             >
               <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, color: COLORS.ink }}>{p.label}</div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
+                  {p.label}
+                </div>
                 <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: "#8A8478" }}>
                   {p.leads.length} paid · {fmtCurrency(revenue)}
                 </div>
@@ -836,7 +871,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
 
   return (
     <div style={ticket}>
-      <div style={{ ...ticketStub, background: stage?.color || COLORS.chalk }} />
+      <div style={{ ...ticketStub, background: stage?.color || COLORS.info }} />
       <div style={{ flex: 1, padding: "12px 14px 12px 10px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           {!editingName ? (
@@ -844,6 +879,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
               <div
                 style={{
                   fontFamily: FONT_DISPLAY,
+                  fontWeight: 700,
                   fontSize: 16,
                   color: COLORS.ink,
                   overflow: "hidden",
@@ -875,7 +911,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 onKeyDown={(e) => e.key === "Enter" && saveName()}
                 style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 15, flex: 1 }}
               />
-              <button onClick={saveName} style={{ ...iconBtn, background: COLORS.green }} aria-label="Save name">
+              <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
                 <Check size={13} color="#fff" />
               </button>
               <button
@@ -930,7 +966,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 onChange={(e) => setTimeDraft(e.target.value)}
                 style={inlineInput}
               />
-              <button onClick={saveTime} style={{ ...iconBtn, background: COLORS.green }}>
+              <button onClick={saveTime} style={{ ...iconBtn, background: COLORS.accent }}>
                 <Check size={13} color="#fff" />
               </button>
               <button onClick={() => setEditingTime(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
@@ -979,7 +1015,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 placeholder="0"
                 style={{ ...inlineInput, width: 90 }}
               />
-              <button onClick={saveRevenue} style={{ ...iconBtn, background: COLORS.green }}>
+              <button onClick={saveRevenue} style={{ ...iconBtn, background: COLORS.accent }}>
                 <Check size={13} color="#fff" />
               </button>
               <button onClick={() => setEditingRevenue(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
@@ -1016,7 +1052,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
             ) : (
               <>
                 <input type="date" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} style={inlineInput} />
-                <button onClick={saveStart} style={{ ...iconBtn, background: COLORS.green }}>
+                <button onClick={saveStart} style={{ ...iconBtn, background: COLORS.accent }}>
                   <Check size={13} color="#fff" />
                 </button>
                 <button onClick={() => setEditingStart(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
@@ -1047,8 +1083,8 @@ function ActionRow({ lead, onMove }) {
       onClick={() => onMove(lead.id, target)}
       style={{
         ...actionBtn,
-        background: kind === "primary" ? COLORS.navy : "transparent",
-        color: kind === "primary" ? COLORS.paper : "#6B6558",
+        background: kind === "primary" ? COLORS.accent : "transparent",
+        color: kind === "primary" ? COLORS.surface : "#6B6558",
         border: kind === "primary" ? "none" : "1px solid #D8D2C2",
       }}
     >
@@ -1103,9 +1139,11 @@ function AddLeadModal({ onAdd, onClose }) {
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, color: COLORS.paper }}>Log a new lead</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Log a new lead
+          </div>
           <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-            <X size={18} color={COLORS.chalk} />
+            <X size={18} color={COLORS.muted} />
           </button>
         </div>
         <label style={modalLabel}>Name / job</label>
@@ -1137,7 +1175,7 @@ function AddLeadModal({ onAdd, onClose }) {
             />
           </>
         )}
-        <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.chalk, marginTop: 6, marginBottom: 16, letterSpacing: "0.04em" }}>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted, marginTop: 6, marginBottom: 16, letterSpacing: "0.04em" }}>
           Timestamped now — you can edit the received time after adding.
         </div>
         <button
@@ -1153,13 +1191,13 @@ function AddLeadModal({ onAdd, onClose }) {
 }
 
 // ---- styles ----
-const FONT_DISPLAY = "'Barlow Condensed', 'Arial Narrow', sans-serif";
-const FONT_BODY = "'Inter', system-ui, sans-serif";
-const FONT_UTIL = "'IBM Plex Mono', 'Courier New', monospace";
+const FONT_DISPLAY = "'Open Sans', sans-serif";
+const FONT_BODY = "'Open Sans', sans-serif";
+const FONT_UTIL = "'Open Sans', sans-serif";
 
 const shell = {
   minHeight: "100vh",
-  background: COLORS.navyDeep,
+  background: COLORS.bg,
   display: "flex",
   flexDirection: "column",
   fontFamily: FONT_BODY,
@@ -1170,14 +1208,15 @@ const header = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "16px 16px 12px",
-  borderBottom: `1px solid ${COLORS.line}`,
+  background: COLORS.header,
+  borderBottom: `1px solid ${COLORS.headerLine}`,
 };
 
 const addBtn = {
   display: "flex",
   alignItems: "center",
   gap: 6,
-  background: COLORS.rust,
+  background: COLORS.accent,
   color: "#fff",
   border: "none",
   borderRadius: 7,
@@ -1193,7 +1232,7 @@ const tabsRow = {
   gap: 8,
   padding: "12px 16px",
   overflowX: "auto",
-  borderBottom: `1px solid ${COLORS.line}`,
+  borderBottom: `1px solid ${COLORS.border}`,
 };
 
 const tabBtn = {
@@ -1243,7 +1282,7 @@ const cardsWrap = {
 };
 
 const emptyState = {
-  border: `1px dashed ${COLORS.line}`,
+  border: `1px dashed ${COLORS.border}`,
   borderRadius: 10,
   padding: "28px 16px",
   textAlign: "center",
@@ -1252,10 +1291,11 @@ const emptyState = {
 
 const ticket = {
   display: "flex",
-  background: COLORS.paper,
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
   borderRadius: 8,
   overflow: "hidden",
-  boxShadow: "0 1px 0 rgba(0,0,0,0.2)",
+  boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
 };
 
 const ticketStub = {
@@ -1305,7 +1345,7 @@ const actionBtn = {
 const modalOverlay = {
   position: "fixed",
   inset: 0,
-  background: "rgba(14,31,46,0.7)",
+  background: "rgba(36,41,38,0.5)",
   display: "flex",
   alignItems: "flex-end",
   justifyContent: "center",
@@ -1313,12 +1353,13 @@ const modalOverlay = {
 };
 
 const modalCard = {
-  background: COLORS.navy,
-  borderTop: `1px solid ${COLORS.line}`,
+  background: COLORS.surface,
+  borderTop: `1px solid ${COLORS.border}`,
   borderRadius: "14px 14px 0 0",
   padding: "20px 18px 26px",
   width: "100%",
   maxWidth: 480,
+  boxShadow: "0 -4px 24px rgba(36,41,38,0.12)",
 };
 
 const statsRow = {
@@ -1329,37 +1370,40 @@ const statsRow = {
 
 const statCard = {
   flex: 1,
-  background: COLORS.navy,
-  border: `1px solid ${COLORS.line}`,
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
   borderRadius: 9,
   padding: "10px 12px",
+  boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
 };
 
 const statLabel = {
   fontFamily: FONT_UTIL,
   fontSize: 10,
-  color: COLORS.chalk,
+  color: COLORS.muted,
   letterSpacing: "0.08em",
 };
 
 const statMain = {
   fontFamily: FONT_DISPLAY,
+  fontWeight: 700,
   fontSize: 22,
-  color: COLORS.paper,
+  color: COLORS.ink,
   marginTop: 2,
 };
 
 const statUnit = {
   fontFamily: FONT_BODY,
   fontSize: 12,
-  color: COLORS.chalk,
+  color: COLORS.muted,
   fontWeight: 400,
 };
 
 const statSub = {
   fontFamily: FONT_UTIL,
   fontSize: 11,
-  color: COLORS.amber,
+  fontWeight: 600,
+  color: COLORS.accent,
   marginTop: 2,
 };
 
@@ -1369,9 +1413,9 @@ const viewBadge = {
   gap: 6,
   fontFamily: FONT_UTIL,
   fontSize: 11.5,
-  color: COLORS.chalk,
+  color: COLORS.mutedOnDark,
   letterSpacing: "0.05em",
-  border: `1px solid ${COLORS.line}`,
+  border: `1px solid ${COLORS.headerLine}`,
   borderRadius: 7,
   padding: "7px 11px",
 };
@@ -1382,7 +1426,7 @@ const roleOption = {
   gap: 10,
   width: "100%",
   textAlign: "left",
-  background: "#0F2130",
+  background: COLORS.surfaceMuted,
   border: "1px solid",
   borderRadius: 8,
   padding: "10px 12px",
@@ -1393,7 +1437,7 @@ const modalLabel = {
   display: "block",
   fontFamily: FONT_UTIL,
   fontSize: 10.5,
-  color: COLORS.chalk,
+  color: COLORS.muted,
   letterSpacing: "0.06em",
   marginBottom: 5,
   marginTop: 10,
@@ -1403,9 +1447,9 @@ const modalInput = {
   width: "100%",
   padding: "9px 10px",
   borderRadius: 7,
-  border: `1px solid ${COLORS.line}`,
-  background: "#0F2130",
-  color: COLORS.paper,
+  border: `1px solid ${COLORS.border}`,
+  background: COLORS.surfaceMuted,
+  color: COLORS.ink,
   fontFamily: FONT_BODY,
   fontSize: 14,
 };
