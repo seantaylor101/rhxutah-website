@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { api } from "./api.js";
+import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -118,6 +119,12 @@ const MoreVertical = ({ size = 16, color = "currentColor" }) => (
     <circle cx="12" cy="19" r="1.7" fill={color} />
   </svg>
 );
+const Bell = (p) => (
+  <Icon {...p}>
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+  </Icon>
+);
 
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
@@ -166,12 +173,14 @@ const SOURCES = [
   { key: "referral_bni", label: "Referral (BNI)" },
   { key: "google", label: "Google Lead" },
   { key: "facebook", label: "Facebook Lead" },
+  { key: "website", label: "Website Form" },
   { key: "other", label: "Other" },
 ];
 
 function sourceLabel(lead) {
   if (!lead.source) return null;
   if (lead.source === "other") return lead.sourceOther ? `Other — ${lead.sourceOther}` : "Other";
+  if (lead.source === "website") return lead.sourceOther ? `Website Form — ${lead.sourceOther}` : "Website Form";
   const s = SOURCES.find((s) => s.key === lead.source);
   return s ? s.label : lead.source;
 }
@@ -795,6 +804,37 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pushStatus, setPushStatus] = useState("checking"); // checking | unsupported | enabled | disabled
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState("");
+
+  useEffect(() => {
+    if (!pushSupported()) {
+      setPushStatus("unsupported");
+      return;
+    }
+    getPushSubscription()
+      .then((sub) => setPushStatus(sub ? "enabled" : "disabled"))
+      .catch(() => setPushStatus("disabled"));
+  }, []);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    setPushError("");
+    try {
+      if (pushStatus === "enabled") {
+        await disablePush();
+        setPushStatus("disabled");
+      } else {
+        await enablePush();
+        setPushStatus("enabled");
+      }
+    } catch (e) {
+      setPushError(e.message || "Couldn't update notifications");
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!passcode || busy) return;
@@ -822,6 +862,39 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
           Signed in as <strong style={{ color: COLORS.ink }}>{role === "owner" ? "Editor" : "Viewer"}</strong> on
           this device.
         </div>
+
+        {pushStatus !== "unsupported" && (
+          <>
+            <button
+              onClick={togglePush}
+              disabled={pushBusy || pushStatus === "checking"}
+              style={{
+                ...roleOption,
+                borderColor: pushStatus === "enabled" ? COLORS.accent : COLORS.border,
+                cursor: "pointer",
+                opacity: pushBusy || pushStatus === "checking" ? 0.6 : 1,
+              }}
+            >
+              <Bell size={16} color={pushStatus === "enabled" ? COLORS.accent : COLORS.ink} />
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                  {pushStatus === "enabled" ? "Notifications on for this device" : "Get notified of new leads"}
+                </div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted }}>
+                  {pushStatus === "checking"
+                    ? "Checking…"
+                    : pushStatus === "enabled"
+                    ? "Tap to turn off on this device"
+                    : "Tap to enable push notifications here"}
+                </div>
+              </div>
+            </button>
+            {pushError && (
+              <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 6 }}>{pushError}</div>
+            )}
+          </>
+        )}
+
         <label style={modalLabel}>Switch access with a different passcode</label>
         <input
           type="password"
@@ -978,6 +1051,10 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
   const [jobDraft, setJobDraft] = useState(lead.job || "");
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState(lead.phone || "");
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState(lead.email || "");
   const [editingReceived, setEditingReceived] = useState(false);
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
@@ -998,6 +1075,16 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   const saveJob = () => {
     onEditField(lead.id, "job", jobDraft.trim());
     setEditingJob(false);
+  };
+
+  const savePhone = () => {
+    onEditField(lead.id, "phone", phoneDraft.trim());
+    setEditingPhone(false);
+  };
+
+  const saveEmail = () => {
+    onEditField(lead.id, "email", emailDraft.trim());
+    setEditingEmail(false);
   };
 
   const openReceivedEdit = () => {
@@ -1141,6 +1228,116 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
             </>
           )}
         </div>
+
+        {/* phone — tappable to call when set */}
+        {(lead.phone || editable) && (
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+            {!editingPhone ? (
+              <>
+                {lead.phone ? (
+                  <a
+                    href={`tel:${lead.phone}`}
+                    style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}
+                  >
+                    {lead.phone}
+                  </a>
+                ) : (
+                  <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
+                )}
+                {editable && (
+                  <button
+                    onClick={() => {
+                      setPhoneDraft(lead.phone || "");
+                      setEditingPhone(true);
+                    }}
+                    style={iconBtnGhost}
+                    aria-label="Edit phone"
+                  >
+                    <Pencil size={16} color="#9A9184" />
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  type="tel"
+                  value={phoneDraft}
+                  onChange={(e) => setPhoneDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && savePhone()}
+                  placeholder="e.g. (801) 555-0123"
+                  style={{ ...inlineInput, flex: 1 }}
+                />
+                <button onClick={savePhone} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save phone">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingPhone(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel phone edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* email — tappable to compose when set */}
+        {(lead.email || editable) && (
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+            {!editingEmail ? (
+              <>
+                {lead.email ? (
+                  <a
+                    href={`mailto:${lead.email}`}
+                    style={{
+                      fontFamily: FONT_UTIL,
+                      fontSize: 14,
+                      color: COLORS.accent,
+                      fontWeight: 600,
+                      textDecoration: "none",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      maxWidth: 220,
+                    }}
+                  >
+                    {lead.email}
+                  </a>
+                ) : (
+                  <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No email set</span>
+                )}
+                {editable && (
+                  <button
+                    onClick={() => {
+                      setEmailDraft(lead.email || "");
+                      setEditingEmail(true);
+                    }}
+                    style={iconBtnGhost}
+                    aria-label="Edit email"
+                  >
+                    <Pencil size={16} color="#9A9184" />
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  type="email"
+                  value={emailDraft}
+                  onChange={(e) => setEmailDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveEmail()}
+                  placeholder="e.g. name@example.com"
+                  style={{ ...inlineInput, flex: 1 }}
+                />
+                <button onClick={saveEmail} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save email">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingEmail(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel email edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {/* received timestamp */}
         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1467,13 +1664,13 @@ function AddLeadModal({ onAdd, onClose }) {
             </option>
           ))}
         </select>
-        {source === "other" && (
+        {(source === "other" || source === "website") && (
           <>
-            <label style={modalLabel}>Describe the source</label>
+            <label style={modalLabel}>{source === "website" ? "Which page? (optional)" : "Describe the source"}</label>
             <input
               value={sourceOther}
               onChange={(e) => setSourceOther(e.target.value)}
-              placeholder="e.g. Yard sign, past client referral…"
+              placeholder={source === "website" ? "e.g. Get a Quote, Contact Us" : "e.g. Yard sign, past client referral…"}
               style={modalInput}
             />
           </>

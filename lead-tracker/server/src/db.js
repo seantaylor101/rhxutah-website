@@ -30,3 +30,19 @@ const existingColumns = new Set(db.prepare(`PRAGMA table_info(leads)`).all().map
 if (!existingColumns.has("job")) {
   db.exec(`ALTER TABLE leads ADD COLUMN job TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("phone")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN phone TEXT DEFAULT ''`);
+}
+if (!existingColumns.has("email")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN email TEXT DEFAULT ''`);
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id TEXT PRIMARY KEY,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+`);

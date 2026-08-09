@@ -1,0 +1,63 @@
+import { Router } from "express";
+import { db } from "../db.js";
+import { insertLead } from "./leads.js";
+import { sendPushToAll } from "../pushService.js";
+import { sendBackupEmail } from "../notifyEmail.js";
+
+const router = Router();
+
+// Small in-memory per-IP limiter — this endpoint is unauthenticated by
+// necessity (it's called from a public website), so it needs some abuse
+// deterrence beyond the shared key. Good enough for real site traffic;
+// resets on redeploy, which is fine for this purpose.
+const hits = new Map();
+const WINDOW_MS = 10 * 60 * 1000;
+const MAX_PER_WINDOW = 8;
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const recent = (hits.get(ip) || []).filter((t) => now - t < WINDOW_MS);
+  recent.push(now);
+  hits.set(ip, recent);
+  return recent.length > MAX_PER_WINDOW;
+}
+
+router.post("/leads", (req, res) => {
+  const key = req.get("X-Intake-Key");
+  if (!process.env.FORM_INTAKE_KEY || key !== process.env.FORM_INTAKE_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (isRateLimited(req.ip)) {
+    return res.status(429).json({ error: "Too many submissions — try again later" });
+  }
+
+  const { name, message, service, phone, email, page } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
+
+  const job = [service, message]
+    .map((s) => (s || "").trim())
+    .filter(Boolean)
+    .join(" — ");
+
+  const lead = insertLead(db, {
+    name,
+    job,
+    phone,
+    email,
+    source: "website",
+    sourceOther: page || "",
+  });
+
+  res.status(201).json({ ok: true });
+
+  // best-effort notifications — the lead is already saved, don't let a
+  // push/email hiccup affect the response the website form sees
+  sendPushToAll({
+    title: "New lead from your website",
+    body: `${lead.name}${lead.job ? " — " + lead.job : ""}`,
+  }).catch((err) => console.error("push notify failed:", err.message));
+
+  sendBackupEmail(lead).catch((err) => console.error("backup email failed:", err.message));
+});
+
+export default router;

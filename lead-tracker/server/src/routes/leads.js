@@ -5,13 +5,43 @@ import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = Router();
 
-const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "other"]);
+const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "website", "other"]);
 const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
-const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name", "job"]);
+const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name", "job", "phone", "email"]);
 
 function rowToLead(row) {
   return { ...row, archived: !!row.archived };
 }
+
+// shared by the authenticated create route and the public website-intake route
+export function insertLead(db, { name, job, phone, email, source, sourceOther }) {
+  const lead = {
+    id: randomUUID(),
+    name: String(name).trim(),
+    job: String(job || "").trim(),
+    phone: String(phone || "").trim(),
+    email: String(email || "").trim(),
+    stage: "new",
+    createdAt: new Date().toISOString(),
+    startDate: "",
+    revenue: null,
+    wonAt: null,
+    paidAt: null,
+    source,
+    sourceOther: source === "other" || source === "website" ? String(sourceOther || "").trim() : "",
+    archived: 0,
+    archivedAt: null,
+  };
+
+  db.prepare(
+    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
+     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+  ).run(lead);
+
+  return lead;
+}
+
+export { SOURCES };
 
 function yearMonth(dateLike) {
   const d = new Date(dateLike);
@@ -52,31 +82,11 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, job, source, sourceOther } = req.body || {};
+  const { name, job, phone, email, source, sourceOther } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
-  const lead = {
-    id: randomUUID(),
-    name: String(name).trim(),
-    job: String(job || "").trim(),
-    stage: "new",
-    createdAt: new Date().toISOString(),
-    startDate: "",
-    revenue: null,
-    wonAt: null,
-    paidAt: null,
-    source,
-    sourceOther: source === "other" ? String(sourceOther || "").trim() : "",
-    archived: 0,
-    archivedAt: null,
-  };
-
-  db.prepare(
-    `INSERT INTO leads (id, name, job, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @job, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
-  ).run(lead);
-
+  const lead = insertLead(db, { name, job, phone, email, source, sourceOther });
   res.status(201).json(rowToLead(lead));
 });
 
