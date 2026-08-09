@@ -493,7 +493,7 @@ function App() {
 
       <header style={header}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <img src="/logo-mark-white.png" alt="" style={{ width: 48, height: 48, flexShrink: 0 }} />
+          <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
           <div>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.surface }}>
               RHX Job Board
