@@ -111,6 +111,13 @@ const Grid = (p) => (
     <rect x="14" y="14" width="7" height="7" />
   </Icon>
 );
+const MoreVertical = ({ size = 16, color = "currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24">
+    <circle cx="12" cy="5" r="1.7" fill={color} />
+    <circle cx="12" cy="12" r="1.7" fill={color} />
+    <circle cx="12" cy="19" r="1.7" fill={color} />
+  </svg>
+);
 
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
@@ -142,6 +149,17 @@ const STAGES = [
   { key: "completed", label: "Completed This Month", short: "Completed", color: COLORS.info },
   { key: "paid", label: "Paid", short: "Paid", color: COLORS.accent },
 ];
+
+// the stage a lead normally arrived from, for the "move back" option — a branch
+// (lost/won both come from bid), not a straight walk through the STAGES array
+const PREVIOUS_STAGE = {
+  bid: "new",
+  lost: "bid",
+  won: "bid",
+  progress: "won",
+  completed: "progress",
+  paid: "completed",
+};
 
 const SOURCES = [
   { key: "referral", label: "Referral" },
@@ -327,10 +345,10 @@ function App() {
     setShowAccountModal(false);
   };
 
-  const addLead = async (name, source, sourceOther) => {
+  const addLead = async (name, job, source, sourceOther) => {
     if (!name.trim() || !source) return;
     try {
-      const lead = await api.addLead({ name, source, sourceOther });
+      const lead = await api.addLead({ name, job, source, sourceOther });
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
       setActiveStage("new");
@@ -340,10 +358,10 @@ function App() {
     }
   };
 
-  const moveLead = async (id, stage, date) => {
+  const moveLead = async (id, stage, date, revert) => {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
     try {
-      const updated = await api.moveLead(id, stage, date);
+      const updated = await api.moveLead(id, stage, date, revert);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -484,8 +502,6 @@ function App() {
           outline: 2px solid ${COLORS.accent}; outline-offset: 2px;
         }
         ::placeholder { color: #9AA6AD; }
-        .scrollx::-webkit-scrollbar { display: none; }
-        .scrollx { -ms-overflow-style: none; scrollbar-width: none; }
         @media (prefers-reduced-motion: reduce) {
           * { transition: none !important; animation: none !important; }
         }
@@ -620,7 +636,7 @@ function App() {
       {view === "board" ? (
         <>
           {/* stage tabs */}
-          <div className="scrollx" style={tabsRow}>
+          <div style={tabsRow}>
             {STAGES.map((s) => {
               const active = s.key === activeStage;
               return (
@@ -960,6 +976,8 @@ function ArchiveView({ leads }) {
 function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
+  const [editingJob, setEditingJob] = useState(false);
+  const [jobDraft, setJobDraft] = useState(lead.job || "");
   const [editingReceived, setEditingReceived] = useState(false);
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
@@ -975,6 +993,11 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
     if (trimmed) onEditField(lead.id, "name", trimmed);
     else setNameDraft(lead.name);
     setEditingName(false);
+  };
+
+  const saveJob = () => {
+    onEditField(lead.id, "job", jobDraft.trim());
+    setEditingJob(false);
   };
 
   const openReceivedEdit = () => {
@@ -1030,7 +1053,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                   style={iconBtnGhost}
                   aria-label="Edit name"
                 >
-                  <Pencil size={12} color="#9A9184" />
+                  <Pencil size={16} color="#9A9184" />
                 </button>
               )}
             </div>
@@ -1044,7 +1067,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 15, flex: 1 }}
               />
               <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
-                <Check size={13} color="#fff" />
+                <Check size={18} color="#fff" />
               </button>
               <button
                 onClick={() => {
@@ -1054,25 +1077,68 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 style={{ ...iconBtn, background: "#B8B0A0" }}
                 aria-label="Cancel name edit"
               >
-                <X size={13} color="#fff" />
+                <X size={18} color="#fff" />
               </button>
             </div>
           )}
           {editable && !editingName && (
-            !confirmDel ? (
-              <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
-                <Trash2 size={15} color="#9A9184" />
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <LeadMoreMenu lead={lead} onMove={onMove} />
+              {!confirmDel ? (
+                <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
+                  <Trash2 size={18} color="#9A9184" />
+                </button>
+              ) : (
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => onDelete(lead.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete">
+                    <Check size={18} color="#fff" />
+                  </button>
+                  <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete">
+                    <X size={18} color="#fff" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* job — separate from the client's name */}
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          {!editingJob ? (
+            <>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: lead.job ? "#4A463D" : "#B8B0A0" }}>
+                {lead.job || "No job set"}
+              </span>
+              {editable && (
+                <button
+                  onClick={() => {
+                    setJobDraft(lead.job || "");
+                    setEditingJob(true);
+                  }}
+                  style={iconBtnGhost}
+                  aria-label="Edit job"
+                >
+                  <Pencil size={16} color="#9A9184" />
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <input
+                autoFocus
+                value={jobDraft}
+                onChange={(e) => setJobDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveJob()}
+                placeholder="e.g. Gutters, Lehi"
+                style={{ ...inlineInput, flex: 1 }}
+              />
+              <button onClick={saveJob} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save job">
+                <Check size={18} color="#fff" />
               </button>
-            ) : (
-              <div style={{ display: "flex", gap: 4 }}>
-                <button onClick={() => onDelete(lead.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete">
-                  <Check size={13} color="#fff" />
-                </button>
-                <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete">
-                  <X size={13} color="#fff" />
-                </button>
-              </div>
-            )
+              <button onClick={() => setEditingJob(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel job edit">
+                <X size={18} color="#fff" />
+              </button>
+            </>
           )}
         </div>
 
@@ -1084,7 +1150,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
               <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
               {editable && (
                 <button onClick={openReceivedEdit} style={iconBtnGhost} aria-label="Edit received date">
-                  <Pencil size={12} color="#9A9184" />
+                  <Pencil size={16} color="#9A9184" />
                 </button>
               )}
             </>
@@ -1097,10 +1163,10 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 style={inlineInput}
               />
               <button onClick={saveReceived} style={{ ...iconBtn, background: COLORS.accent }}>
-                <Check size={13} color="#fff" />
+                <Check size={18} color="#fff" />
               </button>
               <button onClick={() => setEditingReceived(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
-                <X size={13} color="#fff" />
+                <X size={18} color="#fff" />
               </button>
             </>
           )}
@@ -1129,7 +1195,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                   style={iconBtnGhost}
                   aria-label="Edit revenue"
                 >
-                  <Pencil size={12} color="#9A9184" />
+                  <Pencil size={16} color="#9A9184" />
                 </button>
               )}
             </>
@@ -1144,10 +1210,10 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                 style={{ ...inlineInput, width: 90 }}
               />
               <button onClick={saveRevenue} style={{ ...iconBtn, background: COLORS.accent }}>
-                <Check size={13} color="#fff" />
+                <Check size={18} color="#fff" />
               </button>
               <button onClick={() => setEditingRevenue(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
-                <X size={13} color="#fff" />
+                <X size={18} color="#fff" />
               </button>
             </>
           )}
@@ -1171,7 +1237,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
                     style={iconBtnGhost}
                     aria-label="Edit start date"
                   >
-                    <Pencil size={12} color="#9A9184" />
+                    <Pencil size={16} color="#9A9184" />
                   </button>
                 )}
               </>
@@ -1179,10 +1245,10 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
               <>
                 <input type="date" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} style={inlineInput} />
                 <button onClick={saveStart} style={{ ...iconBtn, background: COLORS.accent }}>
-                  <Check size={13} color="#fff" />
+                  <Check size={18} color="#fff" />
                 </button>
                 <button onClick={() => setEditingStart(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
-                  <X size={13} color="#fff" />
+                  <X size={18} color="#fff" />
                 </button>
               </>
             )}
@@ -1198,6 +1264,37 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         {/* actions */}
         {editable && <ActionRow lead={lead} onMove={onMove} />}
       </div>
+    </div>
+  );
+}
+
+function LeadMoreMenu({ lead, onMove }) {
+  const [open, setOpen] = useState(false);
+  const prevStage = PREVIOUS_STAGE[lead.stage];
+  if (!prevStage) return null;
+  const prevLabel = STAGES.find((s) => s.key === prevStage)?.short || prevStage;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} style={iconBtnGhost} aria-label="More options">
+        <MoreVertical size={18} color="#9A9184" />
+      </button>
+      {open && (
+        <>
+          <div style={moreMenuScrim} onClick={() => setOpen(false)} />
+          <div style={moreMenuPopover}>
+            <button
+              onClick={() => {
+                onMove(lead.id, prevStage, undefined, true);
+                setOpen(false);
+              }}
+              style={moreMenuItem}
+            >
+              Move back to {prevLabel}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1322,6 +1419,7 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
 
 function AddLeadModal({ onAdd, onClose }) {
   const [name, setName] = useState("");
+  const [job, setJob] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
 
@@ -1329,7 +1427,7 @@ function AddLeadModal({ onAdd, onClose }) {
 
   const submit = () => {
     if (!canSubmit) return;
-    onAdd(name, source, sourceOther);
+    onAdd(name, job, source, sourceOther);
   };
 
   return (
@@ -1343,12 +1441,20 @@ function AddLeadModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
-        <label style={modalLabel}>Name / job</label>
+        <label style={modalLabel}>Name</label>
         <input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Nguyen — gutters, Lehi"
+          placeholder="e.g. Nguyen"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Job</label>
+        <input
+          value={job}
+          onChange={(e) => setJob(e.target.value)}
+          placeholder="e.g. Gutters, Lehi"
           style={modalInput}
           onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
         />
@@ -1426,9 +1532,9 @@ const addBtn = {
 
 const tabsRow = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 8,
   padding: "12px 16px",
-  overflowX: "auto",
   borderBottom: `1px solid ${COLORS.border}`,
 };
 
@@ -1500,21 +1606,55 @@ const ticketStub = {
 };
 
 const iconBtn = {
-  width: 22,
-  height: 22,
-  borderRadius: 5,
+  width: 34,
+  height: 34,
+  borderRadius: 8,
   border: "none",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   cursor: "pointer",
+  flexShrink: 0,
 };
 
 const iconBtnGhost = {
   ...iconBtn,
   background: "transparent",
-  width: 20,
-  height: 20,
+  width: 32,
+  height: 32,
+};
+
+const moreMenuScrim = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 40,
+};
+
+const moreMenuPopover = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  right: 0,
+  zIndex: 41,
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 8,
+  boxShadow: "0 4px 16px rgba(36,41,38,0.16)",
+  minWidth: 190,
+  overflow: "hidden",
+};
+
+const moreMenuItem = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  padding: "11px 14px",
+  fontFamily: FONT_BODY,
+  fontSize: 13.5,
+  fontWeight: 600,
+  color: COLORS.ink,
+  cursor: "pointer",
 };
 
 const headerIconBtn = {

@@ -7,7 +7,7 @@ const router = Router();
 
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "other"]);
 const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
-const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name"]);
+const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name", "job"]);
 
 function rowToLead(row) {
   return { ...row, archived: !!row.archived };
@@ -52,13 +52,14 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, source, sourceOther } = req.body || {};
+  const { name, job, source, sourceOther } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
   const lead = {
     id: randomUUID(),
     name: String(name).trim(),
+    job: String(job || "").trim(),
     stage: "new",
     createdAt: new Date().toISOString(),
     startDate: "",
@@ -72,16 +73,18 @@ router.post("/", requireAuth("owner"), (req, res) => {
   };
 
   db.prepare(
-    `INSERT INTO leads (id, name, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+    `INSERT INTO leads (id, name, job, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
+     VALUES (@id, @name, @job, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
   ).run(lead);
 
   res.status(201).json(rowToLead(lead));
 });
 
 // Stage transitions carry the same wonAt/paidAt side effects the original client applied.
+const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
+
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
-  const { stage, date } = req.body || {};
+  const { stage, date, revert } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
@@ -94,8 +97,26 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   }
 
   const patch = { stage };
-  if (stage === "won") patch.wonAt = ts;
-  if (stage === "paid") patch.paidAt = ts;
+  if (revert) {
+    // moving a lead backward: never stamp a fresh won/paid date, only clear
+    // ones that no longer apply so stats don't stay wrong after the revert
+    if (!AT_OR_AFTER_WON.has(stage)) {
+      patch.wonAt = null;
+      patch.paidAt = null;
+    } else if (stage !== "paid") {
+      patch.paidAt = null;
+    }
+  } else if (stage === "won") {
+    patch.wonAt = ts;
+    patch.paidAt = null;
+  } else if (stage === "paid") {
+    patch.paidAt = ts;
+  } else if (stage === "progress" || stage === "completed") {
+    patch.paidAt = null;
+  } else {
+    patch.wonAt = null;
+    patch.paidAt = null;
+  }
 
   const fields = Object.keys(patch);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
@@ -120,6 +141,9 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   if ("name" in updates) {
     updates.name = String(updates.name).trim();
     if (!updates.name) return res.status(400).json({ error: "Name can't be empty" });
+  }
+  if ("job" in updates) {
+    updates.job = String(updates.job || "").trim();
   }
 
   const fields = Object.keys(updates);
