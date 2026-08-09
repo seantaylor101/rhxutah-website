@@ -1191,7 +1191,7 @@ function AddLeadModal({ onAdd, onClose }) {
 }
 
 // ---- styles ----
-const FONT_DISPLAY = "'Open Sans', sans-serif";
+const FONT_DISPLAY = "'Raleway', sans-serif";
 const FONT_BODY = "'Open Sans', sans-serif";
 const FONT_UTIL = "'Open Sans', sans-serif";
 
