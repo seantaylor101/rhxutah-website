@@ -492,44 +492,42 @@ function App() {
       `}</style>
 
       <header style={header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
-          <div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.surface }}>
-              RHX Job Board
-            </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.mutedOnDark }}>
-              Track every lead from first contact to paid job
-            </div>
+        <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
+            RHX Job Board
           </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          {editable ? (
-            <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
-              <Plus size={16} strokeWidth={2.5} />
-              New Lead
-            </button>
-          ) : (
-            <div style={viewBadge}>
-              <Eye size={13} color={COLORS.mutedOnDark} />
-              <span>View only</span>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark, marginBottom: 12 }}>
+            Track every lead from first contact to paid job
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            {editable ? (
+              <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
+                <Plus size={16} strokeWidth={2.5} />
+                New Lead
+              </button>
+            ) : (
+              <div style={viewBadge}>
+                <Eye size={13} color={COLORS.mutedOnDark} />
+                <span>View only</span>
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                onClick={() => setView(view === "board" ? "archive" : "board")}
+                style={headerIconBtn}
+                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+              >
+                {view === "board" ? (
+                  <History size={21} color={COLORS.surface} strokeWidth={2} />
+                ) : (
+                  <Grid size={20} color={COLORS.surface} strokeWidth={2} />
+                )}
+              </button>
+              <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
+                <User size={21} color={COLORS.surface} strokeWidth={2} />
+              </button>
             </div>
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button
-              onClick={() => setView(view === "board" ? "archive" : "board")}
-              style={headerIconBtn}
-              aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-            >
-              {view === "board" ? (
-                <History size={21} color={COLORS.surface} strokeWidth={2} />
-              ) : (
-                <Grid size={20} color={COLORS.surface} strokeWidth={2} />
-              )}
-            </button>
-            <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
-              <User size={21} color={COLORS.surface} strokeWidth={2} />
-            </button>
           </div>
         </div>
       </header>
@@ -1333,8 +1331,9 @@ const shell = {
 
 const header = {
   display: "flex",
-  flexDirection: "column",
-  padding: "20px 20px 18px",
+  alignItems: "center",
+  gap: 14,
+  padding: "18px 20px",
   background: COLORS.header,
   borderBottom: `1px solid ${COLORS.headerLine}`,
 };
