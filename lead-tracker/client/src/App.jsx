@@ -377,9 +377,7 @@ function App() {
   if (!authChecked) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
-          CHECKING SESSION…
-        </div>
+        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, fontSize: 14 }}>Checking session…</div>
       </div>
     );
   }
@@ -391,9 +389,7 @@ function App() {
   if (leads === null) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, letterSpacing: "0.08em", fontSize: 13 }}>
-          LOADING BOARD…
-        </div>
+        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, fontSize: 14 }}>Loading board…</div>
       </div>
     );
   }
@@ -416,21 +412,13 @@ function App() {
 
       <header style={header}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Ticket size={20} color={COLORS.surface} strokeWidth={1.75} />
+          <Ticket size={22} color={COLORS.surface} strokeWidth={1.75} />
           <div>
-            <div
-              style={{
-                fontFamily: FONT_DISPLAY,
-                fontWeight: 700,
-                fontSize: 19,
-                color: COLORS.surface,
-                letterSpacing: "0.01em",
-              }}
-            >
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.surface }}>
               RHX Job Board
             </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.mutedOnDark, letterSpacing: "0.06em" }}>
-              LEAD → BID → WON/LOST → PROGRESS → PAID
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.mutedOnDark }}>
+              Track every lead from first contact to paid job
             </div>
           </div>
         </div>
@@ -466,13 +454,13 @@ function App() {
       {/* weekly / monthly counters */}
       <div style={statsRow}>
         <div style={statCard}>
-          <div style={statLabel}>THIS WEEK</div>
+          <div style={statLabel}>This week</div>
           <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
         </div>
         <div style={statCard}>
-          <div style={statLabel}>THIS MONTH</div>
+          <div style={statLabel}>This month</div>
           <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
@@ -795,7 +783,7 @@ function ArchiveView({ leads }) {
                 <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
                   {p.label}
                 </div>
-                <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: "#8A8478" }}>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
                   {p.leads.length} paid · {fmtCurrency(revenue)}
                 </div>
               </div>
@@ -810,7 +798,7 @@ function ArchiveView({ leads }) {
                       <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
                         {l.name}
                       </div>
-                      <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: "#8A8478" }}>
+                      <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
                         {fmtCurrency(l.revenue)} · paid {fmtDate(l.paidAt.slice(0, 10))}
                         {sourceLabel(l) ? ` · ${sourceLabel(l)}` : ""}
                       </div>
@@ -872,7 +860,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   return (
     <div style={ticket}>
       <div style={{ ...ticketStub, background: stage?.color || COLORS.info }} />
-      <div style={{ flex: 1, padding: "12px 14px 12px 10px" }}>
+      <div style={{ flex: 1, padding: "16px 18px 16px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           {!editingName ? (
             <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
@@ -945,13 +933,11 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         </div>
 
         {/* received timestamp */}
-        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontFamily: FONT_UTIL, fontSize: 10.5, color: "#8A8478", letterSpacing: "0.06em" }}>
-            RECEIVED
-          </span>
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Received</span>
           {!editingTime ? (
             <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#4A463D" }}>{fmtDateTime(lead.createdAt)}</span>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateTime(lead.createdAt)}</span>
               {editable && (
                 <button onClick={openTimeEdit} style={iconBtnGhost} aria-label="Edit received time">
                   <Pencil size={12} color="#9A9184" />
@@ -977,19 +963,17 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         </div>
 
         {lead.source && (
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 10.5, color: "#8A8478", letterSpacing: "0.04em", marginTop: 4 }}>
-            SOURCE: {sourceLabel(lead)}
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478", marginTop: 6 }}>
+            Source: {sourceLabel(lead)}
           </div>
         )}
 
         {/* revenue — can be attached at any stage */}
-        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontFamily: FONT_UTIL, fontSize: 10.5, color: "#8A8478", letterSpacing: "0.06em" }}>
-            REVENUE
-          </span>
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Revenue</span>
           {!editingRevenue ? (
             <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: lead.revenue != null ? "#4A463D" : "#B8B0A0" }}>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.revenue != null ? "#4A463D" : "#B8B0A0" }}>
                 {lead.revenue != null ? fmtCurrency(lead.revenue) : "not set"}
               </span>
               {editable && (
@@ -1027,13 +1011,11 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
 
         {/* start date, only for won-not-started (and visible afterwards too) */}
         {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontFamily: FONT_UTIL, fontSize: 10.5, color: "#8A8478", letterSpacing: "0.06em" }}>
-              START DATE
-            </span>
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Start date</span>
             {!editingStart ? (
               <>
-                <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: lead.startDate ? "#4A463D" : "#B8482E" }}>
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.startDate ? "#4A463D" : "#B8482E" }}>
                   {lead.startDate ? fmtDate(lead.startDate) : "not set"}
                 </span>
                 {editable && (
@@ -1064,8 +1046,8 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         )}
 
         {lead.stage === "paid" && lead.paidAt && (
-          <div style={{ marginTop: 6, fontFamily: FONT_UTIL, fontSize: 10.5, color: "#8A8478", letterSpacing: "0.06em" }}>
-            PAID {fmtDateTime(lead.paidAt).toUpperCase()} · clears next month
+          <div style={{ marginTop: 10, fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>
+            Paid {fmtDateTime(lead.paidAt)} · clears next month
           </div>
         )}
 
@@ -1175,7 +1157,7 @@ function AddLeadModal({ onAdd, onClose }) {
             />
           </>
         )}
-        <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted, marginTop: 6, marginBottom: 16, letterSpacing: "0.04em" }}>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 8, marginBottom: 18 }}>
           Timestamped now — you can edit the received time after adding.
         </div>
         <button
@@ -1207,7 +1189,7 @@ const header = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "16px 16px 12px",
+  padding: "20px 20px 18px",
   background: COLORS.header,
   borderBottom: `1px solid ${COLORS.headerLine}`,
 };
@@ -1272,10 +1254,10 @@ const navArrow = {
 
 const cardsWrap = {
   flex: 1,
-  padding: "4px 14px 32px",
+  padding: "8px 16px 32px",
   display: "flex",
   flexDirection: "column",
-  gap: 12,
+  gap: 16,
   maxWidth: 640,
   width: "100%",
   margin: "0 auto",
@@ -1293,7 +1275,7 @@ const ticket = {
   display: "flex",
   background: COLORS.surface,
   border: `1px solid ${COLORS.border}`,
-  borderRadius: 8,
+  borderRadius: 10,
   overflow: "hidden",
   boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
 };
@@ -1355,8 +1337,8 @@ const modalOverlay = {
 const modalCard = {
   background: COLORS.surface,
   borderTop: `1px solid ${COLORS.border}`,
-  borderRadius: "14px 14px 0 0",
-  padding: "20px 18px 26px",
+  borderRadius: "16px 16px 0 0",
+  padding: "26px 22px 30px",
   width: "100%",
   maxWidth: 480,
   boxShadow: "0 -4px 24px rgba(36,41,38,0.12)",
@@ -1364,47 +1346,46 @@ const modalCard = {
 
 const statsRow = {
   display: "flex",
-  gap: 10,
-  padding: "12px 16px 4px",
+  gap: 12,
+  padding: "16px 16px 6px",
 };
 
 const statCard = {
   flex: 1,
   background: COLORS.surface,
   border: `1px solid ${COLORS.border}`,
-  borderRadius: 9,
-  padding: "10px 12px",
+  borderRadius: 10,
+  padding: "14px 16px",
   boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
 };
 
 const statLabel = {
   fontFamily: FONT_UTIL,
-  fontSize: 10,
+  fontSize: 12.5,
   color: COLORS.muted,
-  letterSpacing: "0.08em",
 };
 
 const statMain = {
   fontFamily: FONT_DISPLAY,
   fontWeight: 700,
-  fontSize: 22,
+  fontSize: 24,
   color: COLORS.ink,
-  marginTop: 2,
+  marginTop: 4,
 };
 
 const statUnit = {
   fontFamily: FONT_BODY,
-  fontSize: 12,
+  fontSize: 13,
   color: COLORS.muted,
   fontWeight: 400,
 };
 
 const statSub = {
   fontFamily: FONT_UTIL,
-  fontSize: 11,
+  fontSize: 12.5,
   fontWeight: 600,
   color: COLORS.accent,
-  marginTop: 2,
+  marginTop: 3,
 };
 
 const viewBadge = {
@@ -1412,12 +1393,11 @@ const viewBadge = {
   alignItems: "center",
   gap: 6,
   fontFamily: FONT_UTIL,
-  fontSize: 11.5,
+  fontSize: 13,
   color: COLORS.mutedOnDark,
-  letterSpacing: "0.05em",
   border: `1px solid ${COLORS.headerLine}`,
   borderRadius: 7,
-  padding: "7px 11px",
+  padding: "8px 12px",
 };
 
 const roleOption = {
@@ -1429,27 +1409,26 @@ const roleOption = {
   background: COLORS.surfaceMuted,
   border: "1px solid",
   borderRadius: 8,
-  padding: "10px 12px",
+  padding: "12px 14px",
   cursor: "pointer",
 };
 
 const modalLabel = {
   display: "block",
   fontFamily: FONT_UTIL,
-  fontSize: 10.5,
+  fontSize: 13,
   color: COLORS.muted,
-  letterSpacing: "0.06em",
-  marginBottom: 5,
-  marginTop: 10,
+  marginBottom: 6,
+  marginTop: 14,
 };
 
 const modalInput = {
   width: "100%",
-  padding: "9px 10px",
-  borderRadius: 7,
+  padding: "11px 12px",
+  borderRadius: 8,
   border: `1px solid ${COLORS.border}`,
   background: COLORS.surfaceMuted,
   color: COLORS.ink,
   fontFamily: FONT_BODY,
-  fontSize: 14,
+  fontSize: 15,
 };
