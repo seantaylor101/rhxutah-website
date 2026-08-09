@@ -111,6 +111,13 @@ const Grid = (p) => (
     <rect x="14" y="14" width="7" height="7" />
   </Icon>
 );
+const MoreVertical = ({ size = 16, color = "currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24">
+    <circle cx="12" cy="5" r="1.7" fill={color} />
+    <circle cx="12" cy="12" r="1.7" fill={color} />
+    <circle cx="12" cy="19" r="1.7" fill={color} />
+  </svg>
+);
 
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
@@ -142,6 +149,17 @@ const STAGES = [
   { key: "completed", label: "Completed This Month", short: "Completed", color: COLORS.info },
   { key: "paid", label: "Paid", short: "Paid", color: COLORS.accent },
 ];
+
+// the stage a lead normally arrived from, for the "move back" option — a branch
+// (lost/won both come from bid), not a straight walk through the STAGES array
+const PREVIOUS_STAGE = {
+  bid: "new",
+  lost: "bid",
+  won: "bid",
+  progress: "won",
+  completed: "progress",
+  paid: "completed",
+};
 
 const SOURCES = [
   { key: "referral", label: "Referral" },
@@ -340,10 +358,10 @@ function App() {
     }
   };
 
-  const moveLead = async (id, stage, date) => {
+  const moveLead = async (id, stage, date, revert) => {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
     try {
-      const updated = await api.moveLead(id, stage, date);
+      const updated = await api.moveLead(id, stage, date, revert);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -1059,20 +1077,23 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
             </div>
           )}
           {editable && !editingName && (
-            !confirmDel ? (
-              <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
-                <Trash2 size={15} color="#9A9184" />
-              </button>
-            ) : (
-              <div style={{ display: "flex", gap: 4 }}>
-                <button onClick={() => onDelete(lead.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete">
-                  <Check size={13} color="#fff" />
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <LeadMoreMenu lead={lead} onMove={onMove} />
+              {!confirmDel ? (
+                <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
+                  <Trash2 size={15} color="#9A9184" />
                 </button>
-                <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete">
-                  <X size={13} color="#fff" />
-                </button>
-              </div>
-            )
+              ) : (
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => onDelete(lead.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete">
+                    <Check size={13} color="#fff" />
+                  </button>
+                  <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete">
+                    <X size={13} color="#fff" />
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -1198,6 +1219,37 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
         {/* actions */}
         {editable && <ActionRow lead={lead} onMove={onMove} />}
       </div>
+    </div>
+  );
+}
+
+function LeadMoreMenu({ lead, onMove }) {
+  const [open, setOpen] = useState(false);
+  const prevStage = PREVIOUS_STAGE[lead.stage];
+  if (!prevStage) return null;
+  const prevLabel = STAGES.find((s) => s.key === prevStage)?.short || prevStage;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} style={iconBtnGhost} aria-label="More options">
+        <MoreVertical size={15} color="#9A9184" />
+      </button>
+      {open && (
+        <>
+          <div style={moreMenuScrim} onClick={() => setOpen(false)} />
+          <div style={moreMenuPopover}>
+            <button
+              onClick={() => {
+                onMove(lead.id, prevStage, undefined, true);
+                setOpen(false);
+              }}
+              style={moreMenuItem}
+            >
+              Move back to {prevLabel}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1515,6 +1567,39 @@ const iconBtnGhost = {
   background: "transparent",
   width: 20,
   height: 20,
+};
+
+const moreMenuScrim = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 40,
+};
+
+const moreMenuPopover = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  right: 0,
+  zIndex: 41,
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 8,
+  boxShadow: "0 4px 16px rgba(36,41,38,0.16)",
+  minWidth: 190,
+  overflow: "hidden",
+};
+
+const moreMenuItem = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  padding: "11px 14px",
+  fontFamily: FONT_BODY,
+  fontSize: 13.5,
+  fontWeight: 600,
+  color: COLORS.ink,
+  cursor: "pointer",
 };
 
 const headerIconBtn = {

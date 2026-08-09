@@ -80,8 +80,10 @@ router.post("/", requireAuth("owner"), (req, res) => {
 });
 
 // Stage transitions carry the same wonAt/paidAt side effects the original client applied.
+const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
+
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
-  const { stage, date } = req.body || {};
+  const { stage, date, revert } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
@@ -94,8 +96,26 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   }
 
   const patch = { stage };
-  if (stage === "won") patch.wonAt = ts;
-  if (stage === "paid") patch.paidAt = ts;
+  if (revert) {
+    // moving a lead backward: never stamp a fresh won/paid date, only clear
+    // ones that no longer apply so stats don't stay wrong after the revert
+    if (!AT_OR_AFTER_WON.has(stage)) {
+      patch.wonAt = null;
+      patch.paidAt = null;
+    } else if (stage !== "paid") {
+      patch.paidAt = null;
+    }
+  } else if (stage === "won") {
+    patch.wonAt = ts;
+    patch.paidAt = null;
+  } else if (stage === "paid") {
+    patch.paidAt = ts;
+  } else if (stage === "progress" || stage === "completed") {
+    patch.paidAt = null;
+  } else {
+    patch.wonAt = null;
+    patch.paidAt = null;
+  }
 
   const fields = Object.keys(patch);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
