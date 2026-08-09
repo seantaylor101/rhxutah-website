@@ -492,8 +492,8 @@ function App() {
       `}</style>
 
       <header style={header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <img src="/logo-mark-white.png" alt="" style={{ width: 26, height: 26 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <img src="/logo-mark-white.png" alt="" style={{ width: 48, height: 48, flexShrink: 0 }} />
           <div>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.surface }}>
               RHX Job Board
@@ -503,7 +503,7 @@ function App() {
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           {editable ? (
             <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
               <Plus size={16} strokeWidth={2.5} />
@@ -515,20 +515,22 @@ function App() {
               <span>View only</span>
             </div>
           )}
-          <button
-            onClick={() => setView(view === "board" ? "archive" : "board")}
-            style={iconBtnGhost}
-            aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-          >
-            {view === "board" ? (
-              <History size={16} color={COLORS.mutedOnDark} />
-            ) : (
-              <Grid size={15} color={COLORS.mutedOnDark} />
-            )}
-          </button>
-          <button onClick={() => setShowAccountModal(true)} style={iconBtnGhost} aria-label="Account">
-            <User size={15} color={COLORS.mutedOnDark} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              onClick={() => setView(view === "board" ? "archive" : "board")}
+              style={headerIconBtn}
+              aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+            >
+              {view === "board" ? (
+                <History size={21} color={COLORS.surface} strokeWidth={2} />
+              ) : (
+                <Grid size={20} color={COLORS.surface} strokeWidth={2} />
+              )}
+            </button>
+            <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
+              <User size={21} color={COLORS.surface} strokeWidth={2} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -747,7 +749,7 @@ function LoginScreen({ onLogin }) {
       `}</style>
       <div style={{ width: "100%", maxWidth: 340 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, justifyContent: "center" }}>
-          <img src="/logo-mark-accent.png" alt="" style={{ width: 28, height: 28 }} />
+          <img src="/logo-mark-accent.png" alt="" style={{ width: 40, height: 40 }} />
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
             RHX Job Board
           </div>
@@ -1331,8 +1333,7 @@ const shell = {
 
 const header = {
   display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
+  flexDirection: "column",
   padding: "20px 20px 18px",
   background: COLORS.header,
   borderBottom: `1px solid ${COLORS.headerLine}`,
@@ -1444,6 +1445,18 @@ const iconBtnGhost = {
   background: "transparent",
   width: 20,
   height: 20,
+};
+
+const headerIconBtn = {
+  width: 42,
+  height: 42,
+  borderRadius: 11,
+  border: "none",
+  background: "rgba(255,255,255,0.16)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
 };
 
 const inlineInput = {
