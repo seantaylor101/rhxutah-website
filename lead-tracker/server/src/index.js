@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth.js";
 import leadsRoutes from "./routes/leads.js";
 import pushRoutes from "./routes/push.js";
 import publicRoutes from "./routes/public.js";
+import notificationsRoutes from "./routes/notifications.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -29,6 +30,7 @@ const publicCors = cors({
 app.use("/api/auth", authRoutes);
 app.use("/api/leads", leadsRoutes);
 app.use("/api/push", pushRoutes);
+app.use("/api/notifications", notificationsRoutes);
 app.use("/api/public", publicCors, publicRoutes);
 
 const clientDist = path.join(__dirname, "../../client/dist");

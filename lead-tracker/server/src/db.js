@@ -46,3 +46,14 @@ db.exec(`
     createdAt TEXT NOT NULL
   );
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    leadId TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    readAt TEXT
+  );
+`);
