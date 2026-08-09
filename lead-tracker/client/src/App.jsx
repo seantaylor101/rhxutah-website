@@ -241,9 +241,37 @@ function fmtRangeDate(d) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function fmtRelativeTime(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return fmtRangeDate(new Date(iso));
+}
+
 function fmtCurrency(n) {
   if (!n && n !== 0) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+// which leads contributed to a period's received/won/earned numbers — shared
+// by the This week/This month cards and the "Look back" panel
+function breakdownForRange(allLeads, start, end) {
+  const inRange = (iso) => {
+    if (!iso) return false;
+    const d = new Date(iso);
+    return d >= start && d <= end;
+  };
+  const all = allLeads || [];
+  return {
+    received: all.filter((l) => inRange(l.createdAt)),
+    won: all.filter((l) => inRange(l.wonAt)),
+    earned: all.filter((l) => inRange(l.paidAt)),
+  };
 }
 
 export default function AppWithBoundary() {
@@ -307,6 +335,8 @@ function App() {
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
+  const [highlightedLeadId, setHighlightedLeadId] = useState(null);
+  const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const editable = role === "owner";
 
   useEffect(() => {
@@ -336,6 +366,75 @@ function App() {
   useEffect(() => {
     if (role) loadLeads();
   }, [role, loadLeads]);
+
+  // light auto-refresh while the app is actually visible, so a PWA left
+  // open in the background doesn't keep showing stale data — pauses when
+  // backgrounded and refetches immediately the moment it's foregrounded
+  useEffect(() => {
+    if (!role) return;
+    let interval = null;
+    const start = () => {
+      if (interval) return;
+      loadLeads();
+      interval = setInterval(loadLeads, 30000);
+    };
+    const stop = () => {
+      if (interval) clearInterval(interval);
+      interval = null;
+    };
+    const onVisibility = () => (document.visibilityState === "visible" ? start() : stop());
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [role, loadLeads]);
+
+  const navigateToLead = useCallback(
+    (leadId) => {
+      const lead = (leads || []).find((l) => l.id === leadId);
+      if (!lead) return;
+      setView(lead.archived ? "archive" : "board");
+      if (!lead.archived) setActiveStage(lead.stage);
+      setHighlightedLeadId(leadId);
+    },
+    [leads]
+  );
+
+  // deep-link from a push notification tap: either this window is opened
+  // fresh with ?lead=<id>, or the service worker posts a message to an
+  // already-open tab it just focused
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const leadId = params.get("lead");
+    if (leadId && leads) {
+      navigateToLead(leadId);
+      params.delete("lead");
+      const rest = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (event) => {
+      if (event.data && event.data.type === "OPEN_LEAD" && event.data.leadId) {
+        navigateToLead(event.data.leadId);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [navigateToLead]);
+
+  useEffect(() => {
+    if (!highlightedLeadId) return;
+    const el = document.getElementById(`lead-${highlightedLeadId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = setTimeout(() => setHighlightedLeadId(null), 2500);
+    return () => clearTimeout(t);
+  }, [highlightedLeadId]);
 
   const handleLogin = async (passcode) => {
     const res = await api.login(passcode); // throws on a bad passcode
@@ -442,18 +541,14 @@ function App() {
     const start = new Date(lookbackStart + "T00:00:00");
     const end = new Date(lookbackEnd + "T23:59:59");
     if (end < start) return null;
-    const all = leads || [];
-    const inRange = (iso) => {
-      if (!iso) return false;
-      const d = new Date(iso);
-      return d >= start && d <= end;
-    };
+    const breakdown = breakdownForRange(leads, start, end);
     return {
       start,
       end,
-      leadsCount: all.filter((l) => inRange(l.createdAt)).length,
-      won: all.filter((l) => inRange(l.wonAt)).reduce((s, l) => s + (l.revenue || 0), 0),
-      earned: all.filter((l) => inRange(l.paidAt)).reduce((s, l) => s + (l.revenue || 0), 0),
+      breakdown,
+      leadsCount: breakdown.received.length,
+      won: breakdown.won.reduce((s, l) => s + (l.revenue || 0), 0),
+      earned: breakdown.earned.reduce((s, l) => s + (l.revenue || 0), 0),
     };
   }, [leads, lookbackStart, lookbackEnd]);
 
@@ -549,6 +644,7 @@ function App() {
                   <Grid size={20} color={COLORS.surface} strokeWidth={2} />
                 )}
               </button>
+              <NotificationBell onOpenLead={navigateToLead} />
               <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
                 <User size={21} color={COLORS.surface} strokeWidth={2} />
               </button>
@@ -559,18 +655,36 @@ function App() {
 
       {/* weekly / monthly counters */}
       <div style={statsRow}>
-        <div style={statCard}>
+        <button
+          onClick={() =>
+            setDrilldown({
+              title: "This week",
+              rangeLabel: `${fmtRangeDate(startOfWeek(new Date()))} – ${fmtRangeDate(new Date())}`,
+              breakdown: breakdownForRange(leads, startOfWeek(new Date()), new Date()),
+            })
+          }
+          style={{ ...statCard, ...statCardBtn }}
+        >
           <div style={statLabel}>This week</div>
           <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
-        </div>
-        <div style={statCard}>
+        </button>
+        <button
+          onClick={() =>
+            setDrilldown({
+              title: "This month",
+              rangeLabel: `${fmtRangeDate(startOfMonth(new Date()))} – ${fmtRangeDate(new Date())}`,
+              breakdown: breakdownForRange(leads, startOfMonth(new Date()), new Date()),
+            })
+          }
+          style={{ ...statCard, ...statCardBtn }}
+        >
           <div style={statLabel}>This month</div>
           <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
-        </div>
+        </button>
       </div>
 
       <div style={{ padding: "0 16px" }}>
@@ -627,6 +741,18 @@ function App() {
               </div>
               <div style={statSub}>{fmtCurrency(lookbackResult.won)} won</div>
               <div style={statSub}>{fmtCurrency(lookbackResult.earned)} earned</div>
+              <button
+                onClick={() =>
+                  setDrilldown({
+                    title: "Look back",
+                    rangeLabel: `${fmtRangeDate(lookbackResult.start)} – ${fmtRangeDate(lookbackResult.end)}`,
+                    breakdown: lookbackResult.breakdown,
+                  })
+                }
+                style={{ ...notifMarkAllBtn, marginTop: 10, fontSize: 13 }}
+              >
+                View leads
+              </button>
             </div>
           ) : (
             <div style={{ marginTop: 14, fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>
@@ -724,6 +850,7 @@ function App() {
                 onEditField={editField}
                 onDelete={deleteLead}
                 editable={editable}
+                highlighted={lead.id === highlightedLeadId}
               />
             ))}
           </main>
@@ -739,6 +866,18 @@ function App() {
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
+        />
+      )}
+      {drilldown && (
+        <StatDrilldownModal
+          title={drilldown.title}
+          rangeLabel={drilldown.rangeLabel}
+          breakdown={drilldown.breakdown}
+          onOpenLead={(id) => {
+            setDrilldown(null);
+            navigateToLead(id);
+          }}
+          onClose={() => setDrilldown(null)}
         />
       )}
     </div>
@@ -795,6 +934,156 @@ function LoginScreen({ onLogin }) {
         >
           {busy ? "Checking…" : "Enter"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function NotificationBell({ onOpenLead }) {
+  const [open, setOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unread, setUnread] = useState(0);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api.listNotifications();
+      setNotifications(data.notifications);
+      setUnread(data.unread);
+    } catch {
+      // keep last known state — this is a background refresh, not worth surfacing an error for
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  const openNotification = async (n) => {
+    setOpen(false);
+    if (!n.readAt) {
+      api
+        .markNotificationRead(n.id)
+        .then(load)
+        .catch(() => {});
+    }
+    if (n.leadId) onOpenLead(n.leadId);
+  };
+
+  const markAllRead = (e) => {
+    e.stopPropagation();
+    api
+      .markAllNotificationsRead()
+      .then(load)
+      .catch(() => {});
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} style={headerIconBtn} aria-label="Notifications">
+        <Bell size={21} color={COLORS.surface} strokeWidth={2} />
+        {unread > 0 && <span style={notifBadge}>{unread > 9 ? "9+" : unread}</span>}
+      </button>
+      {open && (
+        <>
+          <div style={moreMenuScrim} onClick={() => setOpen(false)} />
+          <div style={notifPanel}>
+            <div style={notifPanelHeader}>
+              <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
+                Notifications
+              </span>
+              {unread > 0 && (
+                <button onClick={markAllRead} style={notifMarkAllBtn}>
+                  Mark all read
+                </button>
+              )}
+            </div>
+            <div style={{ maxHeight: 340, overflowY: "auto" }}>
+              {notifications.length === 0 ? (
+                <div style={{ padding: 16, fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+                  No notifications yet.
+                </div>
+              ) : (
+                notifications.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => openNotification(n)}
+                    style={{ ...notifItem, background: n.readAt ? "transparent" : COLORS.surfaceMuted }}
+                  >
+                    <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>
+                      {n.title}
+                    </div>
+                    <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.muted, marginTop: 2 }}>
+                      {n.body}
+                    </div>
+                    <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted, marginTop: 3 }}>
+                      {fmtRelativeTime(n.createdAt)}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose }) {
+  const [tab, setTab] = useState("received");
+  const tabs = [
+    { key: "received", label: `Received (${breakdown.received.length})` },
+    { key: "won", label: `Won (${breakdown.won.length})` },
+    { key: "earned", label: `Earned (${breakdown.earned.length})` },
+  ];
+  const list = breakdown[tab];
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>{title}</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 14 }}>{rangeLabel}</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              style={{
+                ...lookbackPresetBtn,
+                background: tab === t.key ? COLORS.accent : "transparent",
+                color: tab === t.key ? COLORS.surface : COLORS.accent,
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+          {list.length === 0 ? (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, padding: "8px 0" }}>
+              No leads in this category.
+            </div>
+          ) : (
+            list.map((l) => (
+              <button key={l.id} onClick={() => onOpenLead(l.id)} style={statDrilldownRow}>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>
+                  {l.name}
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
+                  {STAGES.find((s) => s.key === l.stage)?.short || l.stage}
+                  {l.revenue != null ? ` · ${fmtCurrency(l.revenue)}` : ""}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1046,7 +1335,7 @@ function ArchiveView({ leads }) {
   );
 }
 
-function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
+function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
@@ -1112,7 +1401,14 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   };
 
   return (
-    <div style={ticket}>
+    <div
+      id={`lead-${lead.id}`}
+      style={
+        highlighted
+          ? { ...ticket, boxShadow: `0 0 0 3px ${COLORS.accent}, 0 4px 16px rgba(36,41,38,0.16)` }
+          : ticket
+      }
+    >
       <div style={{ ...ticketStub, background: stage?.color || COLORS.info }} />
       <div style={{ flex: 1, padding: "16px 18px 16px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -1866,6 +2162,79 @@ const headerIconBtn = {
   cursor: "pointer",
 };
 
+const notifBadge = {
+  position: "absolute",
+  top: -4,
+  right: -4,
+  minWidth: 19,
+  height: 19,
+  padding: "0 4px",
+  borderRadius: 999,
+  background: COLORS.rust,
+  color: "#fff",
+  fontFamily: FONT_UTIL,
+  fontSize: 11,
+  fontWeight: 700,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: `2px solid ${COLORS.header}`,
+};
+
+const notifPanel = {
+  position: "absolute",
+  top: "calc(100% + 8px)",
+  right: 0,
+  zIndex: 41,
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 10,
+  boxShadow: "0 8px 24px rgba(36,41,38,0.2)",
+  width: 300,
+  maxWidth: "calc(100vw - 32px)",
+  overflow: "hidden",
+};
+
+const notifPanelHeader = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "12px 14px",
+  borderBottom: `1px solid ${COLORS.border}`,
+};
+
+const notifMarkAllBtn = {
+  background: "transparent",
+  border: "none",
+  color: COLORS.accent,
+  fontFamily: FONT_BODY,
+  fontSize: 12.5,
+  fontWeight: 600,
+  cursor: "pointer",
+  padding: 0,
+};
+
+const notifItem = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  border: "none",
+  borderBottom: `1px solid ${COLORS.border}`,
+  padding: "11px 14px",
+  cursor: "pointer",
+};
+
+const statDrilldownRow = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  borderBottom: `1px solid ${COLORS.border}`,
+  padding: "10px 4px",
+  cursor: "pointer",
+};
+
 const inlineInput = {
   fontFamily: FONT_UTIL,
   fontSize: 12.5,
@@ -1921,6 +2290,12 @@ const statCard = {
   borderRadius: 10,
   padding: "14px 16px",
   boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
+};
+
+const statCardBtn = {
+  textAlign: "left",
+  cursor: "pointer",
+  fontFamily: "inherit",
 };
 
 const statLabel = {

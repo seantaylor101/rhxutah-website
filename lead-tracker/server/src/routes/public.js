@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { insertLead } from "./leads.js";
 import { sendPushToAll } from "../pushService.js";
 import { sendBackupEmail } from "../notifyEmail.js";
+import { createNotification } from "../notifications.js";
 
 const router = Router();
 
@@ -50,12 +51,20 @@ router.post("/leads", (req, res) => {
 
   res.status(201).json({ ok: true });
 
-  // best-effort notifications — the lead is already saved, don't let a
-  // push/email hiccup affect the response the website form sees
-  sendPushToAll({
-    title: "New lead from your website",
-    body: `${lead.name}${lead.job ? " — " + lead.job : ""}`,
-  }).catch((err) => console.error("push notify failed:", err.message));
+  const title = "New lead from your website";
+  const body = `${lead.name}${lead.job ? " — " + lead.job : ""}${page ? " (" + page + ")" : ""}`;
+
+  // in-app notification log — persists regardless of whether push/email
+  // actually land, so there's always somewhere to see what came in
+  try {
+    createNotification({ leadId: lead.id, title, body });
+  } catch (err) {
+    console.error("failed to log notification:", err.message);
+  }
+
+  // best-effort — the lead is already saved, don't let a push/email hiccup
+  // affect the response the website form sees
+  sendPushToAll({ title, body, leadId: lead.id }).catch((err) => console.error("push notify failed:", err.message));
 
   sendBackupEmail(lead).catch((err) => console.error("backup email failed:", err.message));
 });

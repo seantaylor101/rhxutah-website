@@ -11,18 +11,28 @@ self.addEventListener("push", (event) => {
       body: data.body || "",
       icon: "/icon-192.png",
       badge: "/icon-192.png",
+      data: { leadId: data.leadId || null },
     })
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const leadId = event.notification.data && event.notification.data.leadId;
+  const targetUrl = leadId ? `/?lead=${encodeURIComponent(leadId)}` : "/";
+
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ("focus" in client) return client.focus();
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ("focus" in client) {
+          client.focus();
+          if (leadId && "postMessage" in client) {
+            client.postMessage({ type: "OPEN_LEAD", leadId });
+          }
+          return;
+        }
       }
-      if (self.clients.openWindow) return self.clients.openWindow("/");
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     })
   );
 });
