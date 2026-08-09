@@ -100,6 +100,14 @@ const Archive = (p) => (
     <line x1="10" y1="13" x2="14" y2="13" />
   </Icon>
 );
+const Calendar = (p) => (
+  <Icon {...p}>
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <line x1="16" y1="2" x2="16" y2="6" />
+    <line x1="8" y1="2" x2="8" y2="6" />
+    <line x1="3" y1="10" x2="21" y2="10" />
+  </Icon>
+);
 
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
@@ -173,6 +181,36 @@ function startOfMonth(d) {
   return x;
 }
 
+function endOfWeek(d) {
+  const x = startOfWeek(d);
+  x.setDate(x.getDate() + 6);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function endOfMonth(d) {
+  const x = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function addYears(d, n) {
+  const x = new Date(d);
+  x.setFullYear(x.getFullYear() + n);
+  return x;
+}
+
+// local YYYY-MM-DD for <input type="date">, avoiding UTC-shift bugs from toISOString()
+function toDateInputValue(d) {
+  const off = d.getTimezoneOffset();
+  const local = new Date(d.getTime() - off * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function fmtRangeDate(d) {
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 function fmtCurrency(n) {
   if (!n && n !== 0) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -236,6 +274,9 @@ function App() {
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [view, setView] = useState("board"); // 'board' | 'archive'
+  const [showLookback, setShowLookback] = useState(false);
+  const [lookbackStart, setLookbackStart] = useState("");
+  const [lookbackEnd, setLookbackEnd] = useState("");
   const editable = role === "owner";
 
   useEffect(() => {
@@ -366,6 +407,49 @@ function App() {
     };
   }, [leads]);
 
+  const lookbackResult = useMemo(() => {
+    if (!lookbackStart || !lookbackEnd) return null;
+    const start = new Date(lookbackStart + "T00:00:00");
+    const end = new Date(lookbackEnd + "T23:59:59");
+    if (end < start) return null;
+    const all = leads || [];
+    const inRange = (iso) => {
+      if (!iso) return false;
+      const d = new Date(iso);
+      return d >= start && d <= end;
+    };
+    return {
+      start,
+      end,
+      leadsCount: all.filter((l) => inRange(l.createdAt)).length,
+      won: all.filter((l) => inRange(l.wonAt)).reduce((s, l) => s + (l.revenue || 0), 0),
+      earned: all.filter((l) => inRange(l.paidAt)).reduce((s, l) => s + (l.revenue || 0), 0),
+    };
+  }, [leads, lookbackStart, lookbackEnd]);
+
+  const applyLookbackPreset = (kind) => {
+    const now = new Date();
+    let start, end;
+    if (kind === "week") {
+      start = startOfWeek(now);
+      end = endOfWeek(now);
+    } else if (kind === "month") {
+      start = startOfMonth(now);
+      end = endOfMonth(now);
+    } else if (kind === "weekLastYear") {
+      const ly = addYears(now, -1);
+      start = startOfWeek(ly);
+      end = endOfWeek(ly);
+    } else {
+      const ly = addYears(now, -1);
+      start = startOfMonth(ly);
+      end = endOfMonth(ly);
+    }
+    setLookbackStart(toDateInputValue(start));
+    setLookbackEnd(toDateInputValue(end));
+    setShowLookback(true);
+  };
+
   const stageIdx = STAGES.findIndex((s) => s.key === activeStage);
 
   if (!authChecked) {
@@ -460,6 +544,69 @@ function App() {
           <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
         </div>
       </div>
+
+      <div style={{ padding: "0 16px" }}>
+        <button onClick={() => setShowLookback((v) => !v)} style={lookbackToggle}>
+          <Calendar size={14} color={COLORS.accent} />
+          <span>Look back at a past period</span>
+          {showLookback ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
+        </button>
+      </div>
+
+      {showLookback && (
+        <div style={lookbackPanel}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <button onClick={() => applyLookbackPreset("weekLastYear")} style={lookbackPresetBtn}>
+              This week last year
+            </button>
+            <button onClick={() => applyLookbackPreset("monthLastYear")} style={lookbackPresetBtn}>
+              This month last year
+            </button>
+            <button onClick={() => applyLookbackPreset("week")} style={lookbackPresetBtn}>
+              This week
+            </button>
+            <button onClick={() => applyLookbackPreset("month")} style={lookbackPresetBtn}>
+              This month
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ ...modalLabel, marginTop: 0 }}>From</label>
+              <input
+                type="date"
+                value={lookbackStart}
+                onChange={(e) => setLookbackStart(e.target.value)}
+                style={modalInput}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ ...modalLabel, marginTop: 0 }}>To</label>
+              <input
+                type="date"
+                value={lookbackEnd}
+                onChange={(e) => setLookbackEnd(e.target.value)}
+                style={modalInput}
+              />
+            </div>
+          </div>
+          {lookbackResult ? (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>
+                {fmtRangeDate(lookbackResult.start)} – {fmtRangeDate(lookbackResult.end)}
+              </div>
+              <div style={statMain}>
+                {lookbackResult.leadsCount} <span style={statUnit}>leads</span>
+              </div>
+              <div style={statSub}>{fmtCurrency(lookbackResult.won)} won</div>
+              <div style={statSub}>{fmtCurrency(lookbackResult.earned)} earned</div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 14, fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>
+              Pick a range above, or use one of the shortcuts.
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div style={{ background: "#FBEAE7", color: "#8C2F24", fontSize: 13, padding: "8px 16px", fontFamily: FONT_BODY }}>
@@ -1380,6 +1527,42 @@ const statSub = {
   fontWeight: 600,
   color: COLORS.accent,
   marginTop: 3,
+};
+
+const lookbackToggle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  background: "transparent",
+  border: "none",
+  padding: "8px 0",
+  fontFamily: FONT_BODY,
+  fontSize: 13,
+  fontWeight: 600,
+  color: COLORS.accent,
+  cursor: "pointer",
+};
+
+const lookbackPanel = {
+  margin: "4px 16px 4px",
+  background: COLORS.surface,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 10,
+  padding: "14px 16px 16px",
+  boxShadow: "0 1px 3px rgba(36,41,38,0.06)",
+};
+
+const lookbackPresetBtn = {
+  flex: "0 0 auto",
+  padding: "6px 12px",
+  borderRadius: 999,
+  border: `1px solid ${COLORS.accent}`,
+  background: "transparent",
+  color: COLORS.accent,
+  fontSize: 12.5,
+  fontFamily: FONT_BODY,
+  fontWeight: 600,
+  cursor: "pointer",
 };
 
 const viewBadge = {
