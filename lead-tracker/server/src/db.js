@@ -24,3 +24,9 @@ db.exec(`
     archivedAt TEXT
   );
 `);
+
+// migrations for columns added after the table already existed in production
+const existingColumns = new Set(db.prepare(`PRAGMA table_info(leads)`).all().map((c) => c.name));
+if (!existingColumns.has("job")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN job TEXT DEFAULT ''`);
+}

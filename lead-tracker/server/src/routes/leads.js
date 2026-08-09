@@ -7,7 +7,7 @@ const router = Router();
 
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "other"]);
 const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
-const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name"]);
+const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name", "job"]);
 
 function rowToLead(row) {
   return { ...row, archived: !!row.archived };
@@ -52,13 +52,14 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, source, sourceOther } = req.body || {};
+  const { name, job, source, sourceOther } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
   const lead = {
     id: randomUUID(),
     name: String(name).trim(),
+    job: String(job || "").trim(),
     stage: "new",
     createdAt: new Date().toISOString(),
     startDate: "",
@@ -72,8 +73,8 @@ router.post("/", requireAuth("owner"), (req, res) => {
   };
 
   db.prepare(
-    `INSERT INTO leads (id, name, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+    `INSERT INTO leads (id, name, job, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
+     VALUES (@id, @name, @job, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
   ).run(lead);
 
   res.status(201).json(rowToLead(lead));
@@ -140,6 +141,9 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   if ("name" in updates) {
     updates.name = String(updates.name).trim();
     if (!updates.name) return res.status(400).json({ error: "Name can't be empty" });
+  }
+  if ("job" in updates) {
+    updates.job = String(updates.job || "").trim();
   }
 
   const fields = Object.keys(updates);
