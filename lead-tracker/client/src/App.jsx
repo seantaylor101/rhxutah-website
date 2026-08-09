@@ -56,11 +56,6 @@ const ArrowRight = (p) => (
     <polyline points="12 5 19 12 12 19" />
   </Icon>
 );
-const Ticket = (p) => (
-  <Icon {...p}>
-    <path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1a2 2 0 0 0 0 4v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1a2 2 0 0 0 0-4Z" />
-  </Icon>
-);
 const ChevronLeft = (p) => (
   <Icon {...p}>
     <polyline points="15 18 9 12 15 6" />
@@ -87,25 +82,33 @@ const Eye = (p) => (
     <circle cx="12" cy="12" r="3" />
   </Icon>
 );
-const Unlock = (p) => (
-  <Icon {...p}>
-    <rect x="3" y="11" width="18" height="11" rx="2" />
-    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-  </Icon>
-);
-const Archive = (p) => (
-  <Icon {...p}>
-    <rect x="2" y="3" width="20" height="5" rx="1" />
-    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
-    <line x1="10" y1="13" x2="14" y2="13" />
-  </Icon>
-);
 const Calendar = (p) => (
   <Icon {...p}>
     <rect x="3" y="4" width="18" height="18" rx="2" />
     <line x1="16" y1="2" x2="16" y2="6" />
     <line x1="8" y1="2" x2="8" y2="6" />
     <line x1="3" y1="10" x2="21" y2="10" />
+  </Icon>
+);
+const History = (p) => (
+  <Icon {...p}>
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M12 7v5l4 2" />
+  </Icon>
+);
+const User = (p) => (
+  <Icon {...p}>
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+  </Icon>
+);
+const Grid = (p) => (
+  <Icon {...p}>
+    <rect x="3" y="3" width="7" height="7" />
+    <rect x="14" y="3" width="7" height="7" />
+    <rect x="3" y="14" width="7" height="7" />
+    <rect x="14" y="14" width="7" height="7" />
   </Icon>
 );
 
@@ -490,7 +493,7 @@ function App() {
 
       <header style={header}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Ticket size={22} color={COLORS.surface} strokeWidth={1.75} />
+          <img src="/logo-mark-white.png" alt="" style={{ width: 26, height: 26 }} />
           <div>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.surface }}>
               RHX Job Board
@@ -515,16 +518,16 @@ function App() {
           <button
             onClick={() => setView(view === "board" ? "archive" : "board")}
             style={iconBtnGhost}
-            aria-label={view === "board" ? "View archive" : "Back to board"}
+            aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
           >
             {view === "board" ? (
-              <Archive size={15} color={COLORS.mutedOnDark} />
+              <History size={16} color={COLORS.mutedOnDark} />
             ) : (
-              <Ticket size={15} color={COLORS.mutedOnDark} />
+              <Grid size={15} color={COLORS.mutedOnDark} />
             )}
           </button>
           <button onClick={() => setShowAccountModal(true)} style={iconBtnGhost} aria-label="Account">
-            <Unlock size={15} color={COLORS.mutedOnDark} />
+            <User size={15} color={COLORS.mutedOnDark} />
           </button>
         </div>
       </header>
@@ -744,7 +747,7 @@ function LoginScreen({ onLogin }) {
       `}</style>
       <div style={{ width: "100%", maxWidth: 340 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, justifyContent: "center" }}>
-          <Ticket size={22} color={COLORS.accent} strokeWidth={1.75} />
+          <img src="/logo-mark-accent.png" alt="" style={{ width: 28, height: 28 }} />
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
             RHX Job Board
           </div>
