@@ -340,10 +340,10 @@ function App() {
     }
   };
 
-  const moveLead = async (id, stage) => {
+  const moveLead = async (id, stage, date) => {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
     try {
-      const updated = await api.moveLead(id, stage);
+      const updated = await api.moveLead(id, stage, date);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -1202,11 +1202,36 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable }) {
   );
 }
 
+const BACKDATE_THRESHOLD_DAYS = 7;
+
+// "won" and "paid" both stamp a date used for weekly/monthly stats and the
+// archive's month grouping — moving a long-backlogged lead into either
+// without checking would silently misdate it to today.
+function priorDateFor(lead, stage) {
+  if (stage === "won") return lead.createdAt;
+  if (stage === "paid") return lead.wonAt || lead.createdAt;
+  return null;
+}
+
 function ActionRow({ lead, onMove }) {
+  const [confirmStage, setConfirmStage] = useState(null);
+
+  const handleClick = (target) => {
+    const prior = priorDateFor(lead, target);
+    if (prior) {
+      const days = (Date.now() - new Date(prior).getTime()) / 86400000;
+      if (days > BACKDATE_THRESHOLD_DAYS) {
+        setConfirmStage(target);
+        return;
+      }
+    }
+    onMove(lead.id, target);
+  };
+
   const btn = (label, target, kind = "primary") => (
     <button
       key={target}
-      onClick={() => onMove(lead.id, target)}
+      onClick={() => handleClick(target)}
       style={{
         ...actionBtn,
         background: kind === "primary" ? COLORS.accent : "transparent",
@@ -1245,8 +1270,54 @@ function ActionRow({ lead, onMove }) {
       actions = [];
   }
 
-  if (actions.length === 0) return null;
-  return <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>{actions}</div>;
+  return (
+    <>
+      {actions.length > 0 && <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>{actions}</div>}
+      {confirmStage && (
+        <BackdateModal
+          stage={confirmStage}
+          onConfirm={(date) => {
+            onMove(lead.id, confirmStage, date);
+            setConfirmStage(null);
+          }}
+          onCancel={() => setConfirmStage(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function BackdateModal({ stage, onConfirm, onCancel }) {
+  const [date, setDate] = useState(toDateInputValue(new Date()));
+  const label = stage === "won" ? "won" : "paid";
+
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          Backdate this {label} date?
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+          This lead was received a while ago, so it looks like it might be getting added late. If it was actually{" "}
+          {label} earlier, set the real date below — otherwise just confirm today's date.
+        </div>
+        <label style={modalLabel}>Date {label}</label>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={modalInput} />
+        <button
+          onClick={() => onConfirm(date)}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14 }}
+        >
+          Confirm
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function AddLeadModal({ onAdd, onClose }) {
