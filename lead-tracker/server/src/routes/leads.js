@@ -81,14 +81,21 @@ router.post("/", requireAuth("owner"), (req, res) => {
 
 // Stage transitions carry the same wonAt/paidAt side effects the original client applied.
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
-  const { stage } = req.body || {};
+  const { stage, date } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
+  let ts = new Date().toISOString();
+  if (date) {
+    const parsed = new Date(`${date}T00:00:00`);
+    if (isNaN(parsed.getTime())) return res.status(400).json({ error: "Invalid date" });
+    ts = parsed.toISOString();
+  }
+
   const patch = { stage };
-  if (stage === "won") patch.wonAt = new Date().toISOString();
-  if (stage === "paid") patch.paidAt = new Date().toISOString();
+  if (stage === "won") patch.wonAt = ts;
+  if (stage === "paid") patch.paidAt = ts;
 
   const fields = Object.keys(patch);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
