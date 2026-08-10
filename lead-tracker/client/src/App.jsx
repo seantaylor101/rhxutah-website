@@ -521,6 +521,9 @@ function App() {
     const lastWStart = new Date(wStart);
     lastWStart.setDate(lastWStart.getDate() - 7);
     const lastWEnd = new Date(wStart.getTime() - 1);
+    const prevWStart = new Date(lastWStart);
+    prevWStart.setDate(prevWStart.getDate() - 7);
+    const prevWEnd = new Date(lastWStart.getTime() - 1);
     const all = leads || [];
     const inRange = (iso, start) => iso && new Date(iso) >= start;
     const inWindow = (iso, start, end) => iso && new Date(iso) >= start && new Date(iso) <= end;
@@ -536,6 +539,11 @@ function App() {
       leadsLastWeek: all.filter((l) => inWindow(l.createdAt, lastWStart, lastWEnd)).length,
       wonLastWeek: all.filter((l) => inWindow(l.wonAt, lastWStart, lastWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
       earnedLastWeek: all.filter((l) => inWindow(l.paidAt, lastWStart, lastWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
+      previousWeekStart: prevWStart,
+      previousWeekEnd: prevWEnd,
+      leadsPreviousWeek: all.filter((l) => inWindow(l.createdAt, prevWStart, prevWEnd)).length,
+      wonPreviousWeek: all.filter((l) => inWindow(l.wonAt, prevWStart, prevWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
+      earnedPreviousWeek: all.filter((l) => inWindow(l.paidAt, prevWStart, prevWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
     };
   }, [leads]);
 
@@ -656,22 +664,37 @@ function App() {
         </div>
       </header>
 
-      {/* weekly / monthly counters */}
-      <div style={statsRow}>
+      {/* weekly / monthly counters — 2x2: previous week, this month / last week, this week */}
+      <div style={statsGrid}>
         <button
           onClick={() =>
             setDrilldown({
-              title: "This week",
-              rangeLabel: `${fmtRangeDate(startOfWeek(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfWeek(new Date()), new Date()),
+              title: "Previous week",
+              rangeLabel: `${fmtRangeDate(stats.previousWeekStart)} – ${fmtRangeDate(stats.previousWeekEnd)}`,
+              breakdown: breakdownForRange(leads, stats.previousWeekStart, stats.previousWeekEnd),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
         >
-          <div style={statLabel}>This week</div>
-          <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
-          <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
+          <div style={statLabel}>Previous week</div>
+          <div style={statMain}>{stats.leadsPreviousWeek} <span style={statUnit}>leads</span></div>
+          <div style={statSub}>{fmtCurrency(stats.wonPreviousWeek)} won</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} earned</div>
+        </button>
+        <button
+          onClick={() =>
+            setDrilldown({
+              title: "This month",
+              rangeLabel: `${fmtRangeDate(startOfMonth(new Date()))} – ${fmtRangeDate(new Date())}`,
+              breakdown: breakdownForRange(leads, startOfMonth(new Date()), new Date()),
+            })
+          }
+          style={{ ...statCard, ...statCardBtn }}
+        >
+          <div style={statLabel}>This month</div>
+          <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
+          <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
         </button>
         <button
           onClick={() =>
@@ -691,17 +714,17 @@ function App() {
         <button
           onClick={() =>
             setDrilldown({
-              title: "This month",
-              rangeLabel: `${fmtRangeDate(startOfMonth(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfMonth(new Date()), new Date()),
+              title: "This week",
+              rangeLabel: `${fmtRangeDate(startOfWeek(new Date()))} – ${fmtRangeDate(new Date())}`,
+              breakdown: breakdownForRange(leads, startOfWeek(new Date()), new Date()),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
         >
-          <div style={statLabel}>This month</div>
-          <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
-          <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
+          <div style={statLabel}>This week</div>
+          <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
+          <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
         </button>
       </div>
 
@@ -2315,15 +2338,14 @@ const modalCard = {
   boxShadow: "0 -4px 24px rgba(36,41,38,0.12)",
 };
 
-const statsRow = {
-  display: "flex",
-  flexWrap: "wrap",
+const statsGrid = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
   gap: 12,
   padding: "16px 16px 6px",
 };
 
 const statCard = {
-  flex: "1 1 140px",
   background: COLORS.surface,
   border: `1px solid ${COLORS.border}`,
   borderRadius: 10,
