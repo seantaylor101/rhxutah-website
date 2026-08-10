@@ -328,6 +328,22 @@ function fmtRelativeTime(iso) {
   return fmtRangeDate(new Date(iso));
 }
 
+const BACKUP_TIERS = [
+  { key: "5min", label: "Every 5 minutes" },
+  { key: "hourly", label: "Hourly" },
+  { key: "daily", label: "Daily" },
+  { key: "weekly", label: "Weekly" },
+];
+
+function fmtBackupDate(iso) {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function fmtCurrency(n) {
   if (!n && n !== 0) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -417,6 +433,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({ dailyOverheadCost: 350 });
   const [reportLead, setReportLead] = useState(null);
+  const [showBackupsModal, setShowBackupsModal] = useState(false);
   const editable = role === "owner";
 
   useEffect(() => {
@@ -439,7 +456,11 @@ function App() {
       setError("");
     } catch {
       setError("Couldn't load your saved leads.");
-      setLeads([]);
+      // don't blank out a board that already loaded successfully — a
+      // transient failure (deploy restart, brief network blip) shouldn't
+      // make leads appear to vanish; only fall back to empty on a first
+      // load that never succeeded
+      setLeads((prev) => (prev === null ? [] : prev));
     }
   }, []);
 
@@ -1111,6 +1132,19 @@ function App() {
             setSettings(updated);
           }}
           onClose={() => setShowSettingsModal(false)}
+          onOpenBackups={() => {
+            setShowSettingsModal(false);
+            setShowBackupsModal(true);
+          }}
+        />
+      )}
+      {showBackupsModal && (
+        <BackupsModal
+          onClose={() => setShowBackupsModal(false)}
+          onRestored={() => {
+            setShowBackupsModal(false);
+            loadLeads();
+          }}
         />
       )}
       {reportLead && (
@@ -1472,7 +1506,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
   );
 }
 
-function SettingsModal({ settings, onSave, onClose }) {
+function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   const [draft, setDraft] = useState(String(settings.dailyOverheadCost));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -1531,6 +1565,157 @@ function SettingsModal({ settings, onSave, onClose }) {
         >
           Save
         </button>
+
+        <button
+          onClick={onOpenBackups}
+          style={{
+            ...roleOption,
+            marginTop: 20,
+            justifyContent: "center",
+            borderColor: COLORS.border,
+            cursor: "pointer",
+          }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+            Manage backups
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BackupsModal({ onClose, onRestored }) {
+  const [backups, setBackups] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api
+      .listBackups()
+      .then((data) => setBackups(data.backups))
+      .catch((e) => setLoadErr(e.message || "Couldn't load backups"));
+  }, []);
+
+  const grouped = useMemo(() => {
+    const map = {};
+    for (const b of backups || []) {
+      (map[b.tier] = map[b.tier] || []).push(b);
+    }
+    return map;
+  }, [backups]);
+
+  const doRestore = async () => {
+    if (!confirmTarget) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.restoreBackup(confirmTarget.filename);
+      onRestored();
+    } catch (e) {
+      setErr(e.message || "Restore failed");
+      setBusy(false);
+    }
+  };
+
+  if (confirmTarget) {
+    return (
+      <div style={modalOverlay} onClick={busy ? undefined : () => setConfirmTarget(null)}>
+        <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+              Restore this backup?
+            </div>
+            {!busy && (
+              <button onClick={() => setConfirmTarget(null)} style={iconBtnGhost} aria-label="Cancel">
+                <X size={18} color={COLORS.muted} />
+              </button>
+            )}
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, marginBottom: 12 }}>
+            This replaces <strong>all current leads</strong> — names, stages, revenue, reports, everything — with
+            the snapshot from <strong>{fmtBackupDate(confirmTarget.takenAt)}</strong> (
+            {fmtRelativeTime(confirmTarget.takenAt)})
+            {confirmTarget.leadCount != null ? `, ${confirmTarget.leadCount} leads` : ""}.
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+            Your current data is safety-backed-up first, so this can be undone by restoring again afterward.
+          </div>
+          {err && (
+            <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 12 }}>{err}</div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setConfirmTarget(null)}
+              disabled={busy}
+              style={{ ...roleOption, flex: 1, justifyContent: "center", cursor: "pointer", opacity: busy ? 0.6 : 1 }}
+            >
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+            </button>
+            <button
+              onClick={doRestore}
+              disabled={busy}
+              style={{ ...addBtn, flex: 1, justifyContent: "center", background: COLORS.rust, opacity: busy ? 0.6 : 1 }}
+            >
+              {busy ? "Restoring…" : "Yes, restore"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Backups</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Snapshots of your leads, taken automatically. Restoring replaces all current leads with the chosen
+          snapshot.
+        </div>
+
+        {loadErr && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13 }}>{loadErr}</div>}
+        {!loadErr && backups === null && (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>Loading…</div>
+        )}
+        {!loadErr && backups && backups.length === 0 && (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+            No backups yet — the first one is taken within a few minutes of the app starting.
+          </div>
+        )}
+
+        {BACKUP_TIERS.map(
+          (tier) =>
+            grouped[tier.key] &&
+            grouped[tier.key].length > 0 && (
+              <div key={tier.key} style={{ marginBottom: 16 }}>
+                <div style={reportSectionLabel}>{tier.label}</div>
+                {grouped[tier.key].map((b) => (
+                  <div key={b.filename} style={backupRow}>
+                    <div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
+                        {fmtRelativeTime(b.takenAt)}
+                      </div>
+                      <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>
+                        {fmtBackupDate(b.takenAt)}
+                        {b.leadCount != null ? ` · ${b.leadCount} leads` : ""}
+                      </div>
+                    </div>
+                    <button onClick={() => setConfirmTarget(b)} style={backupRestoreBtn}>
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
+        )}
       </div>
     </div>
   );
@@ -2888,6 +3073,28 @@ const archiveReportBtn = {
   border: "1px solid",
   background: "transparent",
   fontSize: 12,
+  fontFamily: FONT_BODY,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const backupRow = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  padding: "8px 0",
+  borderBottom: `1px solid ${COLORS.border}`,
+};
+
+const backupRestoreBtn = {
+  flex: "0 0 auto",
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: `1px solid ${COLORS.accent}`,
+  background: "transparent",
+  color: COLORS.accent,
+  fontSize: 12.5,
   fontFamily: FONT_BODY,
   fontWeight: 600,
   cursor: "pointer",
