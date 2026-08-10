@@ -91,6 +91,12 @@ const TrendingUp = (p) => (
     <polyline points="17 6 23 6 23 12" />
   </Icon>
 );
+const Gear = (p) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </Icon>
+);
 const History = (p) => (
   <Icon {...p}>
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
@@ -188,6 +194,25 @@ const METRIC_SOURCE_GROUPS = [
   { key: "other", label: "Other", match: (l) => l.source === "other" },
 ];
 
+// weekdays from start through end, inclusive of both endpoints — matches how
+// overhead is billed (a 5-day work week), so "build pace" and job-cost math
+// agree on what a "day" means
+function businessDaysBetween(startIso, endIso) {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return null;
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  let count = 0;
+  const cur = new Date(start);
+  while (cur <= end) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 function computeMetrics(subset) {
   const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
   const avg = (nums) => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null);
@@ -197,7 +222,7 @@ function computeMetrics(subset) {
   const wonWithRevenue = wonLeads.filter((l) => l.revenue != null);
   const bidLeads = subset.filter((l) => l.bidSentAt);
   const paceLeads = subset.filter(
-    (l) => l.completedAt && l.startDate && l.revenue > 0 && days(l.startDate, l.completedAt) >= 0
+    (l) => l.completedAt && l.startDate && l.revenue > 0 && businessDaysBetween(l.startDate, l.completedAt) != null
   );
   const decidedCount = wonLeads.length + lostLeads.length;
 
@@ -212,7 +237,7 @@ function computeMetrics(subset) {
     avgDaysNewToBidSample: bidLeads.length,
     avgDaysNewToWon: avg(wonLeads.map((l) => days(l.createdAt, l.wonAt))),
     avgDaysNewToWonSample: wonLeads.length,
-    avgDaysPerThousand: avg(paceLeads.map((l) => days(l.startDate, l.completedAt) / (l.revenue / 1000))),
+    avgDaysPerThousand: avg(paceLeads.map((l) => businessDaysBetween(l.startDate, l.completedAt) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
   };
 }
@@ -389,6 +414,9 @@ function App() {
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const [showMetrics, setShowMetrics] = useState(false);
   const [metricsSource, setMetricsSource] = useState("all");
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settings, setSettings] = useState({ dailyOverheadCost: 350 });
+  const [reportLead, setReportLead] = useState(null);
   const editable = role === "owner";
 
   useEffect(() => {
@@ -418,6 +446,19 @@ function App() {
   useEffect(() => {
     if (role) loadLeads();
   }, [role, loadLeads]);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const data = await api.getSettings();
+      setSettings(data);
+    } catch {
+      // keep the default already in state
+    }
+  }, []);
+
+  useEffect(() => {
+    if (role) loadSettings();
+  }, [role, loadSettings]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
@@ -610,6 +651,10 @@ function App() {
     return computeMetrics((leads || []).filter(group.match));
   }, [leads, metricsSource]);
 
+  // unfiltered baseline used by the final-report "vs average pace" comparison,
+  // independent of whatever source filter is selected in the metrics panel
+  const allSourcesMetrics = useMemo(() => computeMetrics(leads || []), [leads]);
+
   const lookbackResult = useMemo(() => {
     if (!lookbackStart || !lookbackEnd) return null;
     const start = new Date(lookbackStart + "T00:00:00");
@@ -719,6 +764,11 @@ function App() {
                 )}
               </button>
               <NotificationBell onOpenLead={navigateToLead} />
+              {editable && (
+                <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
+                  <Gear size={20} color={COLORS.surface} strokeWidth={2} />
+                </button>
+              )}
               <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
                 <User size={21} color={COLORS.surface} strokeWidth={2} />
               </button>
@@ -859,7 +909,7 @@ function App() {
             <div style={metricTile}>
               <div style={metricLabel}>Build pace</div>
               <div style={metricValue}>
-                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} days/$1k` : "—"}
+                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} workdays/$1k` : "—"}
               </div>
               <div style={metricSub}>
                 {metrics.avgDaysPerThousandSample
@@ -1035,12 +1085,13 @@ function App() {
                 onDelete={deleteLead}
                 editable={editable}
                 highlighted={lead.id === highlightedLeadId}
+                onOpenReport={setReportLead}
               />
             ))}
           </main>
         </>
       ) : (
-        <ArchiveView leads={leads} />
+        <ArchiveView leads={leads} editable={editable} onOpenReport={setReportLead} />
       )}
 
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
@@ -1050,6 +1101,29 @@ function App() {
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
+        />
+      )}
+      {showSettingsModal && (
+        <SettingsModal
+          settings={settings}
+          onSave={async (patch) => {
+            const updated = await api.updateSettings(patch);
+            setSettings(updated);
+          }}
+          onClose={() => setShowSettingsModal(false)}
+        />
+      )}
+      {reportLead && (
+        <FinalReportModal
+          lead={leads.find((l) => l.id === reportLead.id) || reportLead}
+          settings={settings}
+          allMetrics={allSourcesMetrics}
+          editable={editable}
+          onSaveReport={async (patch) => {
+            const updated = await api.updateReport(reportLead.id, patch);
+            setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+          }}
+          onClose={() => setReportLead(null)}
         />
       )}
       {drilldown && (
@@ -1398,7 +1472,71 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
   );
 }
 
-function ArchiveView({ leads }) {
+function SettingsModal({ settings, onSave, onClose }) {
+  const [draft, setDraft] = useState(String(settings.dailyOverheadCost));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const submit = async () => {
+    const n = parseFloat(draft);
+    if (isNaN(n) || n < 0) {
+      setErr("Enter a non-negative number");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await onSave({ dailyOverheadCost: n });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr(e.message || "Couldn't save settings");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Settings</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Used to calculate overhead cost on a job's final report.
+        </div>
+
+        <label style={modalLabel}>Daily overhead cost ($, 5-day work week)</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          style={modalInput}
+          placeholder="350"
+        />
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        {saved && (
+          <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>Saved.</div>
+        )}
+        <button
+          onClick={submit}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 12, opacity: busy ? 0.6 : 1 }}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ArchiveView({ leads, editable, onOpenReport }) {
   const [granularity, setGranularity] = useState("month"); // 'week' | 'month' | 'year'
   const [openKey, setOpenKey] = useState(null);
 
@@ -1500,14 +1638,38 @@ function ArchiveView({ leads }) {
                 {p.leads
                   .sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))
                   .map((l) => (
-                    <div key={l.id} style={{ padding: "10px 14px", borderBottom: "1px solid #EDE8DB" }}>
-                      <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
-                        {l.name}
+                    <div
+                      key={l.id}
+                      style={{
+                        padding: "10px 14px",
+                        borderBottom: "1px solid #EDE8DB",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
+                          {l.name}
+                        </div>
+                        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
+                          {fmtCurrency(l.revenue)} · paid {fmtDate(l.paidAt.slice(0, 10))}
+                          {sourceLabel(l) ? ` · ${sourceLabel(l)}` : ""}
+                        </div>
                       </div>
-                      <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
-                        {fmtCurrency(l.revenue)} · paid {fmtDate(l.paidAt.slice(0, 10))}
-                        {sourceLabel(l) ? ` · ${sourceLabel(l)}` : ""}
-                      </div>
+                      {editable && l.completedAt && (
+                        <button
+                          onClick={() => onOpenReport(l)}
+                          style={{
+                            ...archiveReportBtn,
+                            borderColor: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
+                            color: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
+                          }}
+                        >
+                          Report
+                        </button>
+                      )}
                     </div>
                   ))}
               </div>
@@ -1519,7 +1681,222 @@ function ArchiveView({ leads }) {
   );
 }
 
-function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted }) {
+function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
+  const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
+  const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const revenue = lead.revenue || 0;
+  const actualWorkDays =
+    lead.startDate && lead.completedAt ? businessDaysBetween(lead.startDate, lead.completedAt) : null;
+  const expectedWorkDays =
+    allMetrics.avgDaysPerThousand != null && revenue > 0 ? allMetrics.avgDaysPerThousand * (revenue / 1000) : null;
+  const deltaDays = actualWorkDays != null && expectedWorkDays != null ? actualWorkDays - expectedWorkDays : null;
+  const overheadCost = actualWorkDays != null ? actualWorkDays * settings.dailyOverheadCost : null;
+
+  const totalCost = (lead.materialCost || 0) + (lead.laborCost || 0) + (overheadCost || 0);
+  const profit = revenue - totalCost;
+  const profitMargin = revenue > 0 ? (profit / revenue) * 100 : null;
+
+  const draftPatch = () => {
+    const material = materialDraft === "" ? null : parseFloat(materialDraft);
+    const labor = laborDraft === "" ? null : parseFloat(laborDraft);
+    return {
+      materialCost: material == null || isNaN(material) ? null : material,
+      laborCost: labor == null || isNaN(labor) ? null : labor,
+    };
+  };
+
+  const saveCosts = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSaveReport(draftPatch());
+    } catch (e) {
+      setErr(e.message || "Couldn't save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleComplete = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSaveReport({ ...draftPatch(), markComplete: !lead.reportCompletedAt });
+    } catch (e) {
+      setErr(e.message || "Couldn't save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Final report
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted, marginBottom: 16 }}>
+          {lead.name}
+          {lead.job ? ` — ${lead.job}` : ""}
+        </div>
+
+        <div style={reportSectionLabel}>Time to complete</div>
+        <div style={reportRow}>
+          <span style={reportRowLabel}>Started</span>
+          <span style={reportRowValue}>{lead.startDate ? fmtDate(lead.startDate) : "not set"}</span>
+        </div>
+        <div style={reportRow}>
+          <span style={reportRowLabel}>Completed</span>
+          <span style={reportRowValue}>{fmtDateOnly(lead.completedAt)}</span>
+        </div>
+        <div style={reportRow}>
+          <span style={reportRowLabel}>Working days</span>
+          <span style={reportRowValue}>{actualWorkDays != null ? actualWorkDays : "—"}</span>
+        </div>
+        {!lead.startDate && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
+            Set a start date on the board to see time-to-complete stats.
+          </div>
+        )}
+        {actualWorkDays != null && (
+          <div
+            style={{
+              fontFamily: FONT_UTIL,
+              fontSize: 13,
+              fontWeight: 600,
+              marginTop: 6,
+              color:
+                deltaDays == null
+                  ? COLORS.muted
+                  : deltaDays < -0.5
+                  ? COLORS.accent
+                  : deltaDays > 0.5
+                  ? COLORS.rust
+                  : COLORS.muted,
+            }}
+          >
+            {deltaDays == null
+              ? revenue > 0
+                ? "Not enough completed-job history yet to compare"
+                : "Add revenue to compare to average"
+              : Math.abs(deltaDays) <= 0.5
+              ? "Right on the average pace"
+              : deltaDays < 0
+              ? `${Math.abs(deltaDays).toFixed(1)} days faster than average`
+              : `${deltaDays.toFixed(1)} days slower than average`}
+          </div>
+        )}
+
+        <div style={{ ...reportSectionLabel, marginTop: 18 }}>Cost & profit</div>
+        {editable ? (
+          <>
+            <label style={modalLabel}>Material cost</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={materialDraft}
+              onChange={(e) => setMaterialDraft(e.target.value)}
+              placeholder="0"
+              style={modalInput}
+            />
+            <label style={modalLabel}>Labor cost</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={laborDraft}
+              onChange={(e) => setLaborDraft(e.target.value)}
+              placeholder="0"
+              style={modalInput}
+            />
+            <button
+              onClick={saveCosts}
+              disabled={busy}
+              style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: busy ? 0.6 : 1 }}
+            >
+              Save costs
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={reportRow}>
+              <span style={reportRowLabel}>Material cost</span>
+              <span style={reportRowValue}>{lead.materialCost != null ? fmtCurrency(lead.materialCost) : "not set"}</span>
+            </div>
+            <div style={reportRow}>
+              <span style={reportRowLabel}>Labor cost</span>
+              <span style={reportRowValue}>{lead.laborCost != null ? fmtCurrency(lead.laborCost) : "not set"}</span>
+            </div>
+          </>
+        )}
+
+        <div style={{ ...reportRow, marginTop: 10 }}>
+          <span style={reportRowLabel}>
+            Overhead ({actualWorkDays != null ? actualWorkDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}/day)
+          </span>
+          <span style={reportRowValue}>{overheadCost != null ? fmtCurrency(overheadCost) : "—"}</span>
+        </div>
+
+        <div style={{ ...reportRow, marginTop: 8, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
+          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Total cost</span>
+          <span style={{ ...reportRowValue, fontWeight: 700 }}>{fmtCurrency(totalCost)}</span>
+        </div>
+        <div style={reportRow}>
+          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Profit</span>
+          <span style={{ ...reportRowValue, fontWeight: 700, color: profit >= 0 ? COLORS.accent : COLORS.rust }}>
+            {fmtCurrency(profit)}
+            {profitMargin != null ? ` (${profitMargin.toFixed(0)}%)` : ""}
+          </span>
+        </div>
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+
+        {editable && (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+            {lead.reportCompletedAt ? (
+              <>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.muted, marginBottom: 8 }}>
+                  Report completed {fmtDateOnly(lead.reportCompletedAt)}
+                </div>
+                <button
+                  onClick={toggleComplete}
+                  disabled={busy}
+                  style={{ ...roleOption, justifyContent: "center", cursor: "pointer", opacity: busy ? 0.6 : 1 }}
+                >
+                  <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                    Reopen report
+                  </span>
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 8 }}>
+                  You'll get a daily reminder to finish this report until it's marked complete.
+                </div>
+                <button
+                  onClick={toggleComplete}
+                  disabled={busy}
+                  style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1 }}
+                >
+                  Mark report complete
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted, onOpenReport }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
@@ -1958,7 +2335,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
         )}
 
         {/* actions */}
-        {editable && <ActionRow lead={lead} onMove={onMove} />}
+        {editable && <ActionRow lead={lead} onMove={onMove} onOpenReport={onOpenReport} />}
       </div>
     </div>
   );
@@ -2006,7 +2383,7 @@ function priorDateFor(lead, stage) {
   return null;
 }
 
-function ActionRow({ lead, onMove }) {
+function ActionRow({ lead, onMove, onOpenReport }) {
   const [confirmStage, setConfirmStage] = useState(null);
 
   const handleClick = (target) => {
@@ -2061,6 +2438,24 @@ function ActionRow({ lead, onMove }) {
       break;
     default:
       actions = [];
+  }
+
+  if (onOpenReport && (lead.stage === "completed" || lead.stage === "paid")) {
+    actions = [
+      ...actions,
+      <button
+        key="report"
+        onClick={() => onOpenReport(lead)}
+        style={{
+          ...actionBtn,
+          background: "transparent",
+          color: lead.reportCompletedAt ? COLORS.accent : COLORS.amber,
+          border: `1px solid ${lead.reportCompletedAt ? COLORS.accent : COLORS.amber}`,
+        }}
+      >
+        {lead.reportCompletedAt ? "View report" : "Complete report"}
+      </button>,
+    ];
   }
 
   return (
@@ -2461,6 +2856,18 @@ const actionBtn = {
   cursor: "pointer",
 };
 
+const archiveReportBtn = {
+  flex: "0 0 auto",
+  padding: "5px 10px",
+  borderRadius: 6,
+  border: "1px solid",
+  background: "transparent",
+  fontSize: 12,
+  fontFamily: FONT_BODY,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 const modalOverlay = {
   position: "fixed",
   inset: 0,
@@ -2638,6 +3045,37 @@ const modalLabel = {
   color: COLORS.muted,
   marginBottom: 6,
   marginTop: 14,
+};
+
+const reportSectionLabel = {
+  fontFamily: FONT_DISPLAY,
+  fontWeight: 700,
+  fontSize: 13,
+  color: COLORS.ink,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  marginBottom: 8,
+};
+
+const reportRow = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  padding: "4px 0",
+};
+
+const reportRowLabel = {
+  fontFamily: FONT_UTIL,
+  fontSize: 13,
+  color: COLORS.muted,
+};
+
+const reportRowValue = {
+  fontFamily: FONT_BODY,
+  fontSize: 13.5,
+  color: COLORS.ink,
+  textAlign: "right",
 };
 
 const modalInput = {

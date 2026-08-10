@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { sendDueReportReminders } from "../reportReminders.js";
 
 const router = Router();
 
@@ -154,6 +155,12 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   });
 
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+
+  // a lead just landed in "completed" — send the first "complete final
+  // report" reminder right away instead of waiting for the next hourly sweep
+  if (!revert && stage === "completed") {
+    sendDueReportReminders().catch((err) => console.error("report reminder sweep failed:", err.message));
+  }
 });
 
 router.patch("/:id", requireAuth("owner"), (req, res) => {
@@ -178,6 +185,34 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   const fields = Object.keys(updates);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
     ...updates,
+    id: row.id,
+  });
+
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+router.patch("/:id/report", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const { materialCost, laborCost, markComplete } = req.body || {};
+  const patch = {};
+  if (materialCost !== undefined) {
+    patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
+  }
+  if (laborCost !== undefined) {
+    patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
+  }
+  if (markComplete === true) patch.reportCompletedAt = new Date().toISOString();
+  if (markComplete === false) patch.reportCompletedAt = null;
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "No editable fields given" });
+  }
+
+  const fields = Object.keys(patch);
+  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
+    ...patch,
     id: row.id,
   });
 

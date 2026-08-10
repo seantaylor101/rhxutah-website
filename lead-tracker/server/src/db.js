@@ -42,6 +42,18 @@ if (!existingColumns.has("bidSentAt")) {
 if (!existingColumns.has("completedAt")) {
   db.exec(`ALTER TABLE leads ADD COLUMN completedAt TEXT`);
 }
+if (!existingColumns.has("materialCost")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN materialCost REAL`);
+}
+if (!existingColumns.has("laborCost")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN laborCost REAL`);
+}
+if (!existingColumns.has("reportCompletedAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN reportCompletedAt TEXT`);
+}
+if (!existingColumns.has("lastReportReminderAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN lastReportReminderAt TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -63,3 +75,12 @@ db.exec(`
     readAt TEXT
   );
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`);
+
+db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('dailyOverheadCost', '350')`).run();
