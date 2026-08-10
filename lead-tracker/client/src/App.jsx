@@ -664,12 +664,12 @@ function App() {
         </div>
       </header>
 
-      {/* weekly / monthly counters — 2x2: previous week, this month / last week, this week */}
+      {/* weekly / monthly counters — 2x2: 2 weeks ago, this month / last week, this week */}
       <div style={statsGrid}>
         <button
           onClick={() =>
             setDrilldown({
-              title: "Previous week",
+              title: "2 weeks ago",
               rangeLabel: `${fmtRangeDate(stats.previousWeekStart)} – ${fmtRangeDate(stats.previousWeekEnd)}`,
               breakdown: breakdownForRange(leads, stats.previousWeekStart, stats.previousWeekEnd),
             })
