@@ -195,7 +195,7 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
-  const { materialCost, laborCost, markComplete } = req.body || {};
+  const { materialCost, laborCost, wentWell, wentWrong, markComplete } = req.body || {};
   const patch = {};
   if (materialCost !== undefined) {
     patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
@@ -203,6 +203,8 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   if (laborCost !== undefined) {
     patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
   }
+  if (wentWell !== undefined) patch.wentWell = String(wentWell || "").trim();
+  if (wentWrong !== undefined) patch.wentWrong = String(wentWrong || "").trim();
   if (markComplete === true) patch.reportCompletedAt = new Date().toISOString();
   if (markComplete === false) patch.reportCompletedAt = null;
 

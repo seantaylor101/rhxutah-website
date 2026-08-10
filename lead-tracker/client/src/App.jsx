@@ -1684,6 +1684,8 @@ function ArchiveView({ leads, editable, onOpenReport }) {
 function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
+  const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
+  const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -1705,10 +1707,12 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
     return {
       materialCost: material == null || isNaN(material) ? null : material,
       laborCost: labor == null || isNaN(labor) ? null : labor,
+      wentWell: wentWellDraft,
+      wentWrong: wentWrongDraft,
     };
   };
 
-  const saveCosts = async () => {
+  const saveReport = async () => {
     setBusy(true);
     setErr("");
     try {
@@ -1816,13 +1820,6 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
               placeholder="0"
               style={modalInput}
             />
-            <button
-              onClick={saveCosts}
-              disabled={busy}
-              style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: busy ? 0.6 : 1 }}
-            >
-              Save costs
-            </button>
           </>
         ) : (
           <>
@@ -1855,6 +1852,44 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
             {profitMargin != null ? ` (${profitMargin.toFixed(0)}%)` : ""}
           </span>
         </div>
+
+        <div style={{ ...reportSectionLabel, marginTop: 18 }}>Retrospective</div>
+        {editable ? (
+          <>
+            <label style={modalLabel}>What went well?</label>
+            <textarea
+              value={wentWellDraft}
+              onChange={(e) => setWentWellDraft(e.target.value)}
+              placeholder="e.g. Crew finished ahead of schedule, client was easy to reach"
+              style={modalTextarea}
+            />
+            <label style={modalLabel}>What went wrong?</label>
+            <textarea
+              value={wentWrongDraft}
+              onChange={(e) => setWentWrongDraft(e.target.value)}
+              placeholder="e.g. Material delivery was late, underbid the labor"
+              style={modalTextarea}
+            />
+            <button
+              onClick={saveReport}
+              disabled={busy}
+              style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: busy ? 0.6 : 1 }}
+            >
+              Save
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ marginTop: 6 }}>
+              <div style={reportRowLabel}>What went well?</div>
+              <div style={{ ...reportRowValue, textAlign: "left", marginTop: 2 }}>{lead.wentWell || "not set"}</div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div style={reportRowLabel}>What went wrong?</div>
+              <div style={{ ...reportRowValue, textAlign: "left", marginTop: 2 }}>{lead.wentWrong || "not set"}</div>
+            </div>
+          </>
+        )}
 
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
 
@@ -3088,4 +3123,10 @@ const modalInput = {
   fontFamily: FONT_BODY,
   // 16px+ keeps iOS Safari from auto-zooming the page when the input gets focus
   fontSize: 16,
+};
+
+const modalTextarea = {
+  ...modalInput,
+  minHeight: 70,
+  resize: "vertical",
 };

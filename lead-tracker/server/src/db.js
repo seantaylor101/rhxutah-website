@@ -54,6 +54,12 @@ if (!existingColumns.has("reportCompletedAt")) {
 if (!existingColumns.has("lastReportReminderAt")) {
   db.exec(`ALTER TABLE leads ADD COLUMN lastReportReminderAt TEXT`);
 }
+if (!existingColumns.has("wentWell")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN wentWell TEXT DEFAULT ''`);
+}
+if (!existingColumns.has("wentWrong")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN wentWrong TEXT DEFAULT ''`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
