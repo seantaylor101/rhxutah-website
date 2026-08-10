@@ -439,7 +439,11 @@ function App() {
       setError("");
     } catch {
       setError("Couldn't load your saved leads.");
-      setLeads([]);
+      // don't blank out a board that already loaded successfully — a
+      // transient failure (deploy restart, brief network blip) shouldn't
+      // make leads appear to vanish; only fall back to empty on a first
+      // load that never succeeded
+      setLeads((prev) => (prev === null ? [] : prev));
     }
   }, []);
 
