@@ -81,7 +81,16 @@ function getLeadOr404(id, res) {
 router.get("/", requireAuth("viewer"), (req, res) => {
   sweepArchive();
   const rows = db.prepare(`SELECT * FROM leads ORDER BY createdAt DESC`).all();
-  res.json(rows.map(rowToLead));
+  const leads = rows.map(rowToLead);
+  // profit is owner-only: strip the cost inputs at the API layer too, not
+  // just in the UI, so a viewer can't recover them by inspecting the response
+  if (req.role !== "owner") {
+    for (const lead of leads) {
+      lead.materialCost = null;
+      lead.laborCost = null;
+    }
+  }
+  res.json(leads);
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {

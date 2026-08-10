@@ -1799,9 +1799,9 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
           </div>
         )}
 
-        <div style={{ ...reportSectionLabel, marginTop: 18 }}>Cost & profit</div>
-        {editable ? (
+        {editable && (
           <>
+            <div style={{ ...reportSectionLabel, marginTop: 18 }}>Cost & profit</div>
             <label style={modalLabel}>Material cost</label>
             <input
               type="number"
@@ -1820,38 +1820,28 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
               placeholder="0"
               style={modalInput}
             />
-          </>
-        ) : (
-          <>
-            <div style={reportRow}>
-              <span style={reportRowLabel}>Material cost</span>
-              <span style={reportRowValue}>{lead.materialCost != null ? fmtCurrency(lead.materialCost) : "not set"}</span>
+
+            <div style={{ ...reportRow, marginTop: 10 }}>
+              <span style={reportRowLabel}>
+                Overhead ({actualWorkDays != null ? actualWorkDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}
+                /day)
+              </span>
+              <span style={reportRowValue}>{overheadCost != null ? fmtCurrency(overheadCost) : "—"}</span>
+            </div>
+
+            <div style={{ ...reportRow, marginTop: 8, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
+              <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Total cost</span>
+              <span style={{ ...reportRowValue, fontWeight: 700 }}>{fmtCurrency(totalCost)}</span>
             </div>
             <div style={reportRow}>
-              <span style={reportRowLabel}>Labor cost</span>
-              <span style={reportRowValue}>{lead.laborCost != null ? fmtCurrency(lead.laborCost) : "not set"}</span>
+              <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Profit</span>
+              <span style={{ ...reportRowValue, fontWeight: 700, color: profit >= 0 ? COLORS.accent : COLORS.rust }}>
+                {fmtCurrency(profit)}
+                {profitMargin != null ? ` (${profitMargin.toFixed(0)}%)` : ""}
+              </span>
             </div>
           </>
         )}
-
-        <div style={{ ...reportRow, marginTop: 10 }}>
-          <span style={reportRowLabel}>
-            Overhead ({actualWorkDays != null ? actualWorkDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}/day)
-          </span>
-          <span style={reportRowValue}>{overheadCost != null ? fmtCurrency(overheadCost) : "—"}</span>
-        </div>
-
-        <div style={{ ...reportRow, marginTop: 8, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
-          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Total cost</span>
-          <span style={{ ...reportRowValue, fontWeight: 700 }}>{fmtCurrency(totalCost)}</span>
-        </div>
-        <div style={reportRow}>
-          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Profit</span>
-          <span style={{ ...reportRowValue, fontWeight: 700, color: profit >= 0 ? COLORS.accent : COLORS.rust }}>
-            {fmtCurrency(profit)}
-            {profitMargin != null ? ` (${profitMargin.toFixed(0)}%)` : ""}
-          </span>
-        </div>
 
         <div style={{ ...reportSectionLabel, marginTop: 18 }}>Retrospective</div>
         {editable ? (
