@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { db, DB_PATH } from "./db.js";
+import { maybeSendBackupEmail } from "./emailBackup.js";
 
 // JSON snapshots of the leads table (not a raw file copy of the sqlite db)
 // so a restore is a plain transaction against the live connection — no
@@ -36,7 +37,8 @@ function snapshotLeads(now) {
 
 export function runBackupTick(now = Date.now()) {
   ensureDirs();
-  const json = JSON.stringify(snapshotLeads(now));
+  const snapshot = snapshotLeads(now);
+  const json = JSON.stringify(snapshot);
 
   for (const tier of TIERS) {
     const dir = path.join(BACKUPS_ROOT, tier.dir);
@@ -51,11 +53,17 @@ export function runBackupTick(now = Date.now()) {
       fs.unlinkSync(path.join(dir, updated.shift()));
     }
   }
+
+  return snapshot;
 }
 
 export function startBackupScheduler() {
-  runBackupTick();
-  setInterval(() => runBackupTick(), 5 * 60 * 1000);
+  const tick = () => {
+    const snapshot = runBackupTick();
+    maybeSendBackupEmail(snapshot).catch((err) => console.error("backup email failed:", err.message));
+  };
+  tick();
+  setInterval(tick, 5 * 60 * 1000);
 }
 
 export function listBackups() {

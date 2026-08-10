@@ -31,3 +31,41 @@ export async function sendBackupEmail(lead) {
     body,
   });
 }
+
+// Same Web3Forms key, reused for a once-a-day off-site copy of the leads
+// snapshot. File attachments are a paid Web3Forms feature, so the JSON is
+// embedded as plain text between clear markers instead — anyone (or any
+// script) reading the email can find and parse it back out.
+export async function sendBackupSnapshotEmail(snapshot) {
+  const accessKey = process.env.WEB3FORMS_ACCESS_KEY;
+  if (!accessKey) return;
+
+  const leadCount = snapshot.leads.length;
+  const dateLabel = snapshot.takenAt.slice(0, 10);
+
+  const lines = [
+    `Daily backup of your RHX Job Board leads — ${leadCount} lead${leadCount === 1 ? "" : "s"}.`,
+    ``,
+    `Snapshot taken: ${snapshot.takenAt}`,
+    ``,
+    `Keep this email. It's a full point-in-time copy of every lead and where it stood`,
+    `in your pipeline. The raw data is below between the BEGIN/END markers.`,
+    ``,
+    `---BEGIN RHX BACKUP JSON---`,
+    JSON.stringify(snapshot),
+    `---END RHX BACKUP JSON---`,
+  ];
+
+  const body = new URLSearchParams({
+    access_key: accessKey,
+    subject: `RHX Job Board backup — ${leadCount} lead${leadCount === 1 ? "" : "s"} — ${dateLabel}`,
+    from_name: "RHX Job Board",
+    message: lines.join("\n"),
+  });
+
+  await fetch(WEB3FORMS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body,
+  });
+}
