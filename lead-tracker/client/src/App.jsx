@@ -37,12 +37,6 @@ const Check = (p) => (
     <polyline points="20 6 9 17 4 12" />
   </Icon>
 );
-const Pencil = (p) => (
-  <Icon {...p}>
-    <path d="M12 20h9" />
-    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
-  </Icon>
-);
 const Trash2 = (p) => (
   <Icon {...p}>
     <polyline points="3 6 5 6 21 6" />
@@ -1413,7 +1407,24 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
       <div style={{ flex: 1, padding: "16px 18px 16px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           {!editingName ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+            <div
+              onClick={
+                editable
+                  ? () => {
+                      setNameDraft(lead.name);
+                      setEditingName(true);
+                    }
+                  : undefined
+              }
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                minWidth: 0,
+                flex: 1,
+                cursor: editable ? "pointer" : "default",
+              }}
+            >
               <div
                 style={{
                   fontFamily: FONT_DISPLAY,
@@ -1427,18 +1438,6 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
               >
                 {lead.name}
               </div>
-              {editable && (
-                <button
-                  onClick={() => {
-                    setNameDraft(lead.name);
-                    setEditingName(true);
-                  }}
-                  style={iconBtnGhost}
-                  aria-label="Edit name"
-                >
-                  <Pencil size={16} color="#9A9184" />
-                </button>
-              )}
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
@@ -1447,7 +1446,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
                 value={nameDraft}
                 onChange={(e) => setNameDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && saveName()}
-                style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 15, flex: 1 }}
+                style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 16, flex: 1 }}
               />
               <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
                 <Check size={18} color="#fff" />
@@ -1486,25 +1485,27 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
         </div>
 
         {/* job — separate from the client's name */}
-        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+        <div
+          onClick={
+            !editingJob && editable
+              ? () => {
+                  setJobDraft(lead.job || "");
+                  setEditingJob(true);
+                }
+              : undefined
+          }
+          style={{
+            marginTop: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: !editingJob && editable ? "pointer" : "default",
+          }}
+        >
           {!editingJob ? (
-            <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: lead.job ? "#4A463D" : "#B8B0A0" }}>
-                {lead.job || "No job set"}
-              </span>
-              {editable && (
-                <button
-                  onClick={() => {
-                    setJobDraft(lead.job || "");
-                    setEditingJob(true);
-                  }}
-                  style={iconBtnGhost}
-                  aria-label="Edit job"
-                >
-                  <Pencil size={16} color="#9A9184" />
-                </button>
-              )}
-            </>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: lead.job ? "#4A463D" : "#B8B0A0" }}>
+              {lead.job || "No job set"}
+            </span>
           ) : (
             <>
               <input
@@ -1525,34 +1526,37 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           )}
         </div>
 
-        {/* phone — tappable to call when set */}
+        {/* phone — tap the number to call, tap elsewhere in the row to edit */}
         {(lead.phone || editable) && (
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          <div
+            onClick={
+              !editingPhone && editable
+                ? () => {
+                    setPhoneDraft(lead.phone || "");
+                    setEditingPhone(true);
+                  }
+                : undefined
+            }
+            style={{
+              marginTop: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingPhone && editable ? "pointer" : "default",
+            }}
+          >
             {!editingPhone ? (
-              <>
-                {lead.phone ? (
-                  <a
-                    href={`tel:${lead.phone}`}
-                    style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}
-                  >
-                    {lead.phone}
-                  </a>
-                ) : (
-                  <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
-                )}
-                {editable && (
-                  <button
-                    onClick={() => {
-                      setPhoneDraft(lead.phone || "");
-                      setEditingPhone(true);
-                    }}
-                    style={iconBtnGhost}
-                    aria-label="Edit phone"
-                  >
-                    <Pencil size={16} color="#9A9184" />
-                  </button>
-                )}
-              </>
+              lead.phone ? (
+                <a
+                  href={`tel:${lead.phone}`}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}
+                >
+                  {lead.phone}
+                </a>
+              ) : (
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
+              )
             ) : (
               <>
                 <input
@@ -1575,44 +1579,47 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           </div>
         )}
 
-        {/* email — tappable to compose when set */}
+        {/* email — tap the address to compose, tap elsewhere in the row to edit */}
         {(lead.email || editable) && (
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          <div
+            onClick={
+              !editingEmail && editable
+                ? () => {
+                    setEmailDraft(lead.email || "");
+                    setEditingEmail(true);
+                  }
+                : undefined
+            }
+            style={{
+              marginTop: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingEmail && editable ? "pointer" : "default",
+            }}
+          >
             {!editingEmail ? (
-              <>
-                {lead.email ? (
-                  <a
-                    href={`mailto:${lead.email}`}
-                    style={{
-                      fontFamily: FONT_UTIL,
-                      fontSize: 14,
-                      color: COLORS.accent,
-                      fontWeight: 600,
-                      textDecoration: "none",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      maxWidth: 220,
-                    }}
-                  >
-                    {lead.email}
-                  </a>
-                ) : (
-                  <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No email set</span>
-                )}
-                {editable && (
-                  <button
-                    onClick={() => {
-                      setEmailDraft(lead.email || "");
-                      setEditingEmail(true);
-                    }}
-                    style={iconBtnGhost}
-                    aria-label="Edit email"
-                  >
-                    <Pencil size={16} color="#9A9184" />
-                  </button>
-                )}
-              </>
+              lead.email ? (
+                <a
+                  href={`mailto:${lead.email}`}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    fontFamily: FONT_UTIL,
+                    fontSize: 14,
+                    color: COLORS.accent,
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: 220,
+                  }}
+                >
+                  {lead.email}
+                </a>
+              ) : (
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No email set</span>
+              )
             ) : (
               <>
                 <input
@@ -1636,17 +1643,19 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
         )}
 
         {/* received timestamp */}
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <div
+          onClick={!editingReceived && editable ? openReceivedEdit : undefined}
+          style={{
+            marginTop: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: !editingReceived && editable ? "pointer" : "default",
+          }}
+        >
           <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Received</span>
           {!editingReceived ? (
-            <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
-              {editable && (
-                <button onClick={openReceivedEdit} style={iconBtnGhost} aria-label="Edit received date">
-                  <Pencil size={16} color="#9A9184" />
-                </button>
-              )}
-            </>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
           ) : (
             <>
               <input
@@ -1672,26 +1681,28 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
         )}
 
         {/* revenue — can be attached at any stage */}
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <div
+          onClick={
+            !editingRevenue && editable
+              ? () => {
+                  setRevenueDraft(lead.revenue != null ? String(lead.revenue) : "");
+                  setEditingRevenue(true);
+                }
+              : undefined
+          }
+          style={{
+            marginTop: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: !editingRevenue && editable ? "pointer" : "default",
+          }}
+        >
           <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Revenue</span>
           {!editingRevenue ? (
-            <>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.revenue != null ? "#4A463D" : "#B8B0A0" }}>
-                {lead.revenue != null ? fmtCurrency(lead.revenue) : "not set"}
-              </span>
-              {editable && (
-                <button
-                  onClick={() => {
-                    setRevenueDraft(lead.revenue != null ? String(lead.revenue) : "");
-                    setEditingRevenue(true);
-                  }}
-                  style={iconBtnGhost}
-                  aria-label="Edit revenue"
-                >
-                  <Pencil size={16} color="#9A9184" />
-                </button>
-              )}
-            </>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.revenue != null ? "#4A463D" : "#B8B0A0" }}>
+              {lead.revenue != null ? fmtCurrency(lead.revenue) : "not set"}
+            </span>
           ) : (
             <>
               <input
@@ -1714,26 +1725,28 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
 
         {/* start date, only for won-not-started (and visible afterwards too) */}
         {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
-          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <div
+            onClick={
+              !editingStart && editable
+                ? () => {
+                    setStartDraft(lead.startDate || "");
+                    setEditingStart(true);
+                  }
+                : undefined
+            }
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingStart && editable ? "pointer" : "default",
+            }}
+          >
             <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Start date</span>
             {!editingStart ? (
-              <>
-                <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.startDate ? "#4A463D" : "#B8482E" }}>
-                  {lead.startDate ? fmtDate(lead.startDate) : "not set"}
-                </span>
-                {editable && (
-                  <button
-                    onClick={() => {
-                      setStartDraft(lead.startDate || "");
-                      setEditingStart(true);
-                    }}
-                    style={iconBtnGhost}
-                    aria-label="Edit start date"
-                  >
-                    <Pencil size={16} color="#9A9184" />
-                  </button>
-                )}
-              </>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.startDate ? "#4A463D" : "#B8482E" }}>
+                {lead.startDate ? fmtDate(lead.startDate) : "not set"}
+              </span>
             ) : (
               <>
                 <input type="date" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} style={inlineInput} />
@@ -2237,7 +2250,8 @@ const statDrilldownRow = {
 
 const inlineInput = {
   fontFamily: FONT_UTIL,
-  fontSize: 12.5,
+  // 16px+ keeps iOS Safari from auto-zooming the page when the input gets focus
+  fontSize: 16,
   padding: "3px 6px",
   borderRadius: 4,
   border: "1px solid #D8D2C2",
@@ -2405,5 +2419,6 @@ const modalInput = {
   background: COLORS.surfaceMuted,
   color: COLORS.ink,
   fontFamily: FONT_BODY,
-  fontSize: 15,
+  // 16px+ keeps iOS Safari from auto-zooming the page when the input gets focus
+  fontSize: 16,
 };
