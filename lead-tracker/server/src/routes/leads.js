@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { sendDueReportReminders } from "../reportReminders.js";
 
 const router = Router();
 
@@ -25,7 +26,9 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     createdAt: new Date().toISOString(),
     startDate: "",
     revenue: null,
+    bidSentAt: null,
     wonAt: null,
+    completedAt: null,
     paidAt: null,
     source,
     sourceOther: source === "other" || source === "website" ? String(sourceOther || "").trim() : "",
@@ -34,8 +37,8 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
   };
 
   db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt)
+     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
   ).run(lead);
 
   return lead;
@@ -78,7 +81,16 @@ function getLeadOr404(id, res) {
 router.get("/", requireAuth("viewer"), (req, res) => {
   sweepArchive();
   const rows = db.prepare(`SELECT * FROM leads ORDER BY createdAt DESC`).all();
-  res.json(rows.map(rowToLead));
+  const leads = rows.map(rowToLead);
+  // profit is owner-only: strip the cost inputs at the API layer too, not
+  // just in the UI, so a viewer can't recover them by inspecting the response
+  if (req.role !== "owner") {
+    for (const lead of leads) {
+      lead.materialCost = null;
+      lead.laborCost = null;
+    }
+  }
+  res.json(leads);
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
@@ -90,8 +102,12 @@ router.post("/", requireAuth("owner"), (req, res) => {
   res.status(201).json(rowToLead(lead));
 });
 
-// Stage transitions carry the same wonAt/paidAt side effects the original client applied.
+// Stage transitions carry the same bidSentAt/wonAt/completedAt/paidAt side
+// effects the original client applied — these timestamps double as the raw
+// data for the performance-metrics breakdowns (time in each stage, etc).
+const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
+const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
   const { stage, date, revert } = req.body || {};
@@ -108,24 +124,37 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
 
   const patch = { stage };
   if (revert) {
-    // moving a lead backward: never stamp a fresh won/paid date, only clear
-    // ones that no longer apply so stats don't stay wrong after the revert
+    // moving a lead backward: never stamp a fresh date, only clear ones that
+    // no longer apply so stats don't stay wrong after the revert
+    if (!AT_OR_AFTER_BID.has(stage)) {
+      patch.bidSentAt = null;
+    }
     if (!AT_OR_AFTER_WON.has(stage)) {
       patch.wonAt = null;
       patch.paidAt = null;
     } else if (stage !== "paid") {
       patch.paidAt = null;
     }
+    if (!AT_OR_AFTER_COMPLETED.has(stage)) {
+      patch.completedAt = null;
+    }
+  } else if (stage === "bid") {
+    patch.bidSentAt = ts;
   } else if (stage === "won") {
     patch.wonAt = ts;
     patch.paidAt = null;
+  } else if (stage === "completed") {
+    patch.completedAt = ts;
+    patch.paidAt = null;
   } else if (stage === "paid") {
     patch.paidAt = ts;
-  } else if (stage === "progress" || stage === "completed") {
+  } else if (stage === "progress") {
     patch.paidAt = null;
   } else {
+    // new / lost
     patch.wonAt = null;
     patch.paidAt = null;
+    if (stage === "new") patch.bidSentAt = null;
   }
 
   const fields = Object.keys(patch);
@@ -135,6 +164,12 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   });
 
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+
+  // a lead just landed in "completed" — send the first "complete final
+  // report" reminder right away instead of waiting for the next hourly sweep
+  if (!revert && stage === "completed") {
+    sendDueReportReminders().catch((err) => console.error("report reminder sweep failed:", err.message));
+  }
 });
 
 router.patch("/:id", requireAuth("owner"), (req, res) => {
@@ -159,6 +194,36 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   const fields = Object.keys(updates);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
     ...updates,
+    id: row.id,
+  });
+
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+router.patch("/:id/report", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const { materialCost, laborCost, wentWell, wentWrong, markComplete } = req.body || {};
+  const patch = {};
+  if (materialCost !== undefined) {
+    patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
+  }
+  if (laborCost !== undefined) {
+    patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
+  }
+  if (wentWell !== undefined) patch.wentWell = String(wentWell || "").trim();
+  if (wentWrong !== undefined) patch.wentWrong = String(wentWrong || "").trim();
+  if (markComplete === true) patch.reportCompletedAt = new Date().toISOString();
+  if (markComplete === false) patch.reportCompletedAt = null;
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "No editable fields given" });
+  }
+
+  const fields = Object.keys(patch);
+  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
+    ...patch,
     id: row.id,
   });
 
