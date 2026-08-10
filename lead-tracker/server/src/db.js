@@ -36,6 +36,12 @@ if (!existingColumns.has("phone")) {
 if (!existingColumns.has("email")) {
   db.exec(`ALTER TABLE leads ADD COLUMN email TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("bidSentAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN bidSentAt TEXT`);
+}
+if (!existingColumns.has("completedAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN completedAt TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (

@@ -25,7 +25,9 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     createdAt: new Date().toISOString(),
     startDate: "",
     revenue: null,
+    bidSentAt: null,
     wonAt: null,
+    completedAt: null,
     paidAt: null,
     source,
     sourceOther: source === "other" || source === "website" ? String(sourceOther || "").trim() : "",
@@ -34,8 +36,8 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
   };
 
   db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, wonAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @wonAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt)
+     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
   ).run(lead);
 
   return lead;
@@ -90,8 +92,12 @@ router.post("/", requireAuth("owner"), (req, res) => {
   res.status(201).json(rowToLead(lead));
 });
 
-// Stage transitions carry the same wonAt/paidAt side effects the original client applied.
+// Stage transitions carry the same bidSentAt/wonAt/completedAt/paidAt side
+// effects the original client applied — these timestamps double as the raw
+// data for the performance-metrics breakdowns (time in each stage, etc).
+const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
+const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
   const { stage, date, revert } = req.body || {};
@@ -108,24 +114,37 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
 
   const patch = { stage };
   if (revert) {
-    // moving a lead backward: never stamp a fresh won/paid date, only clear
-    // ones that no longer apply so stats don't stay wrong after the revert
+    // moving a lead backward: never stamp a fresh date, only clear ones that
+    // no longer apply so stats don't stay wrong after the revert
+    if (!AT_OR_AFTER_BID.has(stage)) {
+      patch.bidSentAt = null;
+    }
     if (!AT_OR_AFTER_WON.has(stage)) {
       patch.wonAt = null;
       patch.paidAt = null;
     } else if (stage !== "paid") {
       patch.paidAt = null;
     }
+    if (!AT_OR_AFTER_COMPLETED.has(stage)) {
+      patch.completedAt = null;
+    }
+  } else if (stage === "bid") {
+    patch.bidSentAt = ts;
   } else if (stage === "won") {
     patch.wonAt = ts;
     patch.paidAt = null;
+  } else if (stage === "completed") {
+    patch.completedAt = ts;
+    patch.paidAt = null;
   } else if (stage === "paid") {
     patch.paidAt = ts;
-  } else if (stage === "progress" || stage === "completed") {
+  } else if (stage === "progress") {
     patch.paidAt = null;
   } else {
+    // new / lost
     patch.wonAt = null;
     patch.paidAt = null;
+    if (stage === "new") patch.bidSentAt = null;
   }
 
   const fields = Object.keys(patch);

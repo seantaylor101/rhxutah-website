@@ -85,6 +85,12 @@ const Calendar = (p) => (
     <line x1="3" y1="10" x2="21" y2="10" />
   </Icon>
 );
+const TrendingUp = (p) => (
+  <Icon {...p}>
+    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+    <polyline points="17 6 23 6 23 12" />
+  </Icon>
+);
 const History = (p) => (
   <Icon {...p}>
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
@@ -170,6 +176,56 @@ const SOURCES = [
   { key: "website", label: "Website Form" },
   { key: "other", label: "Other" },
 ];
+
+// source groupings for the performance-metrics breakdown — referral and BNI
+// referral are lumped together since they're both word-of-mouth
+const METRIC_SOURCE_GROUPS = [
+  { key: "all", label: "All sources", match: () => true },
+  { key: "referral", label: "Referral", match: (l) => l.source === "referral" || l.source === "referral_bni" },
+  { key: "google", label: "Google Lead", match: (l) => l.source === "google" },
+  { key: "facebook", label: "Facebook Lead", match: (l) => l.source === "facebook" },
+  { key: "website", label: "Website Form", match: (l) => l.source === "website" },
+  { key: "other", label: "Other", match: (l) => l.source === "other" },
+];
+
+function computeMetrics(subset) {
+  const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
+  const avg = (nums) => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null);
+
+  const wonLeads = subset.filter((l) => l.wonAt);
+  const lostLeads = subset.filter((l) => l.stage === "lost");
+  const wonWithRevenue = wonLeads.filter((l) => l.revenue != null);
+  const bidLeads = subset.filter((l) => l.bidSentAt);
+  const paceLeads = subset.filter(
+    (l) => l.completedAt && l.startDate && l.revenue > 0 && days(l.startDate, l.completedAt) >= 0
+  );
+  const decidedCount = wonLeads.length + lostLeads.length;
+
+  return {
+    totalLeads: subset.length,
+    closeRate: decidedCount ? wonLeads.length / decidedCount : null,
+    closeRateSample: decidedCount,
+    avgWonRevenue: avg(wonWithRevenue.map((l) => l.revenue)),
+    avgWonRevenueSample: wonWithRevenue.length,
+    avgRevenuePerLead: subset.length ? wonWithRevenue.reduce((s, l) => s + l.revenue, 0) / subset.length : null,
+    avgDaysNewToBid: avg(bidLeads.map((l) => days(l.createdAt, l.bidSentAt))),
+    avgDaysNewToBidSample: bidLeads.length,
+    avgDaysNewToWon: avg(wonLeads.map((l) => days(l.createdAt, l.wonAt))),
+    avgDaysNewToWonSample: wonLeads.length,
+    avgDaysPerThousand: avg(paceLeads.map((l) => days(l.startDate, l.completedAt) / (l.revenue / 1000))),
+    avgDaysPerThousandSample: paceLeads.length,
+  };
+}
+
+function fmtDays(n) {
+  if (n == null) return "—";
+  return `${n.toFixed(1)} days`;
+}
+
+function fmtPercent(n) {
+  if (n == null) return "—";
+  return `${Math.round(n * 100)}%`;
+}
 
 function sourceLabel(lead) {
   if (!lead.source) return null;
@@ -331,6 +387,8 @@ function App() {
   const [lookbackEnd, setLookbackEnd] = useState("");
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [metricsSource, setMetricsSource] = useState("all");
   const editable = role === "owner";
 
   useEffect(() => {
@@ -547,6 +605,11 @@ function App() {
     };
   }, [leads]);
 
+  const metrics = useMemo(() => {
+    const group = METRIC_SOURCE_GROUPS.find((g) => g.key === metricsSource) || METRIC_SOURCE_GROUPS[0];
+    return computeMetrics((leads || []).filter(group.match));
+  }, [leads, metricsSource]);
+
   const lookbackResult = useMemo(() => {
     if (!lookbackStart || !lookbackEnd) return null;
     const start = new Date(lookbackStart + "T00:00:00");
@@ -727,6 +790,86 @@ function App() {
           <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
         </button>
       </div>
+
+      <div style={{ padding: "0 16px" }}>
+        <button onClick={() => setShowMetrics((v) => !v)} style={lookbackToggle}>
+          <TrendingUp size={14} color={COLORS.accent} />
+          <span>Performance metrics</span>
+          {showMetrics ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
+        </button>
+      </div>
+
+      {showMetrics && (
+        <div style={lookbackPanel}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {METRIC_SOURCE_GROUPS.map((g) => (
+              <button
+                key={g.key}
+                onClick={() => setMetricsSource(g.key)}
+                style={{
+                  ...lookbackPresetBtn,
+                  ...(metricsSource === g.key ? lookbackPresetBtnActive : {}),
+                }}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 12 }}>
+            Based on {metrics.totalLeads} lead{metrics.totalLeads === 1 ? "" : "s"}
+          </div>
+          <div style={metricsGrid}>
+            <div style={metricTile}>
+              <div style={metricLabel}>Close rate</div>
+              <div style={metricValue}>{fmtPercent(metrics.closeRate)}</div>
+              <div style={metricSub}>
+                {metrics.closeRateSample ? `of ${metrics.closeRateSample} decided` : "no decided leads yet"}
+              </div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Avg won lead value</div>
+              <div style={metricValue}>
+                {metrics.avgWonRevenue != null ? fmtCurrency(metrics.avgWonRevenue) : "—"}
+              </div>
+              <div style={metricSub}>
+                {metrics.avgWonRevenueSample ? `of ${metrics.avgWonRevenueSample} won leads` : "no won leads with revenue yet"}
+              </div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Avg revenue per lead</div>
+              <div style={metricValue}>
+                {metrics.avgRevenuePerLead != null ? fmtCurrency(metrics.avgRevenuePerLead) : "—"}
+              </div>
+              <div style={metricSub}>blends close rate + deal size</div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>New lead → bid sent</div>
+              <div style={metricValue}>{fmtDays(metrics.avgDaysNewToBid)}</div>
+              <div style={metricSub}>
+                {metrics.avgDaysNewToBidSample ? `of ${metrics.avgDaysNewToBidSample} bids sent` : "no bids sent yet"}
+              </div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>New lead → won</div>
+              <div style={metricValue}>{fmtDays(metrics.avgDaysNewToWon)}</div>
+              <div style={metricSub}>
+                {metrics.avgDaysNewToWonSample ? `of ${metrics.avgDaysNewToWonSample} won leads` : "no won leads yet"}
+              </div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Build pace</div>
+              <div style={metricValue}>
+                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} days/$1k` : "—"}
+              </div>
+              <div style={metricSub}>
+                {metrics.avgDaysPerThousandSample
+                  ? `of ${metrics.avgDaysPerThousandSample} completed jobs`
+                  : "no completed jobs with start date + revenue yet"}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "0 16px" }}>
         <button onClick={() => setShowLookback((v) => !v)} style={lookbackToggle}>
@@ -2422,6 +2565,45 @@ const lookbackPresetBtn = {
   fontFamily: FONT_BODY,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const lookbackPresetBtnActive = {
+  background: COLORS.accent,
+  color: COLORS.surface,
+};
+
+const metricsGrid = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+};
+
+const metricTile = {
+  background: COLORS.surfaceMuted,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 8,
+  padding: "10px 12px",
+};
+
+const metricLabel = {
+  fontFamily: FONT_UTIL,
+  fontSize: 12,
+  color: COLORS.muted,
+};
+
+const metricValue = {
+  fontFamily: FONT_DISPLAY,
+  fontWeight: 700,
+  fontSize: 18,
+  color: COLORS.ink,
+  marginTop: 3,
+};
+
+const metricSub = {
+  fontFamily: FONT_UTIL,
+  fontSize: 11,
+  color: COLORS.muted,
+  marginTop: 3,
 };
 
 const viewBadge = {
