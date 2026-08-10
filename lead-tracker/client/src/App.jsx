@@ -664,23 +664,8 @@ function App() {
         </div>
       </header>
 
-      {/* weekly / monthly counters — 2x2: 2 weeks ago, this month / last week, this week */}
+      {/* weekly / monthly counters — 2x2: this month, 2 weeks ago / last week, this week */}
       <div style={statsGrid}>
-        <button
-          onClick={() =>
-            setDrilldown({
-              title: "2 weeks ago",
-              rangeLabel: `${fmtRangeDate(stats.previousWeekStart)} – ${fmtRangeDate(stats.previousWeekEnd)}`,
-              breakdown: breakdownForRange(leads, stats.previousWeekStart, stats.previousWeekEnd),
-            })
-          }
-          style={{ ...statCard, ...statCardBtn }}
-        >
-          <div style={statLabel}>Previous week</div>
-          <div style={statMain}>{stats.leadsPreviousWeek} <span style={statUnit}>leads</span></div>
-          <div style={statSub}>{fmtCurrency(stats.wonPreviousWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} earned</div>
-        </button>
         <button
           onClick={() =>
             setDrilldown({
@@ -695,6 +680,21 @@ function App() {
           <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
+        </button>
+        <button
+          onClick={() =>
+            setDrilldown({
+              title: "2 weeks ago",
+              rangeLabel: `${fmtRangeDate(stats.previousWeekStart)} – ${fmtRangeDate(stats.previousWeekEnd)}`,
+              breakdown: breakdownForRange(leads, stats.previousWeekStart, stats.previousWeekEnd),
+            })
+          }
+          style={{ ...statCard, ...statCardBtn }}
+        >
+          <div style={statLabel}>2 weeks ago</div>
+          <div style={statMain}>{stats.leadsPreviousWeek} <span style={statUnit}>leads</span></div>
+          <div style={statSub}>{fmtCurrency(stats.wonPreviousWeek)} won</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} earned</div>
         </button>
         <button
           onClick={() =>
