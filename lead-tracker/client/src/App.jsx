@@ -518,8 +518,12 @@ function App() {
     const now = new Date();
     const wStart = startOfWeek(now);
     const mStart = startOfMonth(now);
+    const lastWStart = new Date(wStart);
+    lastWStart.setDate(lastWStart.getDate() - 7);
+    const lastWEnd = new Date(wStart.getTime() - 1);
     const all = leads || [];
     const inRange = (iso, start) => iso && new Date(iso) >= start;
+    const inWindow = (iso, start, end) => iso && new Date(iso) >= start && new Date(iso) <= end;
     return {
       leadsWeek: all.filter((l) => inRange(l.createdAt, wStart)).length,
       leadsMonth: all.filter((l) => inRange(l.createdAt, mStart)).length,
@@ -527,6 +531,11 @@ function App() {
       wonMonth: all.filter((l) => inRange(l.wonAt, mStart)).reduce((s, l) => s + (l.revenue || 0), 0),
       earnedWeek: all.filter((l) => inRange(l.paidAt, wStart)).reduce((s, l) => s + (l.revenue || 0), 0),
       earnedMonth: all.filter((l) => inRange(l.paidAt, mStart)).reduce((s, l) => s + (l.revenue || 0), 0),
+      lastWeekStart: lastWStart,
+      lastWeekEnd: lastWEnd,
+      leadsLastWeek: all.filter((l) => inWindow(l.createdAt, lastWStart, lastWEnd)).length,
+      wonLastWeek: all.filter((l) => inWindow(l.wonAt, lastWStart, lastWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
+      earnedLastWeek: all.filter((l) => inWindow(l.paidAt, lastWStart, lastWEnd)).reduce((s, l) => s + (l.revenue || 0), 0),
     };
   }, [leads]);
 
@@ -663,6 +672,21 @@ function App() {
           <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
           <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
+        </button>
+        <button
+          onClick={() =>
+            setDrilldown({
+              title: "Last week",
+              rangeLabel: `${fmtRangeDate(stats.lastWeekStart)} – ${fmtRangeDate(stats.lastWeekEnd)}`,
+              breakdown: breakdownForRange(leads, stats.lastWeekStart, stats.lastWeekEnd),
+            })
+          }
+          style={{ ...statCard, ...statCardBtn }}
+        >
+          <div style={statLabel}>Last week</div>
+          <div style={statMain}>{stats.leadsLastWeek} <span style={statUnit}>leads</span></div>
+          <div style={statSub}>{fmtCurrency(stats.wonLastWeek)} won</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedLastWeek)} earned</div>
         </button>
         <button
           onClick={() =>
@@ -2293,12 +2317,13 @@ const modalCard = {
 
 const statsRow = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 12,
   padding: "16px 16px 6px",
 };
 
 const statCard = {
-  flex: 1,
+  flex: "1 1 140px",
   background: COLORS.surface,
   border: `1px solid ${COLORS.border}`,
   borderRadius: 10,
