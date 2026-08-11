@@ -1337,7 +1337,33 @@ function NotificationBell({ onOpenLead }) {
   );
 }
 
+// Lets the PWA's native back gesture (iOS edge-swipe, Android back
+// button/gesture) close an open modal instead of doing nothing and leaving
+// the only way out a force-quit. Push a history entry while the modal is
+// mounted; a real back gesture fires popstate (still attached) and closes it
+// normally; closing via the UI instead (X, tap-outside, Cancel) unmounts the
+// modal first, so the cleanup below detects that and pops the entry itself
+// — either way, exactly one history entry per modal.
+function useModalBackClose(onClose) {
+  useEffect(() => {
+    window.history.pushState({ rhxModal: true }, "");
+    const handlePopState = () => onClose();
+    window.addEventListener("popstate", handlePopState);
+    // deliberately not popping this entry back off when the modal closes via
+    // the UI instead of a back gesture (X, tap-outside, Cancel) — doing that
+    // with history.back() is async, and races with a *different* modal that
+    // opens (pushing its own entry synchronously) in that same tick, e.g.
+    // Settings closing itself while opening Backups, which would otherwise
+    // immediately pop the new modal's entry and self-close it. Leaving a
+    // harmless "ghost" entry behind is a fine trade: at most it costs an
+    // extra swipe-back later that does nothing visible, never a stuck modal
+    // or one that closes itself.
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+}
+
 function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose }) {
+  useModalBackClose(onClose);
   const [tab, setTab] = useState("received");
   const tabs = [
     { key: "received", label: `Received (${breakdown.received.length})` },
@@ -1396,6 +1422,7 @@ function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose 
 }
 
 function AccountModal({ role, onSwitch, onLogout, onClose }) {
+  useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1521,6 +1548,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 }
 
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
+  useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.dailyOverheadCost));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -1600,6 +1628,7 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
 }
 
 function BackupsModal({ onClose, onRestored }) {
+  useModalBackClose(onClose);
   const [backups, setBackups] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
@@ -1881,6 +1910,7 @@ function ArchiveView({ leads, editable, onOpenReport }) {
 }
 
 function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
+  useModalBackClose(onClose);
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
   const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
@@ -2762,6 +2792,7 @@ function ActionRow({ lead, onMove, onOpenReport }) {
 }
 
 function BackdateModal({ stage, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
   const [date, setDate] = useState(toDateInputValue(new Date()));
   const label = stage === "won" ? "won" : stage === "completed" ? "completed" : "paid";
   const referenceLabel =
@@ -2797,6 +2828,7 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
 }
 
 function AddLeadModal({ onAdd, onClose }) {
+  useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
   const [source, setSource] = useState("");
