@@ -197,18 +197,23 @@ const METRIC_SOURCE_GROUPS = [
 // weekdays from start through end, inclusive of both endpoints — matches how
 // overhead is billed (a 5-day work week), so "build pace" and job-cost math
 // agree on what a "day" means
+// startDate and completedAt are both meant as plain calendar dates (no
+// time-of-day), and are always stored/edited as UTC midnight — so compare
+// them using UTC day boundaries, not the browser's local timezone. Mixing
+// the two (e.g. truncating with local setHours) silently shifts the count
+// by a day for anyone west of UTC, which is most of the US.
 function businessDaysBetween(startIso, endIso) {
   const start = new Date(startIso);
   const end = new Date(endIso);
   if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return null;
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
+  start.setUTCHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
   let count = 0;
   const cur = new Date(start);
   while (cur <= end) {
-    const dow = cur.getDay();
+    const dow = cur.getUTCDay();
     if (dow !== 0 && dow !== 6) count++;
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return count;
 }
@@ -264,6 +269,15 @@ function fmtDateOnly(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+// for timestamps that are really just a calendar date stored as UTC
+// midnight (completedAt) — formatting in the viewer's local timezone would
+// show the day before for anyone west of UTC
+function fmtDateOnlyUTC(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
 
 function fmtDate(iso) {
@@ -1323,7 +1337,33 @@ function NotificationBell({ onOpenLead }) {
   );
 }
 
+// Lets the PWA's native back gesture (iOS edge-swipe, Android back
+// button/gesture) close an open modal instead of doing nothing and leaving
+// the only way out a force-quit. Push a history entry while the modal is
+// mounted; a real back gesture fires popstate (still attached) and closes it
+// normally; closing via the UI instead (X, tap-outside, Cancel) unmounts the
+// modal first, so the cleanup below detects that and pops the entry itself
+// — either way, exactly one history entry per modal.
+function useModalBackClose(onClose) {
+  useEffect(() => {
+    window.history.pushState({ rhxModal: true }, "");
+    const handlePopState = () => onClose();
+    window.addEventListener("popstate", handlePopState);
+    // deliberately not popping this entry back off when the modal closes via
+    // the UI instead of a back gesture (X, tap-outside, Cancel) — doing that
+    // with history.back() is async, and races with a *different* modal that
+    // opens (pushing its own entry synchronously) in that same tick, e.g.
+    // Settings closing itself while opening Backups, which would otherwise
+    // immediately pop the new modal's entry and self-close it. Leaving a
+    // harmless "ghost" entry behind is a fine trade: at most it costs an
+    // extra swipe-back later that does nothing visible, never a stuck modal
+    // or one that closes itself.
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+}
+
 function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose }) {
+  useModalBackClose(onClose);
   const [tab, setTab] = useState("received");
   const tabs = [
     { key: "received", label: `Received (${breakdown.received.length})` },
@@ -1382,6 +1422,7 @@ function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose 
 }
 
 function AccountModal({ role, onSwitch, onLogout, onClose }) {
+  useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1507,6 +1548,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 }
 
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
+  useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.dailyOverheadCost));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -1586,6 +1628,7 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
 }
 
 function BackupsModal({ onClose, onRestored }) {
+  useModalBackClose(onClose);
   const [backups, setBackups] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
@@ -1867,6 +1910,7 @@ function ArchiveView({ leads, editable, onOpenReport }) {
 }
 
 function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
+  useModalBackClose(onClose);
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
   const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
@@ -1944,7 +1988,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
         </div>
         <div style={reportRow}>
           <span style={reportRowLabel}>Completed</span>
-          <span style={reportRowValue}>{fmtDateOnly(lead.completedAt)}</span>
+          <span style={reportRowValue}>{fmtDateOnlyUTC(lead.completedAt)}</span>
         </div>
         <div style={reportRow}>
           <span style={reportRowLabel}>Working days</span>
@@ -2167,16 +2211,17 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
     setEditingStart(false);
   };
 
+  // completedAt is a plain calendar date at heart (no meaningful time-of-day),
+  // stored as UTC midnight — read/write its UTC date directly rather than
+  // going through the browser's local timezone, which would drift the date
+  // by a day for anyone west of UTC
   const openCompletedEdit = () => {
-    const d = new Date(lead.completedAt);
-    const off = d.getTimezoneOffset();
-    const local = new Date(d.getTime() - off * 60000);
-    setCompletedDraft(local.toISOString().slice(0, 10));
+    setCompletedDraft(new Date(lead.completedAt).toISOString().slice(0, 10));
     setEditingCompleted(true);
   };
 
   const saveCompleted = () => {
-    if (completedDraft) onEditField(lead.id, "completedAt", new Date(completedDraft + "T00:00:00").toISOString());
+    if (completedDraft) onEditField(lead.id, "completedAt", `${completedDraft}T00:00:00.000Z`);
     setEditingCompleted(false);
   };
 
@@ -2576,7 +2621,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
             <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Completed</span>
             {!editingCompleted ? (
               <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>
-                {fmtDateOnly(lead.completedAt)}
+                {fmtDateOnlyUTC(lead.completedAt)}
               </span>
             ) : (
               <>
@@ -2747,6 +2792,7 @@ function ActionRow({ lead, onMove, onOpenReport }) {
 }
 
 function BackdateModal({ stage, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
   const [date, setDate] = useState(toDateInputValue(new Date()));
   const label = stage === "won" ? "won" : stage === "completed" ? "completed" : "paid";
   const referenceLabel =
@@ -2782,6 +2828,7 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
 }
 
 function AddLeadModal({ onAdd, onClose }) {
+  useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
   const [source, setSource] = useState("");

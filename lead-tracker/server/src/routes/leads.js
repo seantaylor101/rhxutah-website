@@ -117,7 +117,11 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
 
   let ts = new Date().toISOString();
   if (date) {
-    const parsed = new Date(`${date}T00:00:00`);
+    // build the UTC-midnight timestamp directly instead of parsing
+    // `${date}T00:00:00` (no zone) through Date, which is interpreted in
+    // whatever timezone this process happens to run in — explicit UTC
+    // keeps backdated stage timestamps consistent regardless of that
+    const parsed = new Date(`${date}T00:00:00.000Z`);
     if (isNaN(parsed.getTime())) return res.status(400).json({ error: "Invalid date" });
     ts = parsed.toISOString();
   }
