@@ -1927,8 +1927,15 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
   const [editingWorkDays, setEditingWorkDays] = useState(false);
   const [workDaysDraft, setWorkDaysDraft] = useState("");
+
+  useEffect(() => {
+    if (!saved) return;
+    const t = setTimeout(() => setSaved(false), 2200);
+    return () => clearTimeout(t);
+  }, [saved]);
 
   const revenue = lead.revenue || 0;
   const workDays = resolveWorkDays(lead);
@@ -1959,6 +1966,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
     setErr("");
     try {
       await onSaveReport(draftPatch());
+      setSaved(true);
     } catch (e) {
       setErr(e.message || "Couldn't save");
     } finally {
@@ -1985,10 +1993,16 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   };
 
   const toggleComplete = async () => {
+    const completing = !lead.reportCompletedAt;
     setBusy(true);
     setErr("");
     try {
-      await onSaveReport({ ...draftPatch(), markComplete: !lead.reportCompletedAt });
+      await onSaveReport({ ...draftPatch(), markComplete: completing });
+      if (completing) {
+        onClose();
+      } else {
+        setSaved(true);
+      }
     } catch (e) {
       setErr(e.message || "Couldn't save");
     } finally {
@@ -2171,6 +2185,25 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
         )}
 
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        {saved && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: `${COLORS.accent}1a`,
+              border: `1px solid ${COLORS.accent}`,
+              borderRadius: 8,
+              padding: "8px 12px",
+              marginTop: 10,
+            }}
+          >
+            <Check size={14} color={COLORS.accent} />
+            <span style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: COLORS.accent }}>
+              Changes saved
+            </span>
+          </div>
+        )}
 
         {editable && (
           <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
@@ -3413,6 +3446,8 @@ const modalCard = {
   padding: "26px 22px 30px",
   width: "100%",
   maxWidth: 480,
+  maxHeight: "88vh",
+  overflowY: "auto",
   boxShadow: "0 -4px 24px rgba(36,41,38,0.12)",
 };
 
