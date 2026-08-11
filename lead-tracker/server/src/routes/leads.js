@@ -8,7 +8,7 @@ const router = Router();
 
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "website", "other"]);
 const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
-const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "revenue", "name", "job", "phone", "email"]);
+const EDITABLE_FIELDS = new Set(["createdAt", "startDate", "completedAt", "revenue", "name", "job", "phone", "email"]);
 
 function rowToLead(row) {
   return { ...row, archived: !!row.archived };
