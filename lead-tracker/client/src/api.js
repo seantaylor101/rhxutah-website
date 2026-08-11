@@ -22,10 +22,15 @@ export const api = {
   logout: () => request("/auth/logout", { method: "POST" }),
   listLeads: () => request("/leads"),
   addLead: (payload) => request("/leads", { method: "POST", body: JSON.stringify(payload) }),
-  moveLead: (id, stage, date, revert) =>
+  moveLead: (id, stage, date, revert, workDays) =>
     request(`/leads/${id}/move`, {
       method: "POST",
-      body: JSON.stringify({ stage, ...(date ? { date } : {}), ...(revert ? { revert: true } : {}) }),
+      body: JSON.stringify({
+        stage,
+        ...(date ? { date } : {}),
+        ...(revert ? { revert: true } : {}),
+        ...(workDays != null ? { workDays } : {}),
+      }),
     }),
   editLead: (id, patch) => request(`/leads/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),

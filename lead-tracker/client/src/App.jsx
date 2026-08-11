@@ -218,6 +218,15 @@ function businessDaysBetween(startIso, endIso) {
   return count;
 }
 
+// the calculated calendar-day span is just a starting point — a job can
+// finish in less (or more) actual work than the days it happened to span,
+// so an explicit override always wins when one's been set
+function resolveWorkDays(lead) {
+  if (lead.actualWorkDays != null) return lead.actualWorkDays;
+  if (!lead.startDate || !lead.completedAt) return null;
+  return businessDaysBetween(lead.startDate, lead.completedAt);
+}
+
 function computeMetrics(subset) {
   const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
   const avg = (nums) => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null);
@@ -227,7 +236,7 @@ function computeMetrics(subset) {
   const wonWithRevenue = wonLeads.filter((l) => l.revenue != null);
   const bidLeads = subset.filter((l) => l.bidSentAt);
   const paceLeads = subset.filter(
-    (l) => l.completedAt && l.startDate && l.revenue > 0 && businessDaysBetween(l.startDate, l.completedAt) != null
+    (l) => l.completedAt && l.startDate && l.revenue > 0 && resolveWorkDays(l) != null
   );
   const decidedCount = wonLeads.length + lostLeads.length;
 
@@ -242,7 +251,7 @@ function computeMetrics(subset) {
     avgDaysNewToBidSample: bidLeads.length,
     avgDaysNewToWon: avg(wonLeads.map((l) => days(l.createdAt, l.wonAt))),
     avgDaysNewToWonSample: wonLeads.length,
-    avgDaysPerThousand: avg(paceLeads.map((l) => businessDaysBetween(l.startDate, l.completedAt) / (l.revenue / 1000))),
+    avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
   };
 }
@@ -594,10 +603,10 @@ function App() {
     }
   };
 
-  const moveLead = async (id, stage, date, revert) => {
+  const moveLead = async (id, stage, date, revert, workDays) => {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
     try {
-      const updated = await api.moveLead(id, stage, date, revert);
+      const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -1121,6 +1130,7 @@ function App() {
                 editable={editable}
                 highlighted={lead.id === highlightedLeadId}
                 onOpenReport={setReportLead}
+                settings={settings}
               />
             ))}
           </main>
@@ -1917,14 +1927,15 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [editingWorkDays, setEditingWorkDays] = useState(false);
+  const [workDaysDraft, setWorkDaysDraft] = useState("");
 
   const revenue = lead.revenue || 0;
-  const actualWorkDays =
-    lead.startDate && lead.completedAt ? businessDaysBetween(lead.startDate, lead.completedAt) : null;
+  const workDays = resolveWorkDays(lead);
   const expectedWorkDays =
     allMetrics.avgDaysPerThousand != null && revenue > 0 ? allMetrics.avgDaysPerThousand * (revenue / 1000) : null;
-  const deltaDays = actualWorkDays != null && expectedWorkDays != null ? actualWorkDays - expectedWorkDays : null;
-  const overheadCost = actualWorkDays != null ? actualWorkDays * settings.dailyOverheadCost : null;
+  const deltaDays = workDays != null && expectedWorkDays != null ? workDays - expectedWorkDays : null;
+  const overheadCost = workDays != null ? workDays * settings.dailyOverheadCost : null;
 
   const totalCost = (lead.materialCost || 0) + (lead.laborCost || 0) + (overheadCost || 0);
   const profit = revenue - totalCost;
@@ -1946,6 +1957,24 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
     setErr("");
     try {
       await onSaveReport(draftPatch());
+    } catch (e) {
+      setErr(e.message || "Couldn't save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveWorkDays = async () => {
+    const n = parseFloat(workDaysDraft);
+    if (isNaN(n) || n <= 0) {
+      setEditingWorkDays(false);
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await onSaveReport({ actualWorkDays: n });
+      setEditingWorkDays(false);
     } catch (e) {
       setErr(e.message || "Couldn't save");
     } finally {
@@ -1990,16 +2019,45 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
           <span style={reportRowLabel}>Completed</span>
           <span style={reportRowValue}>{fmtDateOnlyUTC(lead.completedAt)}</span>
         </div>
-        <div style={reportRow}>
+        <div
+          onClick={
+            !editingWorkDays && editable
+              ? () => {
+                  setWorkDaysDraft(workDays != null ? String(workDays) : "");
+                  setEditingWorkDays(true);
+                }
+              : undefined
+          }
+          style={{ ...reportRow, cursor: !editingWorkDays && editable ? "pointer" : "default" }}
+        >
           <span style={reportRowLabel}>Working days</span>
-          <span style={reportRowValue}>{actualWorkDays != null ? actualWorkDays : "—"}</span>
+          {!editingWorkDays ? (
+            <span style={reportRowValue}>{workDays != null ? workDays : "—"}</span>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="number"
+                step="0.25"
+                min="0.25"
+                value={workDaysDraft}
+                onChange={(e) => setWorkDaysDraft(e.target.value)}
+                style={{ ...inlineInput, width: 60 }}
+              />
+              <button onClick={saveWorkDays} style={{ ...iconBtn, background: COLORS.accent }}>
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingWorkDays(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
+                <X size={18} color="#fff" />
+              </button>
+            </div>
+          )}
         </div>
         {!lead.startDate && (
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
             Set a start date on the board to see time-to-complete stats.
           </div>
         )}
-        {actualWorkDays != null && (
+        {workDays != null && (
           <div
             style={{
               fontFamily: FONT_UTIL,
@@ -2052,7 +2110,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
 
             <div style={{ ...reportRow, marginTop: 10 }}>
               <span style={reportRowLabel}>
-                Overhead ({actualWorkDays != null ? actualWorkDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}
+                Overhead ({workDays != null ? workDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}
                 /day)
               </span>
               <span style={reportRowValue}>{overheadCost != null ? fmtCurrency(overheadCost) : "—"}</span>
@@ -2150,7 +2208,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   );
 }
 
-function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted, onOpenReport }) {
+function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted, onOpenReport, settings }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
@@ -2649,7 +2707,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
         )}
 
         {/* actions */}
-        {editable && <ActionRow lead={lead} onMove={onMove} onOpenReport={onOpenReport} />}
+        {editable && <ActionRow lead={lead} onMove={onMove} onOpenReport={onOpenReport} settings={settings} />}
       </div>
     </div>
   );
@@ -2699,8 +2757,15 @@ function priorDateFor(lead, stage) {
   return null;
 }
 
-function ActionRow({ lead, onMove, onOpenReport }) {
+function ActionRow({ lead, onMove, onOpenReport, settings }) {
   const [confirmStage, setConfirmStage] = useState(null);
+  const [pendingCompleteDate, setPendingCompleteDate] = useState(null);
+  const [showWorkDays, setShowWorkDays] = useState(false);
+
+  const startWorkDaysStep = (completedDateStr) => {
+    setPendingCompleteDate(completedDateStr);
+    setShowWorkDays(true);
+  };
 
   const handleClick = (target) => {
     const prior = priorDateFor(lead, target);
@@ -2711,7 +2776,18 @@ function ActionRow({ lead, onMove, onOpenReport }) {
         return;
       }
     }
+    if (target === "completed") {
+      startWorkDaysStep(null);
+      return;
+    }
     onMove(lead.id, target);
+  };
+
+  const defaultWorkDays = () => {
+    const completedDateStr = pendingCompleteDate || toDateInputValue(new Date());
+    if (!lead.startDate) return 1;
+    const calculated = businessDaysBetween(lead.startDate, `${completedDateStr}T00:00:00.000Z`);
+    return calculated != null && calculated > 0 ? calculated : 1;
   };
 
   const btn = (label, target, kind = "primary") => (
@@ -2781,10 +2857,30 @@ function ActionRow({ lead, onMove, onOpenReport }) {
         <BackdateModal
           stage={confirmStage}
           onConfirm={(date) => {
-            onMove(lead.id, confirmStage, date);
-            setConfirmStage(null);
+            if (confirmStage === "completed") {
+              setConfirmStage(null);
+              startWorkDaysStep(date);
+            } else {
+              onMove(lead.id, confirmStage, date);
+              setConfirmStage(null);
+            }
           }}
           onCancel={() => setConfirmStage(null)}
+        />
+      )}
+      {showWorkDays && (
+        <WorkDaysModal
+          defaultDays={defaultWorkDays()}
+          dailyRate={settings.dailyOverheadCost}
+          onConfirm={(days) => {
+            onMove(lead.id, "completed", pendingCompleteDate || undefined, false, days);
+            setShowWorkDays(false);
+            setPendingCompleteDate(null);
+          }}
+          onCancel={() => {
+            setShowWorkDays(false);
+            setPendingCompleteDate(null);
+          }}
         />
       )}
     </>
@@ -2812,6 +2908,77 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={modalInput} />
         <button
           onClick={() => onConfirm(date)}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14 }}
+        >
+          Confirm
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WorkDaysModal({ defaultDays, dailyRate, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
+  const [days, setDays] = useState(defaultDays);
+
+  const adjust = (delta) => setDays((d) => Math.max(0.25, Math.round((d + delta) * 4) / 4));
+  const overhead = days * dailyRate;
+
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          How many days did this take?
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Used to calculate overhead on this job's final report. Adjust in quarter-day steps if the crew wasn't on
+          site the whole time.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 10 }}>
+          <button onClick={() => adjust(-0.25)} style={stepperBtn} aria-label="Decrease by a quarter day">
+            −
+          </button>
+          <input
+            type="number"
+            step="0.25"
+            min="0.25"
+            value={days}
+            onChange={(e) => {
+              const n = parseFloat(e.target.value);
+              setDays(isNaN(n) ? 0.25 : Math.max(0.25, n));
+            }}
+            style={{ ...modalInput, width: 90, textAlign: "center", fontSize: 20, fontWeight: 700 }}
+          />
+          <button onClick={() => adjust(0.25)} style={stepperBtn} aria-label="Increase by a quarter day">
+            +
+          </button>
+        </div>
+        <div
+          style={{
+            textAlign: "center",
+            fontFamily: FONT_UTIL,
+            fontSize: 12.5,
+            color: COLORS.muted,
+            marginTop: 4,
+          }}
+        >
+          {days === 1 ? "day" : "days"}
+        </div>
+
+        <div style={{ ...reportRow, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
+          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Overhead</span>
+          <span style={{ ...reportRowValue, fontWeight: 700 }}>{fmtCurrency(overhead)}</span>
+        </div>
+
+        <button
+          onClick={() => onConfirm(days)}
           style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14 }}
         >
           Confirm
@@ -3186,6 +3353,23 @@ const archiveReportBtn = {
   fontFamily: FONT_BODY,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const stepperBtn = {
+  width: 44,
+  height: 44,
+  borderRadius: "50%",
+  border: `1px solid ${COLORS.accent}`,
+  background: "transparent",
+  color: COLORS.accent,
+  fontSize: 22,
+  fontWeight: 700,
+  fontFamily: FONT_BODY,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
 };
 
 const backupRow = {
