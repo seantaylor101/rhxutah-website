@@ -2119,6 +2119,8 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
+  const [editingCompleted, setEditingCompleted] = useState(false);
+  const [completedDraft, setCompletedDraft] = useState("");
   const [editingRevenue, setEditingRevenue] = useState(false);
   const [revenueDraft, setRevenueDraft] = useState(lead.revenue != null ? String(lead.revenue) : "");
   const [confirmDel, setConfirmDel] = useState(false);
@@ -2163,6 +2165,19 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const saveStart = () => {
     onEditField(lead.id, "startDate", startDraft);
     setEditingStart(false);
+  };
+
+  const openCompletedEdit = () => {
+    const d = new Date(lead.completedAt);
+    const off = d.getTimezoneOffset();
+    const local = new Date(d.getTime() - off * 60000);
+    setCompletedDraft(local.toISOString().slice(0, 10));
+    setEditingCompleted(true);
+  };
+
+  const saveCompleted = () => {
+    if (completedDraft) onEditField(lead.id, "completedAt", new Date(completedDraft + "T00:00:00").toISOString());
+    setEditingCompleted(false);
   };
 
   const saveRevenue = () => {
@@ -2538,6 +2553,50 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           </div>
         )}
 
+        {/* completed date — the exact day the job finished, used for time-to-complete
+            stats on the final report; editable in case a backfilled lead got today's
+            date instead of the real completion date */}
+        {(lead.stage === "completed" || lead.stage === "paid") && (
+          <div
+            onClick={
+              !editingCompleted && editable
+                ? () => {
+                    openCompletedEdit();
+                  }
+                : undefined
+            }
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingCompleted && editable ? "pointer" : "default",
+            }}
+          >
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Completed</span>
+            {!editingCompleted ? (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>
+                {fmtDateOnly(lead.completedAt)}
+              </span>
+            ) : (
+              <>
+                <input
+                  type="date"
+                  value={completedDraft}
+                  onChange={(e) => setCompletedDraft(e.target.value)}
+                  style={inlineInput}
+                />
+                <button onClick={saveCompleted} style={{ ...iconBtn, background: COLORS.accent }}>
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingCompleted(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {lead.stage === "paid" && lead.paidAt && (
           <div style={{ marginTop: 10, fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>
             Paid {fmtDateOnly(lead.paidAt)} · clears next month
@@ -2584,11 +2643,13 @@ function LeadMoreMenu({ lead, onMove }) {
 
 const BACKDATE_THRESHOLD_DAYS = 7;
 
-// "won" and "paid" both stamp a date used for weekly/monthly stats and the
-// archive's month grouping — moving a long-backlogged lead into either
-// without checking would silently misdate it to today.
+// "won", "completed", and "paid" all stamp a date used for weekly/monthly
+// stats, time-to-complete math, and the archive's month grouping — moving a
+// long-backlogged lead into any of them without checking would silently
+// misdate it to today.
 function priorDateFor(lead, stage) {
   if (stage === "won") return lead.createdAt;
+  if (stage === "completed") return lead.startDate || lead.wonAt || lead.createdAt;
   if (stage === "paid") return lead.wonAt || lead.createdAt;
   return null;
 }
@@ -2687,7 +2748,9 @@ function ActionRow({ lead, onMove, onOpenReport }) {
 
 function BackdateModal({ stage, onConfirm, onCancel }) {
   const [date, setDate] = useState(toDateInputValue(new Date()));
-  const label = stage === "won" ? "won" : "paid";
+  const label = stage === "won" ? "won" : stage === "completed" ? "completed" : "paid";
+  const referenceLabel =
+    stage === "won" ? "received" : stage === "completed" ? "started" : "won";
 
   return (
     <div style={modalOverlay} onClick={onCancel}>
@@ -2696,8 +2759,8 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
           Backdate this {label} date?
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
-          This lead was received a while ago, so it looks like it might be getting added late. If it was actually{" "}
-          {label} earlier, set the real date below — otherwise just confirm today's date.
+          This job was {referenceLabel} a while ago, so it looks like it might be getting added late. If it was
+          actually {label} earlier, set the real date below — otherwise just confirm today's date.
         </div>
         <label style={modalLabel}>Date {label}</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={modalInput} />
