@@ -92,4 +92,4 @@ db.exec(`
   );
 `);
 
-db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('dailyOverheadCost', '350')`).run();
+db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('overheadPercent', '13')`).run();

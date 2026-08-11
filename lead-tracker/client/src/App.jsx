@@ -454,7 +454,7 @@ function App() {
   const [showMetrics, setShowMetrics] = useState(false);
   const [metricsSource, setMetricsSource] = useState("all");
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settings, setSettings] = useState({ dailyOverheadCost: 350 });
+  const [settings, setSettings] = useState({ overheadPercent: 13 });
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const editable = role === "owner";
@@ -1559,7 +1559,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   useModalBackClose(onClose);
-  const [draft, setDraft] = useState(String(settings.dailyOverheadCost));
+  const [draft, setDraft] = useState(String(settings.overheadPercent));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
@@ -1573,7 +1573,7 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
     setBusy(true);
     setErr("");
     try {
-      await onSave({ dailyOverheadCost: n });
+      await onSave({ overheadPercent: n });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -1593,10 +1593,10 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
           </button>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          Used to calculate overhead cost on a job's final report.
+          Used to calculate overhead cost on a job's final report, as a percentage of that job's revenue.
         </div>
 
-        <label style={modalLabel}>Daily overhead cost ($, 5-day work week)</label>
+        <label style={modalLabel}>Overhead (% of revenue)</label>
         <input
           type="number"
           inputMode="decimal"
@@ -1604,7 +1604,7 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           style={modalInput}
-          placeholder="350"
+          placeholder="13"
         />
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
         {saved && (
@@ -1942,7 +1942,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const expectedWorkDays =
     allMetrics.avgDaysPerThousand != null && revenue > 0 ? allMetrics.avgDaysPerThousand * (revenue / 1000) : null;
   const deltaDays = workDays != null && expectedWorkDays != null ? workDays - expectedWorkDays : null;
-  const overheadCost = workDays != null ? workDays * settings.dailyOverheadCost : null;
+  const overheadCost = revenue > 0 ? (revenue * settings.overheadPercent) / 100 : null;
 
   const materialCostLive = materialDraft === "" ? 0 : parseFloat(materialDraft) || 0;
   const laborCostLive = laborDraft === "" ? 0 : parseFloat(laborDraft) || 0;
@@ -2125,10 +2125,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
             />
 
             <div style={{ ...reportRow, marginTop: 10 }}>
-              <span style={reportRowLabel}>
-                Overhead ({workDays != null ? workDays : "—"} days × {fmtCurrency(settings.dailyOverheadCost)}
-                /day)
-              </span>
+              <span style={reportRowLabel}>Overhead ({settings.overheadPercent}% of {fmtCurrency(revenue)})</span>
               <span style={reportRowValue}>{overheadCost != null ? fmtCurrency(overheadCost) : "—"}</span>
             </div>
 
@@ -2906,7 +2903,6 @@ function ActionRow({ lead, onMove, onOpenReport, settings }) {
       {showWorkDays && (
         <WorkDaysModal
           defaultDays={defaultWorkDays()}
-          dailyRate={settings.dailyOverheadCost}
           onConfirm={(days) => {
             onMove(lead.id, "completed", pendingCompleteDate || undefined, false, days);
             setShowWorkDays(false);
@@ -2958,12 +2954,11 @@ function BackdateModal({ stage, onConfirm, onCancel }) {
   );
 }
 
-function WorkDaysModal({ defaultDays, dailyRate, onConfirm, onCancel }) {
+function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
   const [days, setDays] = useState(defaultDays);
 
   const adjust = (delta) => setDays((d) => Math.max(0.25, Math.round((d + delta) * 4) / 4));
-  const overhead = days * dailyRate;
 
   return (
     <div style={modalOverlay} onClick={onCancel}>
@@ -2972,7 +2967,7 @@ function WorkDaysModal({ defaultDays, dailyRate, onConfirm, onCancel }) {
           How many days did this take?
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          Used to calculate overhead on this job's final report. Adjust in quarter-day steps if the crew wasn't on
+          Used to track build pace on this job's final report. Adjust in quarter-day steps if the crew wasn't on
           site the whole time.
         </div>
 
@@ -3005,11 +3000,6 @@ function WorkDaysModal({ defaultDays, dailyRate, onConfirm, onCancel }) {
           }}
         >
           {days === 1 ? "day" : "days"}
-        </div>
-
-        <div style={{ ...reportRow, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
-          <span style={{ ...reportRowLabel, fontWeight: 700, color: COLORS.ink }}>Overhead</span>
-          <span style={{ ...reportRowValue, fontWeight: 700 }}>{fmtCurrency(overhead)}</span>
         </div>
 
         <button
