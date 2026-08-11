@@ -197,18 +197,23 @@ const METRIC_SOURCE_GROUPS = [
 // weekdays from start through end, inclusive of both endpoints — matches how
 // overhead is billed (a 5-day work week), so "build pace" and job-cost math
 // agree on what a "day" means
+// startDate and completedAt are both meant as plain calendar dates (no
+// time-of-day), and are always stored/edited as UTC midnight — so compare
+// them using UTC day boundaries, not the browser's local timezone. Mixing
+// the two (e.g. truncating with local setHours) silently shifts the count
+// by a day for anyone west of UTC, which is most of the US.
 function businessDaysBetween(startIso, endIso) {
   const start = new Date(startIso);
   const end = new Date(endIso);
   if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return null;
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
+  start.setUTCHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
   let count = 0;
   const cur = new Date(start);
   while (cur <= end) {
-    const dow = cur.getDay();
+    const dow = cur.getUTCDay();
     if (dow !== 0 && dow !== 6) count++;
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return count;
 }
@@ -264,6 +269,15 @@ function fmtDateOnly(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+// for timestamps that are really just a calendar date stored as UTC
+// midnight (completedAt) — formatting in the viewer's local timezone would
+// show the day before for anyone west of UTC
+function fmtDateOnlyUTC(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
 
 function fmtDate(iso) {
@@ -1944,7 +1958,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
         </div>
         <div style={reportRow}>
           <span style={reportRowLabel}>Completed</span>
-          <span style={reportRowValue}>{fmtDateOnly(lead.completedAt)}</span>
+          <span style={reportRowValue}>{fmtDateOnlyUTC(lead.completedAt)}</span>
         </div>
         <div style={reportRow}>
           <span style={reportRowLabel}>Working days</span>
@@ -2167,16 +2181,17 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
     setEditingStart(false);
   };
 
+  // completedAt is a plain calendar date at heart (no meaningful time-of-day),
+  // stored as UTC midnight — read/write its UTC date directly rather than
+  // going through the browser's local timezone, which would drift the date
+  // by a day for anyone west of UTC
   const openCompletedEdit = () => {
-    const d = new Date(lead.completedAt);
-    const off = d.getTimezoneOffset();
-    const local = new Date(d.getTime() - off * 60000);
-    setCompletedDraft(local.toISOString().slice(0, 10));
+    setCompletedDraft(new Date(lead.completedAt).toISOString().slice(0, 10));
     setEditingCompleted(true);
   };
 
   const saveCompleted = () => {
-    if (completedDraft) onEditField(lead.id, "completedAt", new Date(completedDraft + "T00:00:00").toISOString());
+    if (completedDraft) onEditField(lead.id, "completedAt", `${completedDraft}T00:00:00.000Z`);
     setEditingCompleted(false);
   };
 
@@ -2576,7 +2591,7 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
             <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Completed</span>
             {!editingCompleted ? (
               <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>
-                {fmtDateOnly(lead.completedAt)}
+                {fmtDateOnlyUTC(lead.completedAt)}
               </span>
             ) : (
               <>
