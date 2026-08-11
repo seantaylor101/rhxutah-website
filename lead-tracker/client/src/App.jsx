@@ -240,10 +240,22 @@ function computeMetrics(subset) {
   );
   const decidedCount = wonLeads.length + lostLeads.length;
 
+  // "estimate win rate" is scoped to leads that actually got a bid sent,
+  // separate from lead win rate — a source can look great on one and
+  // mediocre on the other, and that gap is itself useful information
+  const estimatedLeads = subset.filter((l) => l.bidSentAt);
+  const estimatedWon = estimatedLeads.filter((l) => l.wonAt);
+  const estimatedLost = estimatedLeads.filter((l) => l.stage === "lost");
+  const estimateDecidedCount = estimatedWon.length + estimatedLost.length;
+
   return {
     totalLeads: subset.length,
     closeRate: decidedCount ? wonLeads.length / decidedCount : null,
+    closeRateWon: wonLeads.length,
     closeRateSample: decidedCount,
+    estimateWinRate: estimateDecidedCount ? estimatedWon.length / estimateDecidedCount : null,
+    estimateWinRateWon: estimatedWon.length,
+    estimateWinRateSample: estimateDecidedCount,
     avgWonRevenue: avg(wonWithRevenue.map((l) => l.revenue)),
     avgWonRevenueSample: wonWithRevenue.length,
     avgRevenuePerLead: subset.length ? wonWithRevenue.reduce((s, l) => s + l.revenue, 0) / subset.length : null,
@@ -914,50 +926,61 @@ function App() {
           </div>
           <div style={metricsGrid}>
             <div style={metricTile}>
-              <div style={metricLabel}>Close rate</div>
+              <div style={metricLabel}>Lead Win Rate</div>
               <div style={metricValue}>{fmtPercent(metrics.closeRate)}</div>
               <div style={metricSub}>
-                {metrics.closeRateSample ? `of ${metrics.closeRateSample} decided` : "no decided leads yet"}
+                {metrics.closeRateSample
+                  ? `${metrics.closeRateWon} won / ${metrics.closeRateSample} decided`
+                  : "no decided leads yet"}
               </div>
             </div>
             <div style={metricTile}>
-              <div style={metricLabel}>Avg won lead value</div>
+              <div style={metricLabel}>Estimate Win Rate</div>
+              <div style={metricValue}>{fmtPercent(metrics.estimateWinRate)}</div>
+              <div style={metricSub}>
+                {metrics.estimateWinRateSample
+                  ? `${metrics.estimateWinRateWon} won / ${metrics.estimateWinRateSample} decided`
+                  : "no decided estimates yet"}
+              </div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Average Job Value</div>
               <div style={metricValue}>
                 {metrics.avgWonRevenue != null ? fmtCurrency(metrics.avgWonRevenue) : "—"}
               </div>
               <div style={metricSub}>
-                {metrics.avgWonRevenueSample ? `of ${metrics.avgWonRevenueSample} won leads` : "no won leads with revenue yet"}
+                {metrics.avgWonRevenueSample ? `across ${metrics.avgWonRevenueSample} won jobs` : "no won leads with revenue yet"}
               </div>
             </div>
             <div style={metricTile}>
-              <div style={metricLabel}>Avg revenue per lead</div>
+              <div style={metricLabel}>Revenue per Lead</div>
               <div style={metricValue}>
                 {metrics.avgRevenuePerLead != null ? fmtCurrency(metrics.avgRevenuePerLead) : "—"}
               </div>
-              <div style={metricSub}>blends close rate + deal size</div>
+              <div style={metricSub}>blends win rate + deal size</div>
             </div>
             <div style={metricTile}>
-              <div style={metricLabel}>New lead → bid sent</div>
+              <div style={metricLabel}>Time to Estimate</div>
               <div style={metricValue}>{fmtDays(metrics.avgDaysNewToBid)}</div>
               <div style={metricSub}>
-                {metrics.avgDaysNewToBidSample ? `of ${metrics.avgDaysNewToBidSample} bids sent` : "no bids sent yet"}
+                {metrics.avgDaysNewToBidSample ? `across ${metrics.avgDaysNewToBidSample} estimates` : "no bids sent yet"}
               </div>
             </div>
             <div style={metricTile}>
-              <div style={metricLabel}>New lead → won</div>
+              <div style={metricLabel}>Sales Cycle</div>
               <div style={metricValue}>{fmtDays(metrics.avgDaysNewToWon)}</div>
               <div style={metricSub}>
-                {metrics.avgDaysNewToWonSample ? `of ${metrics.avgDaysNewToWonSample} won leads` : "no won leads yet"}
+                {metrics.avgDaysNewToWonSample ? `across ${metrics.avgDaysNewToWonSample} won jobs` : "no won leads yet"}
               </div>
             </div>
             <div style={metricTile}>
-              <div style={metricLabel}>Build pace</div>
+              <div style={metricLabel}>Workdays per $1K</div>
               <div style={metricValue}>
-                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} workdays/$1k` : "—"}
+                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} days` : "—"}
               </div>
               <div style={metricSub}>
                 {metrics.avgDaysPerThousandSample
-                  ? `of ${metrics.avgDaysPerThousandSample} completed jobs`
+                  ? `per $1,000 completed revenue, ${metrics.avgDaysPerThousandSample} jobs`
                   : "no completed jobs with start date + revenue yet"}
               </div>
             </div>
