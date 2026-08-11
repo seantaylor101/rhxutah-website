@@ -110,7 +110,7 @@ const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
 router.post("/:id/move", requireAuth("owner"), (req, res) => {
-  const { stage, date, revert } = req.body || {};
+  const { stage, date, revert, workDays } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
@@ -141,6 +141,7 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
     }
     if (!AT_OR_AFTER_COMPLETED.has(stage)) {
       patch.completedAt = null;
+      patch.actualWorkDays = null;
     }
   } else if (stage === "bid") {
     patch.bidSentAt = ts;
@@ -150,6 +151,10 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   } else if (stage === "completed") {
     patch.completedAt = ts;
     patch.paidAt = null;
+    if (workDays !== undefined && workDays !== null && workDays !== "") {
+      const n = Number(workDays);
+      if (!isNaN(n) && n > 0) patch.actualWorkDays = n;
+    }
   } else if (stage === "paid") {
     patch.paidAt = ts;
   } else if (stage === "progress") {
@@ -208,13 +213,16 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
-  const { materialCost, laborCost, wentWell, wentWrong, markComplete } = req.body || {};
+  const { materialCost, laborCost, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
   const patch = {};
   if (materialCost !== undefined) {
     patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
   }
   if (laborCost !== undefined) {
     patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
+  }
+  if (actualWorkDays !== undefined) {
+    patch.actualWorkDays = actualWorkDays === null || actualWorkDays === "" ? null : Number(actualWorkDays);
   }
   if (wentWell !== undefined) patch.wentWell = String(wentWell || "").trim();
   if (wentWrong !== undefined) patch.wentWrong = String(wentWrong || "").trim();

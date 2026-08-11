@@ -60,6 +60,9 @@ if (!existingColumns.has("wentWell")) {
 if (!existingColumns.has("wentWrong")) {
   db.exec(`ALTER TABLE leads ADD COLUMN wentWrong TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("actualWorkDays")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN actualWorkDays REAL`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
