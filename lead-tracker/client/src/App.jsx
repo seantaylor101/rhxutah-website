@@ -1937,7 +1937,9 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const deltaDays = workDays != null && expectedWorkDays != null ? workDays - expectedWorkDays : null;
   const overheadCost = workDays != null ? workDays * settings.dailyOverheadCost : null;
 
-  const totalCost = (lead.materialCost || 0) + (lead.laborCost || 0) + (overheadCost || 0);
+  const materialCostLive = materialDraft === "" ? 0 : parseFloat(materialDraft) || 0;
+  const laborCostLive = laborDraft === "" ? 0 : parseFloat(laborDraft) || 0;
+  const totalCost = materialCostLive + laborCostLive + (overheadCost || 0);
   const profit = revenue - totalCost;
   const profitMargin = revenue > 0 ? (profit / revenue) * 100 : null;
 
