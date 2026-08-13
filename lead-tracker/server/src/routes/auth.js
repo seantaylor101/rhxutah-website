@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createHash, timingSafeEqual } from "crypto";
 import { COOKIE_NAME, signSession } from "../auth.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
@@ -12,13 +13,42 @@ const cookieOptions = {
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
 
+// Constant-time compare: hash both sides to a fixed-length digest first so
+// timingSafeEqual (which requires equal-length buffers) never short-circuits
+// on the attacker-controlled input's length, and never throws on a mismatch.
+function safeCompare(a, b) {
+  const hashA = createHash("sha256").update(String(a)).digest();
+  const hashB = createHash("sha256").update(String(b)).digest();
+  return timingSafeEqual(hashA, hashB);
+}
+
+// Small in-memory per-IP limiter — the passcodes are the entire auth model
+// here, so the login endpoint is the actual front door and needs its own
+// throttle independent of anything downstream. Resets on redeploy, which is
+// fine for this purpose (mirrors the limiter on the public intake route).
+const attempts = new Map();
+const WINDOW_MS = 10 * 60 * 1000;
+const MAX_PER_WINDOW = 8;
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const recent = (attempts.get(ip) || []).filter((t) => now - t < WINDOW_MS);
+  recent.push(now);
+  attempts.set(ip, recent);
+  return recent.length > MAX_PER_WINDOW;
+}
+
 router.post("/login", (req, res) => {
+  if (isRateLimited(req.ip)) {
+    return res.status(429).json({ error: "Too many attempts — try again later" });
+  }
+
   const { passcode } = req.body || {};
   if (!passcode) return res.status(400).json({ error: "Passcode required" });
 
   let role = null;
-  if (passcode === process.env.OWNER_PASSCODE) role = "owner";
-  else if (passcode === process.env.VIEWER_PASSCODE) role = "viewer";
+  if (process.env.OWNER_PASSCODE && safeCompare(passcode, process.env.OWNER_PASSCODE)) role = "owner";
+  else if (process.env.VIEWER_PASSCODE && safeCompare(passcode, process.env.VIEWER_PASSCODE)) role = "viewer";
 
   if (!role) return res.status(401).json({ error: "Incorrect passcode" });
 
