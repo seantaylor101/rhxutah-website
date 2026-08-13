@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
 
@@ -469,7 +469,37 @@ function App() {
   const [settings, setSettings] = useState({ overheadPercent: 13 });
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const bootHtmlRef = useRef(null);
   const editable = role === "owner";
+
+  // installed PWAs get suspended in the background instead of reloading, so
+  // a device can sit on a build from days ago until it's force-quit — check
+  // whether a newer index.html has been deployed each time the app comes
+  // back to the foreground, and offer a tap-to-refresh instead of leaving
+  // stale UI (e.g. a since-removed edit affordance) up until a force-quit
+  useEffect(() => {
+    const fetchIndexHtml = () => fetch("/", { cache: "no-store" }).then((r) => r.text());
+    fetchIndexHtml()
+      .then((html) => {
+        bootHtmlRef.current = html;
+      })
+      .catch(() => {});
+
+    const checkForUpdate = () => {
+      if (!bootHtmlRef.current) return;
+      fetchIndexHtml()
+        .then((html) => {
+          if (html !== bootHtmlRef.current) setUpdateAvailable(true);
+        })
+        .catch(() => {});
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -628,9 +658,10 @@ function App() {
   };
 
   const editField = async (id, field, value) => {
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, [field]: value } : l)));
+    const patch = typeof field === "object" ? field : { [field]: value };
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
     try {
-      const updated = await api.editLead(id, { [field]: value });
+      const updated = await api.editLead(id, patch);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -668,6 +699,60 @@ function App() {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
     [leads, activeStage]
   );
+
+  // FLIP animation: when a lead leaves this stage's list (moved to another
+  // bucket) or reorders within it (a date edit changed its sort position),
+  // the cards that shift as a result visibly slide into their new spot
+  // instead of snapping there — otherwise the next lead lands exactly where
+  // the tapped one was, and it's easy to not notice the list changed at all
+  // and act on the wrong card next
+  const cardNodesRef = useRef(new Map());
+  const cardRefCallbacksRef = useRef(new Map());
+  const cardAnimsRef = useRef(new Map());
+  const prevTopsRef = useRef(new Map());
+  const getCardRef = useCallback((id) => {
+    if (!cardRefCallbacksRef.current.has(id)) {
+      cardRefCallbacksRef.current.set(id, (el) => {
+        if (el) cardNodesRef.current.set(id, el);
+        else cardNodesRef.current.delete(id);
+      });
+    }
+    return cardRefCallbacksRef.current.get(id);
+  }, []);
+
+  useLayoutEffect(() => {
+    const nodes = cardNodesRef.current;
+    const anims = cardAnimsRef.current;
+    const prevTops = prevTopsRef.current;
+
+    // a move/edit lands in two state updates (an optimistic one, then a
+    // server-confirmed one a beat later), so this effect can fire again
+    // while the previous run's animation is still playing. Cancel any
+    // in-flight animation before measuring — getBoundingClientRect reflects
+    // a mid-animation visual position, not the card's true resting layout
+    // position, and reading that would throw off the delta. Using the Web
+    // Animations API (rather than a manual transform + CSS transition)
+    // means a fresh animate() call takes effect immediately, with no
+    // deferred-frame handoff that a fast-arriving second update could race
+    nodes.forEach((_, id) => anims.get(id)?.cancel());
+
+    const nextTops = new Map();
+    nodes.forEach((node, id) => {
+      nextTops.set(id, node.getBoundingClientRect().top);
+    });
+    nextTops.forEach((top, id) => {
+      const prevTop = prevTops.get(id);
+      if (prevTop == null || prevTop === top) return;
+      const node = nodes.get(id);
+      if (!node) return;
+      const anim = node.animate(
+        [{ transform: `translateY(${prevTop - top}px)` }, { transform: "translateY(0)" }],
+        { duration: 280, easing: "ease-out" }
+      );
+      anims.set(id, anim);
+    });
+    prevTopsRef.current = nextTops;
+  }, [visible]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -785,6 +870,29 @@ function App() {
           * { transition: none !important; animation: none !important; }
         }
       `}</style>
+
+      {updateAvailable && (
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            width: "100%",
+            padding: "10px 16px",
+            background: COLORS.amber,
+            border: "none",
+            cursor: "pointer",
+            fontFamily: FONT_BODY,
+            fontWeight: 600,
+            fontSize: 13,
+            color: "#fff",
+          }}
+        >
+          A newer version is available — tap to refresh
+        </button>
+      )}
 
       <header style={header}>
         <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
@@ -1144,17 +1252,18 @@ function App() {
               </div>
             )}
             {visible.map((lead) => (
-              <LeadTicket
-                key={lead.id}
-                lead={lead}
-                onMove={moveLead}
-                onEditField={editField}
-                onDelete={deleteLead}
-                editable={editable}
-                highlighted={lead.id === highlightedLeadId}
-                onOpenReport={setReportLead}
-                settings={settings}
-              />
+              <div key={lead.id} ref={getCardRef(lead.id)}>
+                <LeadTicket
+                  lead={lead}
+                  onMove={moveLead}
+                  onEditField={editField}
+                  onDelete={deleteLead}
+                  editable={editable}
+                  highlighted={lead.id === highlightedLeadId}
+                  onOpenReport={setReportLead}
+                  settings={settings}
+                />
+              </div>
             ))}
           </main>
         </>
@@ -2280,6 +2389,9 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const [completedDraft, setCompletedDraft] = useState("");
   const [editingRevenue, setEditingRevenue] = useState(false);
   const [revenueDraft, setRevenueDraft] = useState(lead.revenue != null ? String(lead.revenue) : "");
+  const [editingSource, setEditingSource] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState(lead.source || "");
+  const [sourceOtherDraft, setSourceOtherDraft] = useState(lead.sourceOther || "");
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
@@ -2342,6 +2454,25 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
     const n = parseFloat(revenueDraft);
     onEditField(lead.id, "revenue", isNaN(n) ? null : n);
     setEditingRevenue(false);
+  };
+
+  const openSourceEdit = () => {
+    setSourceDraft(lead.source || "");
+    setSourceOtherDraft(lead.sourceOther || "");
+    setEditingSource(true);
+  };
+
+  const saveSource = () => {
+    if (!sourceDraft) {
+      setEditingSource(false);
+      return;
+    }
+    const needsOther = sourceDraft === "other" || sourceDraft === "website";
+    onEditField(lead.id, {
+      source: sourceDraft,
+      sourceOther: needsOther ? sourceOtherDraft.trim() : "",
+    });
+    setEditingSource(false);
   };
 
   return (
@@ -2624,11 +2755,60 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           )}
         </div>
 
-        {lead.source && (
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478", marginTop: 6 }}>
-            Source: {sourceLabel(lead)}
+        {/* source — can be corrected at any stage, not just at intake */}
+        <div style={{ marginTop: 6 }}>
+          <div
+            onClick={!editingSource && editable ? openSourceEdit : undefined}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingSource && editable ? "pointer" : "default",
+            }}
+          >
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Source</span>
+            {!editingSource ? (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>
+                {sourceLabel(lead) || "not set"}
+              </span>
+            ) : (
+              <>
+                <select
+                  autoFocus
+                  value={sourceDraft}
+                  onChange={(e) => setSourceDraft(e.target.value)}
+                  style={{ ...inlineInput, appearance: "auto" }}
+                >
+                  <option value="">Select a source…</option>
+                  {SOURCES.map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={saveSource} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save source">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button
+                  onClick={() => setEditingSource(false)}
+                  style={{ ...iconBtn, background: "#B8B0A0" }}
+                  aria-label="Cancel source edit"
+                >
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
           </div>
-        )}
+          {editingSource && (sourceDraft === "other" || sourceDraft === "website") && (
+            <input
+              value={sourceOtherDraft}
+              onChange={(e) => setSourceOtherDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveSource()}
+              placeholder={sourceDraft === "website" ? "Which page? (optional)" : "Describe the source"}
+              style={{ ...inlineInput, width: "100%", marginTop: 6 }}
+            />
+          )}
+        </div>
 
         {/* revenue — can be attached at any stage */}
         <div
