@@ -747,7 +747,7 @@ function App() {
       if (!node) return;
       const anim = node.animate(
         [{ transform: `translateY(${prevTop - top}px)` }, { transform: "translateY(0)" }],
-        { duration: 280, easing: "ease-out" }
+        { duration: 420, easing: "ease-out" }
       );
       anims.set(id, anim);
     });
