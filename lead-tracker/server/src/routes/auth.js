@@ -38,6 +38,15 @@ function isRateLimited(ip) {
   return recent.length > MAX_PER_WINDOW;
 }
 
+// Sweep out IPs with no recent attempts so `attempts` doesn't grow unbounded
+// over a long-running process.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of attempts) {
+    if (!timestamps.some((t) => now - t < WINDOW_MS)) attempts.delete(ip);
+  }
+}, WINDOW_MS).unref();
+
 router.post("/login", (req, res) => {
   if (isRateLimited(req.ip)) {
     return res.status(429).json({ error: "Too many attempts — try again later" });

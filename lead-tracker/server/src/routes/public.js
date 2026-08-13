@@ -23,6 +23,16 @@ function isRateLimited(ip) {
   return recent.length > MAX_PER_WINDOW;
 }
 
+// Sweep out IPs with no recent hits so `hits` doesn't grow unbounded over a
+// long-running process — otherwise every distinct visitor IP stays in memory
+// forever.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of hits) {
+    if (!timestamps.some((t) => now - t < WINDOW_MS)) hits.delete(ip);
+  }
+}, WINDOW_MS).unref();
+
 router.post("/leads", (req, res) => {
   const key = req.get("X-Intake-Key");
   if (!process.env.FORM_INTAKE_KEY || key !== process.env.FORM_INTAKE_KEY) {
