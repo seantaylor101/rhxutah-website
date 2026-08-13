@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
 
@@ -700,6 +700,60 @@ function App() {
     [leads, activeStage]
   );
 
+  // FLIP animation: when a lead leaves this stage's list (moved to another
+  // bucket) or reorders within it (a date edit changed its sort position),
+  // the cards that shift as a result visibly slide into their new spot
+  // instead of snapping there — otherwise the next lead lands exactly where
+  // the tapped one was, and it's easy to not notice the list changed at all
+  // and act on the wrong card next
+  const cardNodesRef = useRef(new Map());
+  const cardRefCallbacksRef = useRef(new Map());
+  const cardAnimsRef = useRef(new Map());
+  const prevTopsRef = useRef(new Map());
+  const getCardRef = useCallback((id) => {
+    if (!cardRefCallbacksRef.current.has(id)) {
+      cardRefCallbacksRef.current.set(id, (el) => {
+        if (el) cardNodesRef.current.set(id, el);
+        else cardNodesRef.current.delete(id);
+      });
+    }
+    return cardRefCallbacksRef.current.get(id);
+  }, []);
+
+  useLayoutEffect(() => {
+    const nodes = cardNodesRef.current;
+    const anims = cardAnimsRef.current;
+    const prevTops = prevTopsRef.current;
+
+    // a move/edit lands in two state updates (an optimistic one, then a
+    // server-confirmed one a beat later), so this effect can fire again
+    // while the previous run's animation is still playing. Cancel any
+    // in-flight animation before measuring — getBoundingClientRect reflects
+    // a mid-animation visual position, not the card's true resting layout
+    // position, and reading that would throw off the delta. Using the Web
+    // Animations API (rather than a manual transform + CSS transition)
+    // means a fresh animate() call takes effect immediately, with no
+    // deferred-frame handoff that a fast-arriving second update could race
+    nodes.forEach((_, id) => anims.get(id)?.cancel());
+
+    const nextTops = new Map();
+    nodes.forEach((node, id) => {
+      nextTops.set(id, node.getBoundingClientRect().top);
+    });
+    nextTops.forEach((top, id) => {
+      const prevTop = prevTops.get(id);
+      if (prevTop == null || prevTop === top) return;
+      const node = nodes.get(id);
+      if (!node) return;
+      const anim = node.animate(
+        [{ transform: `translateY(${prevTop - top}px)` }, { transform: "translateY(0)" }],
+        { duration: 280, easing: "ease-out" }
+      );
+      anims.set(id, anim);
+    });
+    prevTopsRef.current = nextTops;
+  }, [visible]);
+
   const stats = useMemo(() => {
     const now = new Date();
     const wStart = startOfWeek(now);
@@ -1198,17 +1252,18 @@ function App() {
               </div>
             )}
             {visible.map((lead) => (
-              <LeadTicket
-                key={lead.id}
-                lead={lead}
-                onMove={moveLead}
-                onEditField={editField}
-                onDelete={deleteLead}
-                editable={editable}
-                highlighted={lead.id === highlightedLeadId}
-                onOpenReport={setReportLead}
-                settings={settings}
-              />
+              <div key={lead.id} ref={getCardRef(lead.id)}>
+                <LeadTicket
+                  lead={lead}
+                  onMove={moveLead}
+                  onEditField={editField}
+                  onDelete={deleteLead}
+                  editable={editable}
+                  highlighted={lead.id === highlightedLeadId}
+                  onOpenReport={setReportLead}
+                  settings={settings}
+                />
+              </div>
             ))}
           </main>
         </>
