@@ -2228,13 +2228,16 @@ function WarrantyView({
     return c;
   }, [requests]);
 
-  const visible = useMemo(
-    () =>
-      requests
-        .filter((w) => w.stage === activeStage)
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-    [requests, activeStage]
-  );
+  const visible = useMemo(() => {
+    if (activeStage === "all") {
+      return [...requests].sort((a, b) =>
+        lastNameOf(a.name).localeCompare(lastNameOf(b.name), undefined, { sensitivity: "base" })
+      );
+    }
+    return requests
+      .filter((w) => w.stage === activeStage)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [requests, activeStage]);
 
   return (
     <>
@@ -2291,6 +2294,20 @@ function WarrantyView({
             </button>
           );
         })}
+        <button
+          onClick={() => setActiveStage("all")}
+          style={{
+            ...tabBtn,
+            background: activeStage === "all" ? COLORS.accent : "transparent",
+            color: activeStage === "all" ? "#fff" : COLORS.ink,
+            borderColor: COLORS.accent,
+          }}
+        >
+          All (A–Z)
+          <span style={{ ...countPill, background: activeStage === "all" ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.06)" }}>
+            {requests.length}
+          </span>
+        </button>
       </div>
 
       <main style={cardsWrap}>
@@ -2302,7 +2319,9 @@ function WarrantyView({
               Nothing here
             </div>
             <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-              {activeStage === "reported"
+              {activeStage === "all"
+                ? "Requests you log will show up here, alphabetically by last name."
+                : activeStage === "reported"
                 ? "Tap “New request” to log a warranty issue."
                 : "Requests land here as they move through the process."}
             </div>
