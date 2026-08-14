@@ -1317,17 +1317,10 @@ function App() {
             })}
             <button
               onClick={() => setView("warranty")}
-              aria-label="Warranty requests"
-              style={{
-                ...tabBtn,
-                background: COLORS.rust,
-                borderColor: COLORS.rust,
-                color: "#fff",
-                position: "relative",
-                padding: "7px 10px",
-              }}
+              style={{ ...tabBtn, background: COLORS.rust, borderColor: COLORS.rust, color: "#fff", position: "relative" }}
             >
-              <Wrench size={14} color="#fff" strokeWidth={2.2} />
+              <Wrench size={13} color="#fff" strokeWidth={2.2} />
+              Requests
               {openWarrantyCount > 0 && (
                 <span
                   style={{
