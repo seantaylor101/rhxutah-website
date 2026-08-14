@@ -80,6 +80,15 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   });
 
   res.json(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id));
+
+  // best-effort — the move is already saved, don't let a push hiccup affect
+  // the response
+  if (!revert && stage === "resolved") {
+    sendPushToRole("owner", {
+      title: "Warranty request resolved",
+      body: `${row.name}${row.issue ? " — " + row.issue : ""}`,
+    }).catch((err) => console.error("warranty resolved push notify failed:", err.message));
+  }
 });
 
 router.patch("/:id", requireAuth("owner"), (req, res) => {
