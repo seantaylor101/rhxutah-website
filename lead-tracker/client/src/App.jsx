@@ -1127,40 +1127,6 @@ function App() {
         </button>
       </div>
 
-      <div style={{ padding: "4px 16px 0" }}>
-        <button
-          onClick={() => setView("warranty")}
-          style={{ ...tabBtn, background: COLORS.rust, borderColor: COLORS.rust, color: "#fff", position: "relative" }}
-        >
-          <Wrench size={13} color="#fff" strokeWidth={2.2} />
-          Requests
-          {openWarrantyCount > 0 && (
-            <span
-              style={{
-                position: "absolute",
-                top: -7,
-                right: -7,
-                minWidth: 18,
-                height: 18,
-                borderRadius: 9,
-                background: "#fff",
-                color: COLORS.rust,
-                fontFamily: FONT_UTIL,
-                fontWeight: 700,
-                fontSize: 11,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: "0 4px",
-                border: `2px solid ${COLORS.bg}`,
-              }}
-            >
-              {openWarrantyCount}
-            </span>
-          )}
-        </button>
-      </div>
-
       {showMetrics && (
         <div style={lookbackPanel}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -1349,6 +1315,37 @@ function App() {
                 </button>
               );
             })}
+            <button
+              onClick={() => setView("warranty")}
+              style={{ ...tabBtn, background: COLORS.rust, borderColor: COLORS.rust, color: "#fff", position: "relative" }}
+            >
+              <Wrench size={13} color="#fff" strokeWidth={2.2} />
+              Requests
+              {openWarrantyCount > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: -7,
+                    right: -7,
+                    minWidth: 18,
+                    height: 18,
+                    borderRadius: 9,
+                    background: "#fff",
+                    color: COLORS.rust,
+                    fontFamily: FONT_UTIL,
+                    fontWeight: 700,
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "0 4px",
+                    border: `2px solid ${COLORS.bg}`,
+                  }}
+                >
+                  {openWarrantyCount}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* stage nav arrows + heading */}
