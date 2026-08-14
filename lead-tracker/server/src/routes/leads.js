@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDueReportReminders } from "../reportReminders.js";
+import { sendPushToRole } from "../pushService.js";
 
 const router = Router();
 
@@ -189,6 +190,15 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   // report" reminder right away instead of waiting for the next hourly sweep
   if (!revert && stage === "completed") {
     sendDueReportReminders().catch((err) => console.error("report reminder sweep failed:", err.message));
+  }
+
+  // best-effort — the move is already saved, don't let a push hiccup affect
+  // the response
+  if (!revert && stage === "won") {
+    sendPushToRole("viewer", {
+      title: "Lead won!",
+      body: `${row.name} has been won. Please contact the salesman and the customer and schedule the work ASAP.`,
+    }).catch((err) => console.error("won push notify failed:", err.message));
   }
 });
 

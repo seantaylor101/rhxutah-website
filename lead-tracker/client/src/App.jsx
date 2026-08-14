@@ -483,7 +483,9 @@ function App() {
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [showPushPrompt, setShowPushPrompt] = useState(false);
   const bootHtmlRef = useRef(null);
+  const pushPromptCheckedRef = useRef(false);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
@@ -573,6 +575,27 @@ function App() {
     if (role) loadSettings();
   }, [role, loadSettings]);
 
+  // offer to enable push the first time the app is ever opened on a device
+  // — runs once (guarded by the ref, not just the effect deps, since `leads`
+  // changes on every refresh) and only if push hasn't already been decided
+  // one way or the other. Marks itself "seen" the moment the prompt is
+  // shown, not on a particular button, so it never nags again regardless of
+  // how the prompt gets dismissed (Enable, Not now, tap-outside, back-gesture)
+  useEffect(() => {
+    if (pushPromptCheckedRef.current) return;
+    if (!role || leads === null) return;
+    pushPromptCheckedRef.current = true;
+    if (!pushSupported()) return;
+    if (localStorage.getItem("rhxPushPromptSeen")) return;
+    getPushSubscription()
+      .then((sub) => {
+        if (sub) return;
+        localStorage.setItem("rhxPushPromptSeen", "1");
+        setShowPushPrompt(true);
+      })
+      .catch(() => {});
+  }, [role, leads]);
+
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
   // backgrounded and refetches immediately the moment it's foregrounded
@@ -661,6 +684,11 @@ function App() {
     setRole(null);
     setLeads(null);
     setShowAccountModal(false);
+  };
+
+  const enablePushFromPrompt = async () => {
+    await enablePush();
+    setShowPushPrompt(false);
   };
 
   const addLead = async (name, job, source, sourceOther) => {
@@ -1427,6 +1455,9 @@ function App() {
       )}
 
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
+      {showPushPrompt && (
+        <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
+      )}
       {showAccountModal && (
         <AccountModal
           role={role}
@@ -1713,6 +1744,88 @@ function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose 
             ))
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PushPromptModal({ onEnable, onDismiss }) {
+  useModalBackClose(onDismiss);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const handleEnable = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onEnable();
+    } catch (e) {
+      setErr(e.message || "Couldn't enable notifications");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onDismiss}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              background: `${COLORS.accent}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Bell size={24} color={COLORS.accent} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 17,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          Stay on top of new leads
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 13.5,
+            color: COLORS.muted,
+            textAlign: "center",
+            marginBottom: 18,
+          }}
+        >
+          Turn on notifications to hear the moment something needs your attention — a new lead, a won job, a
+          warranty request. You can change this anytime from Account.
+        </div>
+        {err && (
+          <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10, textAlign: "center" }}>
+            {err}
+          </div>
+        )}
+        <button
+          onClick={handleEnable}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1 }}
+        >
+          Enable notifications
+        </button>
+        <button
+          onClick={onDismiss}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Not now</span>
+        </button>
       </div>
     </div>
   );
