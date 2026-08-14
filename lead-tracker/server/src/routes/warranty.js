@@ -54,7 +54,9 @@ function getOr404(id, res) {
   return row;
 }
 
-router.post("/:id/move", requireAuth("owner"), (req, res) => {
+// viewer-level so both roles can move a request through the pipeline —
+// adding, editing, and deleting requests stay owner-only below
+router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   const { stage, revert } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getOr404(req.params.id, res);

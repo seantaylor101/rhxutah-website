@@ -1083,6 +1083,7 @@ function App() {
         <WarrantyView
           requests={warrantyRequests}
           editable={editable}
+          canMove={!!role}
           onMove={moveWarrantyRequest}
           onEditField={editWarrantyField}
           onDelete={deleteWarrantyRequest}
@@ -2180,7 +2181,7 @@ const WARRANTY_STAGES = [
   { key: "resolved", label: "Resolved", actionLabel: null, color: COLORS.accent },
 ];
 
-function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd, onBack }) {
+function WarrantyView({ requests, editable, canMove, onMove, onEditField, onDelete, onAdd, onBack }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
 
@@ -2277,6 +2278,7 @@ function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd
             key={w.id}
             request={w}
             editable={editable}
+            canMove={canMove}
             onMove={onMove}
             onEditField={onEditField}
             onDelete={onDelete}
@@ -2298,7 +2300,7 @@ function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd
   );
 }
 
-function WarrantyTicket({ request, editable, onMove, onEditField, onDelete }) {
+function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDelete }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(request.name);
   const [editingPhone, setEditingPhone] = useState(false);
@@ -2509,7 +2511,7 @@ function WarrantyTicket({ request, editable, onMove, onEditField, onDelete }) {
           Reported {fmtDateOnly(request.createdAt)}
         </div>
 
-        {editable && (
+        {canMove && (
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {stageIdx > 0 && (
               <button
