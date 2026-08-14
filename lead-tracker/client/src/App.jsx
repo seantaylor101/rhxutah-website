@@ -131,6 +131,13 @@ const Bell = (p) => (
     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
   </Icon>
 );
+const AlertTriangle = (p) => (
+  <Icon {...p}>
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </Icon>
+);
 
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
@@ -457,7 +464,8 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("board"); // 'board' | 'archive'
+  const [view, setView] = useState("board"); // 'board' | 'archive' | 'warranty'
+  const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
@@ -533,6 +541,20 @@ function App() {
     if (role) loadLeads();
   }, [role, loadLeads]);
 
+  const loadWarrantyRequests = useCallback(async () => {
+    try {
+      const data = await api.listWarrantyRequests();
+      setWarrantyRequests(data);
+    } catch {
+      // keep whatever was already loaded rather than blanking the badge/list
+      // on a transient failure
+    }
+  }, []);
+
+  useEffect(() => {
+    if (role) loadWarrantyRequests();
+  }, [role, loadWarrantyRequests]);
+
   const loadSettings = useCallback(async () => {
     try {
       const data = await api.getSettings();
@@ -552,10 +574,14 @@ function App() {
   useEffect(() => {
     if (!role) return;
     let interval = null;
+    const refresh = () => {
+      loadLeads();
+      loadWarrantyRequests();
+    };
     const start = () => {
       if (interval) return;
-      loadLeads();
-      interval = setInterval(loadLeads, 30000);
+      refresh();
+      interval = setInterval(refresh, 30000);
     };
     const stop = () => {
       if (interval) clearInterval(interval);
@@ -568,7 +594,7 @@ function App() {
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [role, loadLeads]);
+  }, [role, loadLeads, loadWarrantyRequests]);
 
   const navigateToLead = useCallback(
     (leadId) => {
@@ -682,6 +708,58 @@ function App() {
     }
   };
 
+  const openWarrantyCount = useMemo(
+    () => warrantyRequests.filter((w) => w.stage !== "resolved").length,
+    [warrantyRequests]
+  );
+
+  const addWarrantyRequest = async (payload) => {
+    try {
+      const created = await api.addWarrantyRequest(payload);
+      setWarrantyRequests((prev) => [created, ...prev]);
+      setError("");
+    } catch {
+      setError("Couldn't add that warranty request — try again.");
+    }
+  };
+
+  const moveWarrantyRequest = async (id, stage, revert) => {
+    setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? { ...w, stage } : w)));
+    try {
+      const updated = await api.moveWarrantyRequest(id, stage, revert);
+      setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
+      setError("");
+    } catch {
+      setError("Couldn't save that move — try again.");
+      loadWarrantyRequests();
+    }
+  };
+
+  const editWarrantyField = async (id, field, value) => {
+    const patch = typeof field === "object" ? field : { [field]: value };
+    setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? { ...w, ...patch } : w)));
+    try {
+      const updated = await api.editWarrantyRequest(id, patch);
+      setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
+      setError("");
+    } catch {
+      setError("Couldn't save that change — try again.");
+      loadWarrantyRequests();
+    }
+  };
+
+  const deleteWarrantyRequest = async (id) => {
+    const prev = warrantyRequests;
+    setWarrantyRequests((p) => p.filter((w) => w.id !== id));
+    try {
+      await api.deleteWarrantyRequest(id);
+      setError("");
+    } catch {
+      setError("Couldn't delete that warranty request — try again.");
+      setWarrantyRequests(prev);
+    }
+  };
+
   const counts = useMemo(() => {
     const c = {};
     STAGES.forEach((s) => (c[s.key] = 0));
@@ -747,7 +825,7 @@ function App() {
       if (!node) return;
       const anim = node.animate(
         [{ transform: `translateY(${prevTop - top}px)` }, { transform: "translateY(0)" }],
-        { duration: 280, easing: "ease-out" }
+        { duration: 420, easing: "ease-out" }
       );
       anims.set(id, anim);
     });
@@ -917,16 +995,53 @@ function App() {
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button
-                onClick={() => setView(view === "board" ? "archive" : "board")}
-                style={headerIconBtn}
-                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+                onClick={() => setView(view === "warranty" ? "board" : "warranty")}
+                style={{ ...headerIconBtn, background: COLORS.rust, position: "relative" }}
+                aria-label={view === "warranty" ? "Back to board" : "Warranty requests"}
               >
-                {view === "board" ? (
-                  <History size={21} color={COLORS.surface} strokeWidth={2} />
+                {view === "warranty" ? (
+                  <Grid size={20} color="#fff" strokeWidth={2} />
                 ) : (
-                  <Grid size={20} color={COLORS.surface} strokeWidth={2} />
+                  <AlertTriangle size={20} color="#fff" strokeWidth={2} />
+                )}
+                {view !== "warranty" && openWarrantyCount > 0 && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: -4,
+                      right: -4,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      background: "#fff",
+                      color: COLORS.rust,
+                      fontFamily: FONT_UTIL,
+                      fontWeight: 700,
+                      fontSize: 11,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "0 4px",
+                      border: `2px solid ${COLORS.header}`,
+                    }}
+                  >
+                    {openWarrantyCount}
+                  </span>
                 )}
               </button>
+              {view !== "warranty" && (
+                <button
+                  onClick={() => setView(view === "board" ? "archive" : "board")}
+                  style={headerIconBtn}
+                  aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+                >
+                  {view === "board" ? (
+                    <History size={21} color={COLORS.surface} strokeWidth={2} />
+                  ) : (
+                    <Grid size={20} color={COLORS.surface} strokeWidth={2} />
+                  )}
+                </button>
+              )}
               <NotificationBell onOpenLead={navigateToLead} />
               {editable && (
                 <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
@@ -941,6 +1056,17 @@ function App() {
         </div>
       </header>
 
+      {view === "warranty" ? (
+        <WarrantyView
+          requests={warrantyRequests}
+          editable={editable}
+          onMove={moveWarrantyRequest}
+          onEditField={editWarrantyField}
+          onDelete={deleteWarrantyRequest}
+          onAdd={addWarrantyRequest}
+        />
+      ) : (
+        <>
       {/* weekly / monthly counters — 2x2: this month, 2 weeks ago / last week, this week */}
       <div style={statsGrid}>
         <button
@@ -1269,6 +1395,8 @@ function App() {
         </>
       ) : (
         <ArchiveView leads={leads} editable={editable} onOpenReport={setReportLead} />
+      )}
+        </>
       )}
 
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
@@ -1901,6 +2029,443 @@ function BackupsModal({ onClose, onRestored }) {
               </div>
             )
         )}
+      </div>
+    </div>
+  );
+}
+
+const WARRANTY_STAGES = [
+  { key: "reported", label: "Reported", actionLabel: "Schedule", color: COLORS.rust },
+  { key: "scheduled", label: "Scheduled", actionLabel: "Mark resolved", color: COLORS.amber },
+  { key: "resolved", label: "Resolved", actionLabel: null, color: COLORS.accent },
+];
+
+function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd }) {
+  const [activeStage, setActiveStage] = useState("reported");
+  const [showAdd, setShowAdd] = useState(false);
+
+  const counts = useMemo(() => {
+    const c = { reported: 0, scheduled: 0, resolved: 0 };
+    requests.forEach((w) => {
+      c[w.stage] = (c[w.stage] || 0) + 1;
+    });
+    return c;
+  }, [requests]);
+
+  const visible = useMemo(
+    () =>
+      requests
+        .filter((w) => w.stage === activeStage)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+    [requests, activeStage]
+  );
+
+  return (
+    <>
+      <div style={{ padding: "14px 16px 0" }}>
+        <div
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}
+        >
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: COLORS.ink }}>
+            Warranty requests
+          </div>
+          {editable && (
+            <button
+              onClick={() => setShowAdd(true)}
+              style={{ ...addBtn, background: COLORS.rust }}
+              aria-label="Add warranty request"
+            >
+              <Plus size={16} strokeWidth={2.5} />
+              New request
+            </button>
+          )}
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 10 }}>
+          Track a warranty issue from reported to resolved.
+        </div>
+      </div>
+
+      <div style={tabsRow}>
+        {WARRANTY_STAGES.map((s) => {
+          const active = s.key === activeStage;
+          return (
+            <button
+              key={s.key}
+              onClick={() => setActiveStage(s.key)}
+              style={{
+                ...tabBtn,
+                background: active ? s.color : "transparent",
+                color: active ? "#fff" : COLORS.ink,
+                borderColor: s.color,
+              }}
+            >
+              {s.label}
+              <span
+                style={{ ...countPill, background: active ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.06)" }}
+              >
+                {counts[s.key] || 0}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <main style={cardsWrap}>
+        {visible.length === 0 && (
+          <div style={emptyState}>
+            <div
+              style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
+            >
+              Nothing here
+            </div>
+            <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+              {activeStage === "reported"
+                ? "Tap “New request” to log a warranty issue."
+                : "Requests land here as they move through the process."}
+            </div>
+          </div>
+        )}
+        {visible.map((w) => (
+          <WarrantyTicket
+            key={w.id}
+            request={w}
+            editable={editable}
+            onMove={onMove}
+            onEditField={onEditField}
+            onDelete={onDelete}
+          />
+        ))}
+      </main>
+
+      {showAdd && (
+        <AddWarrantyModal
+          onAdd={async (payload) => {
+            await onAdd(payload);
+            setShowAdd(false);
+            setActiveStage("reported");
+          }}
+          onClose={() => setShowAdd(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function WarrantyTicket({ request, editable, onMove, onEditField, onDelete }) {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(request.name);
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState(request.phone || "");
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState(request.email || "");
+  const [editingIssue, setEditingIssue] = useState(false);
+  const [issueDraft, setIssueDraft] = useState(request.issue || "");
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  const stageIdx = WARRANTY_STAGES.findIndex((s) => s.key === request.stage);
+  const stage = WARRANTY_STAGES[stageIdx];
+  const nextStage = WARRANTY_STAGES[stageIdx + 1];
+
+  const saveName = () => {
+    const trimmed = nameDraft.trim();
+    if (trimmed) onEditField(request.id, "name", trimmed);
+    else setNameDraft(request.name);
+    setEditingName(false);
+  };
+  const savePhone = () => {
+    onEditField(request.id, "phone", phoneDraft.trim());
+    setEditingPhone(false);
+  };
+  const saveEmail = () => {
+    onEditField(request.id, "email", emailDraft.trim());
+    setEditingEmail(false);
+  };
+  const saveIssue = () => {
+    onEditField(request.id, "issue", issueDraft.trim());
+    setEditingIssue(false);
+  };
+
+  return (
+    <div style={ticket}>
+      <div style={{ ...ticketStub, background: stage?.color || COLORS.rust }} />
+      <div style={{ flex: 1, padding: "16px 18px 16px 14px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          {!editingName ? (
+            <div
+              onClick={
+                editable
+                  ? () => {
+                      setNameDraft(request.name);
+                      setEditingName(true);
+                    }
+                  : undefined
+              }
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 700,
+                fontSize: 16,
+                color: COLORS.ink,
+                cursor: editable ? "pointer" : "default",
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              {request.name}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 6, flex: 1 }}>
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveName()}
+                style={{ ...inlineInput, flex: 1 }}
+              />
+              <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
+                <Check size={18} color="#fff" />
+              </button>
+              <button
+                onClick={() => setEditingName(false)}
+                style={{ ...iconBtn, background: "#B8B0A0" }}
+                aria-label="Cancel name edit"
+              >
+                <X size={18} color="#fff" />
+              </button>
+            </div>
+          )}
+          {editable && !confirmDel && (
+            <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete request">
+              <Trash2 size={16} color={COLORS.muted} />
+            </button>
+          )}
+        </div>
+
+        {confirmDel && (
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.rust }}>Delete this request?</span>
+            <button
+              onClick={() => onDelete(request.id)}
+              style={{ ...iconBtn, background: COLORS.rust }}
+              aria-label="Confirm delete"
+            >
+              <Check size={16} color="#fff" />
+            </button>
+            <button
+              onClick={() => setConfirmDel(false)}
+              style={{ ...iconBtn, background: "#B8B0A0" }}
+              aria-label="Cancel delete"
+            >
+              <X size={16} color="#fff" />
+            </button>
+          </div>
+        )}
+
+        {/* phone */}
+        <div
+          onClick={!editingPhone && editable ? () => { setPhoneDraft(request.phone || ""); setEditingPhone(true); } : undefined}
+          style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, cursor: !editingPhone && editable ? "pointer" : "default" }}
+        >
+          {!editingPhone ? (
+            request.phone ? (
+              <a href={`tel:${request.phone}`} onClick={(e) => e.stopPropagation()} style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}>
+                {request.phone}
+              </a>
+            ) : (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
+            )
+          ) : (
+            <>
+              <input
+                autoFocus
+                type="tel"
+                value={phoneDraft}
+                onChange={(e) => setPhoneDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && savePhone()}
+                placeholder="e.g. (801) 555-0100"
+                style={{ ...inlineInput, flex: 1 }}
+              />
+              <button onClick={savePhone} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save phone">
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingPhone(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel phone edit">
+                <X size={18} color="#fff" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* email */}
+        <div
+          onClick={!editingEmail && editable ? () => { setEmailDraft(request.email || ""); setEditingEmail(true); } : undefined}
+          style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, cursor: !editingEmail && editable ? "pointer" : "default" }}
+        >
+          {!editingEmail ? (
+            request.email ? (
+              <a href={`mailto:${request.email}`} onClick={(e) => e.stopPropagation()} style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: COLORS.accent, fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>
+                {request.email}
+              </a>
+            ) : (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No email set</span>
+            )
+          ) : (
+            <>
+              <input
+                autoFocus
+                type="email"
+                value={emailDraft}
+                onChange={(e) => setEmailDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveEmail()}
+                placeholder="e.g. name@example.com"
+                style={{ ...inlineInput, flex: 1 }}
+              />
+              <button onClick={saveEmail} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save email">
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingEmail(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel email edit">
+                <X size={18} color="#fff" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* issue */}
+        <div
+          onClick={!editingIssue && editable ? () => { setIssueDraft(request.issue || ""); setEditingIssue(true); } : undefined}
+          style={{ marginTop: 10, cursor: !editingIssue && editable ? "pointer" : "default" }}
+        >
+          {!editingIssue ? (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: request.issue ? COLORS.ink : "#B8B0A0" }}>
+              {request.issue || "No issue description — tap to add"}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <textarea
+                autoFocus
+                value={issueDraft}
+                onChange={(e) => setIssueDraft(e.target.value)}
+                placeholder="What's the issue?"
+                style={{ ...modalTextarea, minHeight: 54 }}
+              />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={saveIssue} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save issue">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingIssue(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel issue edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478", marginTop: 10 }}>
+          Reported {fmtDateOnly(request.createdAt)}
+        </div>
+
+        {editable && (
+          <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {stageIdx > 0 && (
+              <button
+                onClick={() => onMove(request.id, WARRANTY_STAGES[stageIdx - 1].key, true)}
+                style={{ ...actionBtn, background: "transparent", color: COLORS.muted, border: `1px solid ${COLORS.border}` }}
+              >
+                <ChevronLeft size={14} color={COLORS.muted} />
+                Move back
+              </button>
+            )}
+            {nextStage && (
+              <button
+                onClick={() => onMove(request.id, nextStage.key)}
+                style={{ ...actionBtn, background: "transparent", color: nextStage.color, border: `1px solid ${nextStage.color}` }}
+              >
+                {stage.actionLabel}
+                <ArrowRight size={14} color={nextStage.color} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddWarrantyModal({ onAdd, onClose }) {
+  useModalBackClose(onClose);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [issue, setIssue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const canSubmit = name.trim().length > 0;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onAdd({ name: name.trim(), phone: phone.trim(), email: email.trim(), issue: issue.trim() });
+    } catch (e) {
+      setErr(e.message || "Couldn't add that request");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            New warranty request
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <label style={modalLabel}>Customer name</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Nguyen"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Phone</label>
+        <input
+          type="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="e.g. (801) 555-0100"
+          style={modalInput}
+        />
+        <label style={modalLabel}>Email</label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="e.g. name@example.com"
+          style={modalInput}
+        />
+        <label style={modalLabel}>What's the issue?</label>
+        <textarea
+          value={issue}
+          onChange={(e) => setIssue(e.target.value)}
+          placeholder="e.g. Water stain under the north gutter seam"
+          style={modalTextarea}
+        />
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 8, marginBottom: 18 }}>
+          Timestamped as reported now.
+        </div>
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
+        <button
+          onClick={submit}
+          disabled={!canSubmit || busy}
+          style={{ ...addBtn, background: COLORS.rust, width: "100%", justifyContent: "center", opacity: !canSubmit || busy ? 0.5 : 1 }}
+        >
+          Add request
+        </button>
       </div>
     </div>
   );

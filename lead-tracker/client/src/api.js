@@ -45,4 +45,13 @@ export const api = {
   listNotifications: () => request("/notifications"),
   markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
+  listWarrantyRequests: () => request("/warranty"),
+  addWarrantyRequest: (payload) => request("/warranty", { method: "POST", body: JSON.stringify(payload) }),
+  moveWarrantyRequest: (id, stage, revert) =>
+    request(`/warranty/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify({ stage, ...(revert ? { revert: true } : {}) }),
+    }),
+  editWarrantyRequest: (id, patch) => request(`/warranty/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteWarrantyRequest: (id) => request(`/warranty/${id}`, { method: "DELETE" }),
 };

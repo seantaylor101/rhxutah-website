@@ -11,6 +11,7 @@ import publicRoutes from "./routes/public.js";
 import notificationsRoutes from "./routes/notifications.js";
 import settingsRoutes from "./routes/settings.js";
 import backupsRoutes from "./routes/backups.js";
+import warrantyRoutes from "./routes/warranty.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
 import { startBackupScheduler } from "./backupService.js";
 
@@ -37,6 +38,7 @@ app.use("/api/push", pushRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/backups", backupsRoutes);
+app.use("/api/warranty", warrantyRoutes);
 app.use("/api/public", publicCors, publicRoutes);
 
 const clientDist = path.join(__dirname, "../../client/dist");
