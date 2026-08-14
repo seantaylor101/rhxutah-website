@@ -142,6 +142,13 @@ const Camera = (p) => (
     <circle cx="12" cy="13" r="4" />
   </Icon>
 );
+const Info = (p) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="11.5" />
+    <circle cx="12" cy="8" r="1.1" fill={p.color || "currentColor"} stroke="none" />
+  </Icon>
+);
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -287,6 +294,70 @@ function fmtPercent(n) {
   if (n == null) return "—";
   return `${Math.round(n * 100)}%`;
 }
+
+// drives both the metricsGrid render and each tile's info pop-up, so the
+// number shown and the explanation of it can't drift apart
+const METRIC_INFO = [
+  {
+    key: "closeRate",
+    label: "Lead Win Rate",
+    value: (m) => fmtPercent(m.closeRate),
+    sub: (m) => (m.closeRateSample ? `${m.closeRateWon} won / ${m.closeRateSample} decided` : "no decided leads yet"),
+    description:
+      "Of every lead that reached a final outcome — won or lost — the share that ended up won. This includes all decided leads, whether or not an estimate was ever sent.",
+  },
+  {
+    key: "estimateWinRate",
+    label: "Estimate Win Rate",
+    value: (m) => fmtPercent(m.estimateWinRate),
+    sub: (m) =>
+      m.estimateWinRateSample ? `${m.estimateWinRateWon} won / ${m.estimateWinRateSample} decided` : "no decided estimates yet",
+    description:
+      "Same idea as Lead Win Rate, but narrowed to leads that actually got a bid sent. It isolates how well pricing and follow-up close deals once a number is in the customer's hands, separate from how many leads make it to a bid at all.",
+  },
+  {
+    key: "avgWonRevenue",
+    label: "Average Job Value",
+    value: (m) => (m.avgWonRevenue != null ? fmtCurrency(m.avgWonRevenue) : "—"),
+    sub: (m) => (m.avgWonRevenueSample ? `across ${m.avgWonRevenueSample} won jobs` : "no won leads with revenue yet"),
+    description: "The average revenue on jobs that were won and have a revenue amount entered — a sense of typical deal size.",
+  },
+  {
+    key: "avgRevenuePerLead",
+    label: "Revenue per Lead",
+    value: (m) => (m.avgRevenuePerLead != null ? fmtCurrency(m.avgRevenuePerLead) : "—"),
+    sub: () => "blends win rate + deal size",
+    description:
+      "Total revenue from won jobs divided by every lead in the group — won, lost, or still open. Unlike Average Job Value, this factors in how many leads actually convert, so it reflects what a typical incoming lead is worth to the business.",
+  },
+  {
+    key: "avgDaysNewToBid",
+    label: "Time to Estimate",
+    value: (m) => fmtDays(m.avgDaysNewToBid),
+    sub: (m) => (m.avgDaysNewToBidSample ? `across ${m.avgDaysNewToBidSample} estimates` : "no bids sent yet"),
+    description:
+      "The average number of days between a lead coming in and an estimate being sent. Shorter is better — it measures how quickly leads get a bid in hand.",
+  },
+  {
+    key: "avgDaysNewToWon",
+    label: "Sales Cycle",
+    value: (m) => fmtDays(m.avgDaysNewToWon),
+    sub: (m) => (m.avgDaysNewToWonSample ? `across ${m.avgDaysNewToWonSample} won jobs` : "no won leads yet"),
+    description:
+      "The average number of days between a lead coming in and the job being won. Covers the whole sales process end to end, not just the estimate step.",
+  },
+  {
+    key: "avgDaysPerThousand",
+    label: "Workdays per $1K",
+    value: (m) => (m.avgDaysPerThousand != null ? `${m.avgDaysPerThousand.toFixed(2)} days` : "—"),
+    sub: (m) =>
+      m.avgDaysPerThousandSample
+        ? `per $1,000 completed revenue, ${m.avgDaysPerThousandSample} jobs`
+        : "no completed jobs with start date + revenue yet",
+    description:
+      "A build-pace measure: how many workdays it takes on average to complete $1,000 of job revenue, based on completed jobs with a start date, completion date (or a manual work-days entry), and revenue. Lower means more revenue completed per day worked.",
+  },
+];
 
 // best-effort last name for alphabetical sorting — takes the final word of
 // a multi-word name, falling back to the whole name for a single-word one
@@ -484,6 +555,7 @@ function App() {
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const [showMetrics, setShowMetrics] = useState(false);
   const [metricsSource, setMetricsSource] = useState("all");
+  const [metricInfo, setMetricInfo] = useState(null); // METRIC_INFO entry | null
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({ overheadPercent: 13 });
   const [reportLead, setReportLead] = useState(null);
@@ -1208,64 +1280,39 @@ function App() {
             Based on {metrics.totalLeads} lead{metrics.totalLeads === 1 ? "" : "s"}
           </div>
           <div style={metricsGrid}>
-            <div style={metricTile}>
-              <div style={metricLabel}>Lead Win Rate</div>
-              <div style={metricValue}>{fmtPercent(metrics.closeRate)}</div>
-              <div style={metricSub}>
-                {metrics.closeRateSample
-                  ? `${metrics.closeRateWon} won / ${metrics.closeRateSample} decided`
-                  : "no decided leads yet"}
+            {METRIC_INFO.map((info) => (
+              <button key={info.key} onClick={() => setMetricInfo(info)} style={{ ...metricTile, ...metricTileBtn }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <div style={metricLabel}>{info.label}</div>
+                  <Info size={13} color={COLORS.muted} />
+                </div>
+                <div style={metricValue}>{info.value(metrics)}</div>
+                <div style={metricSub}>{info.sub(metrics)}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {metricInfo && (
+        <div style={modalOverlay} onClick={() => setMetricInfo(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+                {metricInfo.label}
               </div>
+              <button onClick={() => setMetricInfo(null)} style={iconBtnGhost} aria-label="Close">
+                <X size={18} color={COLORS.muted} />
+              </button>
             </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Estimate Win Rate</div>
-              <div style={metricValue}>{fmtPercent(metrics.estimateWinRate)}</div>
-              <div style={metricSub}>
-                {metrics.estimateWinRateSample
-                  ? `${metrics.estimateWinRateWon} won / ${metrics.estimateWinRateSample} decided`
-                  : "no decided estimates yet"}
-              </div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: COLORS.ink }}>
+              {metricInfo.value(metrics)}
             </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Average Job Value</div>
-              <div style={metricValue}>
-                {metrics.avgWonRevenue != null ? fmtCurrency(metrics.avgWonRevenue) : "—"}
-              </div>
-              <div style={metricSub}>
-                {metrics.avgWonRevenueSample ? `across ${metrics.avgWonRevenueSample} won jobs` : "no won leads with revenue yet"}
-              </div>
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 2, marginBottom: 14 }}>
+              {metricInfo.sub(metrics)}
             </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Revenue per Lead</div>
-              <div style={metricValue}>
-                {metrics.avgRevenuePerLead != null ? fmtCurrency(metrics.avgRevenuePerLead) : "—"}
-              </div>
-              <div style={metricSub}>blends win rate + deal size</div>
-            </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Time to Estimate</div>
-              <div style={metricValue}>{fmtDays(metrics.avgDaysNewToBid)}</div>
-              <div style={metricSub}>
-                {metrics.avgDaysNewToBidSample ? `across ${metrics.avgDaysNewToBidSample} estimates` : "no bids sent yet"}
-              </div>
-            </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Sales Cycle</div>
-              <div style={metricValue}>{fmtDays(metrics.avgDaysNewToWon)}</div>
-              <div style={metricSub}>
-                {metrics.avgDaysNewToWonSample ? `across ${metrics.avgDaysNewToWonSample} won jobs` : "no won leads yet"}
-              </div>
-            </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Workdays per $1K</div>
-              <div style={metricValue}>
-                {metrics.avgDaysPerThousand != null ? `${metrics.avgDaysPerThousand.toFixed(2)} days` : "—"}
-              </div>
-              <div style={metricSub}>
-                {metrics.avgDaysPerThousandSample
-                  ? `per $1,000 completed revenue, ${metrics.avgDaysPerThousandSample} jobs`
-                  : "no completed jobs with start date + revenue yet"}
-              </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, lineHeight: 1.5 }}>
+              {metricInfo.description}
             </div>
           </div>
         </div>
@@ -4839,6 +4886,14 @@ const metricTile = {
   border: `1px solid ${COLORS.border}`,
   borderRadius: 8,
   padding: "10px 12px",
+};
+
+const metricTileBtn = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  cursor: "pointer",
+  fontFamily: "inherit",
 };
 
 const metricLabel = {
