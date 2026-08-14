@@ -282,6 +282,14 @@ function fmtPercent(n) {
   return `${Math.round(n * 100)}%`;
 }
 
+// best-effort last name for alphabetical sorting — takes the final word of
+// a multi-word name, falling back to the whole name for a single-word one
+// (a company name, a first name only, etc.)
+function lastNameOf(name) {
+  const parts = String(name || "").trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
+}
+
 function sourceLabel(lead) {
   if (!lead.source) return null;
   if (lead.source === "other") return lead.sourceOther ? `Other — ${lead.sourceOther}` : "Other";
@@ -2498,10 +2506,18 @@ function AddWarrantyModal({ onAdd, onClose }) {
 }
 
 function ArchiveView({ leads, editable, onOpenReport }) {
-  const [granularity, setGranularity] = useState("month"); // 'week' | 'month' | 'year'
+  const [granularity, setGranularity] = useState("month"); // 'week' | 'month' | 'year' | 'all'
   const [openKey, setOpenKey] = useState(null);
 
   const paidLeads = useMemo(() => (leads || []).filter((l) => l.paidAt), [leads]);
+
+  const allSorted = useMemo(
+    () =>
+      [...paidLeads].sort((a, b) =>
+        lastNameOf(a.name).localeCompare(lastNameOf(b.name), undefined, { sensitivity: "base" })
+      ),
+    [paidLeads]
+  );
 
   const periods = useMemo(() => {
     const map = new Map();
@@ -2535,8 +2551,8 @@ function ArchiveView({ leads, editable, onOpenReport }) {
 
   return (
     <main style={cardsWrap}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-        {["week", "month", "year"].map((g) => (
+      <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+        {["week", "month", "year", "all"].map((g) => (
           <button
             key={g}
             onClick={() => setGranularity(g)}
@@ -2547,98 +2563,127 @@ function ArchiveView({ leads, editable, onOpenReport }) {
               borderColor: COLORS.accent,
             }}
           >
-            {g[0].toUpperCase() + g.slice(1)}
+            {g === "all" ? "All (A–Z)" : g[0].toUpperCase() + g.slice(1)}
           </button>
         ))}
       </div>
 
-      {periods.length === 0 && (
-        <div style={emptyState}>
-          <div
-            style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
-          >
-            Nothing archived yet
-          </div>
-          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-            Paid jobs land here so you can look back by week, month, or year.
-          </div>
-        </div>
-      )}
+      {granularity === "all" ? (
+        <>
+          {allSorted.length === 0 && (
+            <div style={emptyState}>
+              <div
+                style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
+              >
+                Nothing archived yet
+              </div>
+              <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+                Paid jobs land here — this view lists every one of them, alphabetically by last name.
+              </div>
+            </div>
+          )}
+          {allSorted.length > 0 && (
+            <div style={{ ...ticket, flexDirection: "column", padding: 0 }}>
+              {allSorted.map((l) => (
+                <ArchiveLeadRow key={l.id} lead={l} editable={editable} onOpenReport={onOpenReport} />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {periods.length === 0 && (
+            <div style={emptyState}>
+              <div
+                style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
+              >
+                Nothing archived yet
+              </div>
+              <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+                Paid jobs land here so you can look back by week, month, or year.
+              </div>
+            </div>
+          )}
 
-      {periods.map((p) => {
-        const revenue = p.leads.reduce((s, l) => s + (l.revenue || 0), 0);
-        const open = openKey === p.key;
-        return (
-          <div key={p.key} style={{ ...ticket, flexDirection: "column", padding: 0 }}>
-            <button
-              onClick={() => setOpenKey(open ? null : p.key)}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                width: "100%",
-                padding: "12px 14px",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                textAlign: "left",
-              }}
-            >
-              <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
-                  {p.label}
-                </div>
-                <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
-                  {p.leads.length} paid · {fmtCurrency(revenue)}
-                </div>
-              </div>
-              {open ? <ChevronUp size={16} color="#9A9184" /> : <ChevronDown size={16} color="#9A9184" />}
-            </button>
-            {open && (
-              <div style={{ borderTop: "1px solid #E4DFD1" }}>
-                {p.leads
-                  .sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))
-                  .map((l) => (
-                    <div
-                      key={l.id}
-                      style={{
-                        padding: "10px 14px",
-                        borderBottom: "1px solid #EDE8DB",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: 8,
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
-                          {l.name}
-                        </div>
-                        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
-                          {fmtCurrency(l.revenue)} · paid {fmtDate(l.paidAt.slice(0, 10))}
-                          {sourceLabel(l) ? ` · ${sourceLabel(l)}` : ""}
-                        </div>
-                      </div>
-                      {editable && l.completedAt && (
-                        <button
-                          onClick={() => onOpenReport(l)}
-                          style={{
-                            ...archiveReportBtn,
-                            borderColor: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
-                            color: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
-                          }}
-                        >
-                          Report
-                        </button>
-                      )}
+          {periods.map((p) => {
+            const revenue = p.leads.reduce((s, l) => s + (l.revenue || 0), 0);
+            const open = openKey === p.key;
+            return (
+              <div key={p.key} style={{ ...ticket, flexDirection: "column", padding: 0 }}>
+                <button
+                  onClick={() => setOpenKey(open ? null : p.key)}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    width: "100%",
+                    padding: "12px 14px",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
+                      {p.label}
                     </div>
-                  ))}
+                    <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
+                      {p.leads.length} paid · {fmtCurrency(revenue)}
+                    </div>
+                  </div>
+                  {open ? <ChevronUp size={16} color="#9A9184" /> : <ChevronDown size={16} color="#9A9184" />}
+                </button>
+                {open && (
+                  <div style={{ borderTop: "1px solid #E4DFD1" }}>
+                    {p.leads
+                      .sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))
+                      .map((l) => (
+                        <ArchiveLeadRow key={l.id} lead={l} editable={editable} onOpenReport={onOpenReport} />
+                      ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+        </>
+      )}
     </main>
+  );
+}
+
+function ArchiveLeadRow({ lead: l, editable, onOpenReport }) {
+  return (
+    <div
+      style={{
+        padding: "10px 14px",
+        borderBottom: "1px solid #EDE8DB",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>{l.name}</div>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
+          {fmtCurrency(l.revenue)} · paid {fmtDate(l.paidAt.slice(0, 10))}
+          {sourceLabel(l) ? ` · ${sourceLabel(l)}` : ""}
+        </div>
+      </div>
+      {editable && l.completedAt && (
+        <button
+          onClick={() => onOpenReport(l)}
+          style={{
+            ...archiveReportBtn,
+            borderColor: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
+            color: l.reportCompletedAt ? COLORS.accent : COLORS.amber,
+          }}
+        >
+          Report
+        </button>
+      )}
+    </div>
   );
 }
 
