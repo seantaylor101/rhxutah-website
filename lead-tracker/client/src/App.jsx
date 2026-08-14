@@ -1133,7 +1133,7 @@ function App() {
           style={{ ...tabBtn, background: COLORS.rust, borderColor: COLORS.rust, color: "#fff", position: "relative" }}
         >
           <Wrench size={13} color="#fff" strokeWidth={2.2} />
-          Warranty
+          Requests
           {openWarrantyCount > 0 && (
             <span
               style={{
