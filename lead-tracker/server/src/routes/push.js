@@ -13,7 +13,7 @@ router.post("/subscribe", requireAuth("viewer"), (req, res) => {
   if (!sub || !sub.endpoint || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
     return res.status(400).json({ error: "Invalid subscription" });
   }
-  saveSubscription(sub);
+  saveSubscription(sub, req.role);
   res.status(201).json({ ok: true });
 });
 

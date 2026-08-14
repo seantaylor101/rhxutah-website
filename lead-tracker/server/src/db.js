@@ -74,6 +74,15 @@ db.exec(`
   );
 `);
 
+// which role was signed in on the device when it subscribed — lets a
+// notification target just the owner or just the viewer instead of every
+// registered device. Subscriptions saved before this column existed have no
+// role on file until that device unsubscribes/resubscribes (e.g. toggling
+// push off and back on in Account settings).
+if (!db.prepare(`PRAGMA table_info(push_subscriptions)`).all().some((c) => c.name === "role")) {
+  db.exec(`ALTER TABLE push_subscriptions ADD COLUMN role TEXT`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
