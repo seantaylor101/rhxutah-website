@@ -118,6 +118,11 @@ const Grid = (p) => (
     <rect x="14" y="14" width="7" height="7" />
   </Icon>
 );
+const Wrench = (p) => (
+  <Icon {...p}>
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+  </Icon>
+);
 const MoreVertical = ({ size = 16, color = "currentColor" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24">
     <circle cx="12" cy="5" r="1.7" fill={color} />
@@ -131,14 +136,6 @@ const Bell = (p) => (
     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
   </Icon>
 );
-const AlertTriangle = (p) => (
-  <Icon {...p}>
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    <line x1="12" y1="9" x2="12" y2="13" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </Icon>
-);
-
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -972,6 +969,31 @@ function App() {
         </button>
       )}
 
+      {view !== "warranty" && openWarrantyCount > 0 && (
+        <button
+          onClick={() => setView("warranty")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            width: "100%",
+            padding: "10px 16px",
+            background: COLORS.rust,
+            border: "none",
+            cursor: "pointer",
+            fontFamily: FONT_BODY,
+            fontWeight: 600,
+            fontSize: 13,
+            color: "#fff",
+          }}
+        >
+          <Wrench size={15} color="#fff" strokeWidth={2.2} />
+          {openWarrantyCount} warranty request{openWarrantyCount === 1 ? "" : "s"}{" "}
+          {openWarrantyCount === 1 ? "needs" : "need"} attention — tap to view
+        </button>
+      )}
+
       <header style={header}>
         <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -993,42 +1015,7 @@ function App() {
                 <span>View only</span>
               </div>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button
-                onClick={() => setView(view === "warranty" ? "board" : "warranty")}
-                style={{ ...headerIconBtn, background: COLORS.rust, position: "relative" }}
-                aria-label={view === "warranty" ? "Back to board" : "Warranty requests"}
-              >
-                {view === "warranty" ? (
-                  <Grid size={20} color="#fff" strokeWidth={2} />
-                ) : (
-                  <AlertTriangle size={20} color="#fff" strokeWidth={2} />
-                )}
-                {view !== "warranty" && openWarrantyCount > 0 && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: -4,
-                      right: -4,
-                      minWidth: 18,
-                      height: 18,
-                      borderRadius: 9,
-                      background: "#fff",
-                      color: COLORS.rust,
-                      fontFamily: FONT_UTIL,
-                      fontWeight: 700,
-                      fontSize: 11,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: "0 4px",
-                      border: `2px solid ${COLORS.header}`,
-                    }}
-                  >
-                    {openWarrantyCount}
-                  </span>
-                )}
-              </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {view !== "warranty" && (
                 <button
                   onClick={() => setView(view === "board" ? "archive" : "board")}
@@ -1064,6 +1051,7 @@ function App() {
           onEditField={editWarrantyField}
           onDelete={deleteWarrantyRequest}
           onAdd={addWarrantyRequest}
+          onBack={() => setView("board")}
         />
       ) : (
         <>
@@ -1136,6 +1124,10 @@ function App() {
           <TrendingUp size={14} color={COLORS.accent} />
           <span>Performance metrics</span>
           {showMetrics ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
+        </button>
+        <button onClick={() => setView("warranty")} style={{ ...lookbackToggle, color: COLORS.rust }}>
+          <Wrench size={14} color={COLORS.rust} />
+          <span>Warranty requests{openWarrantyCount > 0 ? ` (${openWarrantyCount})` : ""}</span>
         </button>
       </div>
 
@@ -2040,7 +2032,7 @@ const WARRANTY_STAGES = [
   { key: "resolved", label: "Resolved", actionLabel: null, color: COLORS.accent },
 ];
 
-function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd }) {
+function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd, onBack }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
 
@@ -2066,9 +2058,16 @@ function WarrantyView({ requests, editable, onMove, onEditField, onDelete, onAdd
         <div
           style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}
         >
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: COLORS.ink }}>
-            Warranty requests
-          </div>
+          <button
+            onClick={onBack}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+            aria-label="Back to board"
+          >
+            <ChevronLeft size={20} color={COLORS.ink} />
+            <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: COLORS.ink }}>
+              Warranty requests
+            </span>
+          </button>
           {editable && (
             <button
               onClick={() => setShowAdd(true)}
@@ -4029,9 +4028,9 @@ const moreMenuItem = {
 };
 
 const headerIconBtn = {
-  width: 42,
-  height: 42,
-  borderRadius: 11,
+  width: 38,
+  height: 38,
+  borderRadius: 10,
   border: "none",
   background: "rgba(255,255,255,0.16)",
   display: "flex",
