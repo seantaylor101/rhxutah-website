@@ -16,6 +16,19 @@ async function request(path, options = {}) {
   return data;
 }
 
+// separate from request() because it must NOT set a JSON content-type —
+// the browser needs to set its own multipart/form-data boundary
+async function requestForm(path, formData) {
+  const res = await fetch(`${BASE}${path}`, { method: "POST", credentials: "include", body: formData });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error((data && data.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
 export const api = {
   me: () => request("/auth/me"),
   login: (passcode) => request("/auth/login", { method: "POST", body: JSON.stringify({ passcode }) }),
@@ -54,4 +67,11 @@ export const api = {
     }),
   editWarrantyRequest: (id, patch) => request(`/warranty/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteWarrantyRequest: (id) => request(`/warranty/${id}`, { method: "DELETE" }),
+  uploadWarrantyPhotos: (id, files, type) => {
+    const form = new FormData();
+    if (type) form.append("type", type);
+    for (const file of files) form.append("photos", file);
+    return requestForm(`/warranty/${id}/photos`, form);
+  },
+  deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
 };

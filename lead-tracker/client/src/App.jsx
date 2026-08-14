@@ -136,6 +136,12 @@ const Bell = (p) => (
     <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
   </Icon>
 );
+const Camera = (p) => (
+  <Icon {...p}>
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
+  </Icon>
+);
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -793,6 +799,22 @@ function App() {
     }
   };
 
+  // left to throw on failure — the photo picker shows the error inline
+  // next to the upload button instead of the global banner
+  const uploadWarrantyPhotos = async (id, files, type) => {
+    const updated = await api.uploadWarrantyPhotos(id, files, type);
+    setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
+  };
+
+  const deleteWarrantyPhoto = async (id, photoId) => {
+    try {
+      const updated = await api.deleteWarrantyPhoto(id, photoId);
+      setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
+    } catch {
+      setError("Couldn't delete that photo — try again.");
+    }
+  };
+
   const counts = useMemo(() => {
     const c = {};
     STAGES.forEach((s) => (c[s.key] = 0));
@@ -1088,6 +1110,8 @@ function App() {
           onEditField={editWarrantyField}
           onDelete={deleteWarrantyRequest}
           onAdd={addWarrantyRequest}
+          onUploadPhotos={uploadWarrantyPhotos}
+          onDeletePhoto={deleteWarrantyPhoto}
           onBack={() => setView("board")}
         />
       ) : (
@@ -2181,7 +2205,18 @@ const WARRANTY_STAGES = [
   { key: "resolved", label: "Resolved", actionLabel: null, color: COLORS.accent },
 ];
 
-function WarrantyView({ requests, editable, canMove, onMove, onEditField, onDelete, onAdd, onBack }) {
+function WarrantyView({
+  requests,
+  editable,
+  canMove,
+  onMove,
+  onEditField,
+  onDelete,
+  onAdd,
+  onUploadPhotos,
+  onDeletePhoto,
+  onBack,
+}) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
 
@@ -2282,6 +2317,8 @@ function WarrantyView({ requests, editable, canMove, onMove, onEditField, onDele
             onMove={onMove}
             onEditField={onEditField}
             onDelete={onDelete}
+            onUploadPhotos={onUploadPhotos}
+            onDeletePhoto={onDeletePhoto}
           />
         ))}
       </main>
@@ -2300,7 +2337,7 @@ function WarrantyView({ requests, editable, canMove, onMove, onEditField, onDele
   );
 }
 
-function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDelete }) {
+function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDelete, onUploadPhotos, onDeletePhoto }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(request.name);
   const [editingPhone, setEditingPhone] = useState(false);
@@ -2310,6 +2347,7 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
   const [editingIssue, setEditingIssue] = useState(false);
   const [issueDraft, setIssueDraft] = useState(request.issue || "");
   const [confirmDel, setConfirmDel] = useState(false);
+  const [showResolveModal, setShowResolveModal] = useState(false);
 
   const stageIdx = WARRANTY_STAGES.findIndex((s) => s.key === request.stage);
   const stage = WARRANTY_STAGES[stageIdx];
@@ -2507,6 +2545,14 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
           )}
         </div>
 
+        <WarrantyPhotos
+          request={request}
+          editable={editable}
+          canMove={canMove}
+          onUpload={onUploadPhotos}
+          onDeletePhoto={onDeletePhoto}
+        />
+
         <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478", marginTop: 10 }}>
           Reported {fmtDateOnly(request.createdAt)}
         </div>
@@ -2524,7 +2570,7 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
             )}
             {nextStage && (
               <button
-                onClick={() => onMove(request.id, nextStage.key)}
+                onClick={() => (nextStage.key === "resolved" ? setShowResolveModal(true) : onMove(request.id, nextStage.key))}
                 style={{ ...actionBtn, background: "transparent", color: nextStage.color, border: `1px solid ${nextStage.color}` }}
               >
                 {stage.actionLabel}
@@ -2534,6 +2580,273 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
           </div>
         )}
       </div>
+
+      {showResolveModal && (
+        <ResolvePhotoModal
+          request={request}
+          onUploadPhotos={onUploadPhotos}
+          onConfirm={async () => {
+            await onMove(request.id, "resolved");
+            setShowResolveModal(false);
+          }}
+          onCancel={() => setShowResolveModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [err, setErr] = useState("");
+
+  const afterPhotos = (request.photos || []).filter((p) => p.type === "after");
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onUploadPhotos(request.id, files, "after");
+    } catch (uploadErr) {
+      setErr(uploadErr.message || "Couldn't upload that photo");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async () => {
+    setConfirming(true);
+    await onConfirm();
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          Add a photo of the finished repair
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          At least one after-repair photo is required before this request can be marked resolved.
+        </div>
+
+        {afterPhotos.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+            {afterPhotos.map((p) => (
+              <img
+                key={p.id}
+                src={p.url}
+                alt="After-repair photo"
+                style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: `1px solid ${COLORS.border}` }}
+              />
+            ))}
+          </div>
+        )}
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleFiles}
+          style={{ display: "none" }}
+        />
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={busy}
+          style={{
+            ...addBtn,
+            background: "transparent",
+            color: COLORS.accent,
+            border: `1px solid ${COLORS.accent}`,
+            width: "100%",
+            justifyContent: "center",
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          <Camera size={16} color={COLORS.accent} />
+          {busy ? "Uploading…" : afterPhotos.length > 0 ? "Add another photo" : "Take or choose a photo"}
+        </button>
+
+        {err && <div style={{ marginTop: 10, fontFamily: FONT_BODY, fontSize: 13, color: COLORS.rust }}>{err}</div>}
+
+        <button
+          onClick={confirm}
+          disabled={afterPhotos.length === 0 || busy || confirming}
+          style={{
+            ...addBtn,
+            width: "100%",
+            justifyContent: "center",
+            marginTop: 14,
+            opacity: afterPhotos.length === 0 || busy || confirming ? 0.5 : 1,
+          }}
+        >
+          {confirming ? "Marking resolved…" : "Mark resolved"}
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      {photos.map((p) => (
+        <div key={p.id} style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
+          <img
+            src={p.url}
+            onClick={() => onOpen(p.url)}
+            alt="Warranty photo"
+            style={{
+              width: 60,
+              height: 60,
+              objectFit: "cover",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.border}`,
+              cursor: "pointer",
+              display: "block",
+            }}
+          />
+          {editable && (
+            <button
+              onClick={() => onDeletePhoto(requestId, p.id)}
+              aria-label="Delete photo"
+              style={{
+                position: "absolute",
+                top: -6,
+                right: -6,
+                width: 20,
+                height: 20,
+                borderRadius: "50%",
+                background: COLORS.rust,
+                border: "2px solid #fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <X size={11} color="#fff" strokeWidth={3} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [lightbox, setLightbox] = useState(null);
+
+  const photos = request.photos || [];
+  if (!photos.length && !canMove) return null;
+
+  const afterPhotos = photos.filter((p) => p.type === "after");
+  const beforePhotos = photos.filter((p) => p.type !== "after");
+  const showSplit = afterPhotos.length > 0 && beforePhotos.length > 0;
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onUpload(request.id, files);
+    } catch (uploadErr) {
+      setErr(uploadErr.message || "Couldn't upload those photos");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {photos.length > 0 && showSplit && (
+        <>
+          <div style={photoSectionLabel}>Before</div>
+          <WarrantyPhotoGrid
+            photos={beforePhotos}
+            editable={editable}
+            onDeletePhoto={onDeletePhoto}
+            requestId={request.id}
+            onOpen={setLightbox}
+          />
+          <div style={{ ...photoSectionLabel, marginTop: 10 }}>After</div>
+          <WarrantyPhotoGrid
+            photos={afterPhotos}
+            editable={editable}
+            onDeletePhoto={onDeletePhoto}
+            requestId={request.id}
+            onOpen={setLightbox}
+          />
+        </>
+      )}
+      {photos.length > 0 && !showSplit && (
+        <WarrantyPhotoGrid
+          photos={photos}
+          editable={editable}
+          onDeletePhoto={onDeletePhoto}
+          requestId={request.id}
+          onOpen={setLightbox}
+        />
+      )}
+
+      {canMove && (
+        <div style={{ marginTop: photos.length > 0 ? 8 : 0 }}>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleFiles}
+            style={{ display: "none" }}
+          />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+            style={{
+              ...actionBtn,
+              background: "transparent",
+              color: COLORS.muted,
+              border: `1px solid ${COLORS.border}`,
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            <Camera size={14} color={COLORS.muted} />
+            {busy ? "Uploading…" : "Add photo"}
+          </button>
+          {err && (
+            <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>
+          )}
+        </div>
+      )}
+
+      {lightbox && (
+        <div style={modalOverlay} onClick={() => setLightbox(null)}>
+          <img
+            src={lightbox}
+            alt="Warranty photo full size"
+            style={{ maxWidth: "92vw", maxHeight: "80vh", borderRadius: 8 }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -4320,6 +4633,16 @@ const actionBtn = {
   fontFamily: FONT_BODY,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const photoSectionLabel = {
+  fontFamily: FONT_UTIL,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
+  color: COLORS.muted,
+  marginBottom: 4,
 };
 
 const archiveReportBtn = {

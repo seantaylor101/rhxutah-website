@@ -1,17 +1,35 @@
 import { Router } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendPushToRole } from "../pushService.js";
+import { warrantyPhotoUpload, WARRANTY_PHOTOS_DIR, SAFE_FILENAME } from "../uploads.js";
 
 const router = Router();
 
 const STAGES = new Set(["reported", "scheduled", "resolved"]);
 const EDITABLE_FIELDS = new Set(["name", "phone", "email", "issue", "createdAt"]);
 
+function photosFor(requestId) {
+  return db
+    .prepare(`SELECT id, createdAt, filename, type FROM warranty_photos WHERE requestId = ? ORDER BY createdAt ASC`)
+    .all(requestId)
+    .map((p) => ({ id: p.id, createdAt: p.createdAt, type: p.type, url: `/api/warranty/photos/${p.filename}` }));
+}
+
+function hasAfterPhoto(requestId) {
+  return !!db.prepare(`SELECT 1 FROM warranty_photos WHERE requestId = ? AND type = 'after' LIMIT 1`).get(requestId);
+}
+
+function withPhotos(row) {
+  return { ...row, photos: photosFor(row.id) };
+}
+
 router.get("/", requireAuth("viewer"), (req, res) => {
   const rows = db.prepare(`SELECT * FROM warranty_requests ORDER BY createdAt DESC`).all();
-  res.json(rows);
+  res.json(rows.map(withPhotos));
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
@@ -35,7 +53,7 @@ router.post("/", requireAuth("owner"), (req, res) => {
      VALUES (@id, @name, @phone, @email, @issue, @stage, @createdAt, @scheduledAt, @resolvedAt)`
   ).run(row);
 
-  res.status(201).json(row);
+  res.status(201).json(withPhotos(row));
 
   // best-effort — the request is already saved, don't let a push hiccup
   // affect the response
@@ -62,6 +80,13 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   const row = getOr404(req.params.id, res);
   if (!row) return;
 
+  // require photo proof the repair is actually done before letting the
+  // pipeline mark it resolved — mirrors the client's pre-move photo prompt,
+  // but enforced here too since the client gate is just UX, not a guarantee
+  if (!revert && stage === "resolved" && !hasAfterPhoto(row.id)) {
+    return res.status(400).json({ error: "Add at least one after-repair photo before marking this resolved" });
+  }
+
   const ts = new Date().toISOString();
   const patch = { stage };
   if (revert) {
@@ -79,7 +104,16 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     id: row.id,
   });
 
-  res.json(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id));
+  res.json(withPhotos(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id)));
+
+  // best-effort — the move is already saved, don't let a push hiccup affect
+  // the response
+  if (!revert && stage === "resolved") {
+    sendPushToRole("owner", {
+      title: "Warranty request resolved",
+      body: `${row.name}${row.issue ? " — " + row.issue : ""}`,
+    }).catch((err) => console.error("warranty resolved push notify failed:", err.message));
+  }
 });
 
 router.patch("/:id", requireAuth("owner"), (req, res) => {
@@ -107,14 +141,71 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
     id: row.id,
   });
 
-  res.json(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id));
+  res.json(withPhotos(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id)));
+});
+
+// any authenticated role can attach photos — field crew documenting a
+// repair are just as likely to be on the viewer account as the owner is
+router.post("/:id/photos", requireAuth("viewer"), (req, res) => {
+  warrantyPhotoUpload.array("photos", 6)(req, res, (err) => {
+    if (err) {
+      const message = err.code === "LIMIT_FILE_SIZE" ? "Photo is too large (10MB max)" : "Couldn't upload those photos";
+      return res.status(400).json({ error: message });
+    }
+
+    const row = getOr404(req.params.id, res);
+    if (!row) return;
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: "No image files given" });
+    const type = req.body?.type === "after" ? "after" : "before";
+
+    const now = new Date().toISOString();
+    const insert = db.prepare(
+      `INSERT INTO warranty_photos (id, requestId, filename, type, createdAt) VALUES (?, ?, ?, ?, ?)`
+    );
+    const tx = db.transaction((uploaded) => {
+      for (const f of uploaded) insert.run(randomUUID(), row.id, f.filename, type, now);
+    });
+    tx(files);
+
+    res.status(201).json(withPhotos(row));
+  });
+});
+
+// deleting a photo (not the whole request) stays owner-only, same tier as
+// editing/deleting the request itself
+router.delete("/:id/photos/:photoId", requireAuth("owner"), (req, res) => {
+  const row = getOr404(req.params.id, res);
+  if (!row) return;
+  const photo = db
+    .prepare(`SELECT * FROM warranty_photos WHERE id = ? AND requestId = ?`)
+    .get(req.params.photoId, row.id);
+  if (!photo) return res.status(404).json({ error: "Photo not found" });
+
+  db.prepare(`DELETE FROM warranty_photos WHERE id = ?`).run(photo.id);
+  res.json(withPhotos(row));
+
+  fs.unlink(path.join(WARRANTY_PHOTOS_DIR, photo.filename), () => {});
+});
+
+router.get("/photos/:filename", requireAuth("viewer"), (req, res) => {
+  const { filename } = req.params;
+  if (!SAFE_FILENAME.test(filename)) return res.status(400).end();
+  res.sendFile(path.join(WARRANTY_PHOTOS_DIR, filename), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
 });
 
 router.delete("/:id", requireAuth("owner"), (req, res) => {
   const row = getOr404(req.params.id, res);
   if (!row) return;
+  const photos = db.prepare(`SELECT filename FROM warranty_photos WHERE requestId = ?`).all(row.id);
+  db.prepare(`DELETE FROM warranty_photos WHERE requestId = ?`).run(row.id);
   db.prepare(`DELETE FROM warranty_requests WHERE id = ?`).run(row.id);
   res.status(204).end();
+
+  for (const p of photos) fs.unlink(path.join(WARRANTY_PHOTOS_DIR, p.filename), () => {});
 });
 
 export default router;

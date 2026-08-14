@@ -116,3 +116,13 @@ db.exec(`
     resolvedAt TEXT
   );
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS warranty_photos (
+    id TEXT PRIMARY KEY,
+    requestId TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'before',
+    createdAt TEXT NOT NULL
+  );
+`);
