@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { sendPushToRole } from "../pushService.js";
 
 const router = Router();
 
@@ -35,6 +36,13 @@ router.post("/", requireAuth("owner"), (req, res) => {
   ).run(row);
 
   res.status(201).json(row);
+
+  // best-effort — the request is already saved, don't let a push hiccup
+  // affect the response
+  sendPushToRole("viewer", {
+    title: "New warranty request",
+    body: `${row.name}${row.issue ? " — " + row.issue : ""}`,
+  }).catch((err) => console.error("warranty push notify failed:", err.message));
 });
 
 function getOr404(id, res) {
