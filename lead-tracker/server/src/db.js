@@ -93,3 +93,17 @@ db.exec(`
 `);
 
 db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('overheadPercent', '13')`).run();
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS warranty_requests (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    issue TEXT DEFAULT '',
+    stage TEXT NOT NULL DEFAULT 'reported',
+    createdAt TEXT NOT NULL,
+    scheduledAt TEXT,
+    resolvedAt TEXT
+  );
+`);
