@@ -269,19 +269,28 @@ function computeMetrics(subset) {
     totalLeads: subset.length,
     closeRate: decidedCount ? wonLeads.length / decidedCount : null,
     closeRateWon: wonLeads.length,
+    closeRateLost: lostLeads.length,
     closeRateSample: decidedCount,
     estimateWinRate: estimateDecidedCount ? estimatedWon.length / estimateDecidedCount : null,
     estimateWinRateWon: estimatedWon.length,
+    estimateWinRateLost: estimatedLost.length,
     estimateWinRateSample: estimateDecidedCount,
     avgWonRevenue: avg(wonWithRevenue.map((l) => l.revenue)),
     avgWonRevenueSample: wonWithRevenue.length,
+    // raw distributions, kept alongside the averages above so each metric's
+    // info modal can chart where the underlying numbers actually land
+    // instead of just the single blended figure
+    wonRevenues: wonWithRevenue.map((l) => l.revenue),
     avgRevenuePerLead: subset.length ? wonWithRevenue.reduce((s, l) => s + l.revenue, 0) / subset.length : null,
     avgDaysNewToBid: avg(bidLeads.map((l) => days(l.createdAt, l.bidSentAt))),
     avgDaysNewToBidSample: bidLeads.length,
+    bidDays: bidLeads.map((l) => days(l.createdAt, l.bidSentAt)),
     avgDaysNewToWon: avg(wonLeads.map((l) => days(l.createdAt, l.wonAt))),
     avgDaysNewToWonSample: wonLeads.length,
+    wonDays: wonLeads.map((l) => days(l.createdAt, l.wonAt)),
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
+    paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
   };
 }
 
@@ -295,6 +304,46 @@ function fmtPercent(n) {
   return `${Math.round(n * 100)}%`;
 }
 
+// ---- histogram bucketing, shared by every distribution chart below ----
+
+// snaps a raw bucket width up to a "nice" 1/2/5-times-a-power-of-ten step,
+// the same rounding a hand-drawn axis would use, so bucket edges read as
+// round numbers ($5K, 10 days) instead of arbitrary fractions
+function niceStep(raw) {
+  if (!isFinite(raw) || raw <= 0) return 1;
+  const exp = Math.floor(Math.log10(raw));
+  const base = raw / Math.pow(10, exp);
+  const niceBase = base <= 1 ? 1 : base <= 2 ? 2 : base <= 5 ? 5 : 10;
+  return niceBase * Math.pow(10, exp);
+}
+
+function histogramBuckets(values, targetCount = 6) {
+  const nums = (values || []).filter((n) => n != null && isFinite(n));
+  if (!nums.length) return [];
+  const max = Math.max(...nums);
+  if (max <= 0) return [{ min: 0, max: niceStep(1), count: nums.length }];
+  const step = niceStep(max / targetCount);
+  const bucketCount = Math.max(1, Math.ceil(max / step));
+  const buckets = Array.from({ length: bucketCount }, (_, i) => ({ min: i * step, max: (i + 1) * step, count: 0 }));
+  nums.forEach((n) => {
+    const idx = Math.min(bucketCount - 1, Math.floor(n / step));
+    buckets[idx].count++;
+  });
+  return buckets;
+}
+
+function fmtMoneyShort(n) {
+  if (n >= 1000) {
+    const k = n / 1000;
+    return `$${Number.isInteger(k) ? k : k.toFixed(1)}K`;
+  }
+  return `$${Math.round(n)}`;
+}
+
+function fmtDaysBound(n) {
+  return Number.isInteger(n) ? `${n}` : n.toFixed(1);
+}
+
 // drives both the metricsGrid render and each tile's info pop-up, so the
 // number shown and the explanation of it can't drift apart
 const METRIC_INFO = [
@@ -305,6 +354,19 @@ const METRIC_INFO = [
     sub: (m) => (m.closeRateSample ? `${m.closeRateWon} won / ${m.closeRateSample} decided` : "no decided leads yet"),
     description:
       "Of every lead that reached a final outcome — won or lost — the share that ended up won. This includes all decided leads, whether or not an estimate was ever sent.",
+    chart: (m) => (
+      <ProportionBar
+        segments={[
+          { label: "Won", count: m.closeRateWon, color: COLORS.accent },
+          { label: "Lost", count: m.closeRateLost, color: COLORS.rust },
+        ]}
+        note={
+          m.totalLeads > m.closeRateSample
+            ? `${m.totalLeads - m.closeRateSample} more lead${m.totalLeads - m.closeRateSample === 1 ? "" : "s"} still open, not counted yet`
+            : null
+        }
+      />
+    ),
   },
   {
     key: "estimateWinRate",
@@ -314,13 +376,25 @@ const METRIC_INFO = [
       m.estimateWinRateSample ? `${m.estimateWinRateWon} won / ${m.estimateWinRateSample} decided` : "no decided estimates yet",
     description:
       "Same idea as Lead Win Rate, but narrowed to leads that actually got a bid sent. It isolates how well pricing and follow-up close deals once a number is in the customer's hands, separate from how many leads make it to a bid at all.",
+    chart: (m) => (
+      <ProportionBar
+        segments={[
+          { label: "Won", count: m.estimateWinRateWon, color: COLORS.accent },
+          { label: "Lost", count: m.estimateWinRateLost, color: COLORS.rust },
+        ]}
+      />
+    ),
   },
   {
     key: "avgWonRevenue",
     label: "Average Job Value",
     value: (m) => (m.avgWonRevenue != null ? fmtCurrency(m.avgWonRevenue) : "—"),
     sub: (m) => (m.avgWonRevenueSample ? `across ${m.avgWonRevenueSample} won jobs` : "no won leads with revenue yet"),
-    description: "The average revenue on jobs that were won and have a revenue amount entered — a sense of typical deal size.",
+    description:
+      "The average revenue on jobs that were won and have a revenue amount entered. A single average can be misleading here — a $500 repair, a $2,000 gutter job, and a $30,000 remodel can blend into one number that doesn't look like any real job. The chart below shows how won jobs actually cluster by size.",
+    chart: (m) => (
+      <Histogram buckets={histogramBuckets(m.wonRevenues)} formatBound={fmtMoneyShort} unitLabel="Won jobs by revenue" />
+    ),
   },
   {
     key: "avgRevenuePerLead",
@@ -329,6 +403,14 @@ const METRIC_INFO = [
     sub: () => "blends win rate + deal size",
     description:
       "Total revenue from won jobs divided by every lead in the group — won, lost, or still open. Unlike Average Job Value, this factors in how many leads actually convert, so it reflects what a typical incoming lead is worth to the business.",
+    chart: (m) => (
+      <ComparisonBars
+        items={[
+          { label: "Average Job Value (won jobs only)", value: m.avgWonRevenue || 0, formatted: m.avgWonRevenue != null ? fmtCurrency(m.avgWonRevenue) : "—" },
+          { label: "Revenue per Lead (every lead)", value: m.avgRevenuePerLead || 0, formatted: m.avgRevenuePerLead != null ? fmtCurrency(m.avgRevenuePerLead) : "—" },
+        ]}
+      />
+    ),
   },
   {
     key: "avgDaysNewToBid",
@@ -337,6 +419,9 @@ const METRIC_INFO = [
     sub: (m) => (m.avgDaysNewToBidSample ? `across ${m.avgDaysNewToBidSample} estimates` : "no bids sent yet"),
     description:
       "The average number of days between a lead coming in and an estimate being sent. Shorter is better — it measures how quickly leads get a bid in hand.",
+    chart: (m) => (
+      <Histogram buckets={histogramBuckets(m.bidDays)} formatBound={fmtDaysBound} unitLabel="Days from lead to bid sent" />
+    ),
   },
   {
     key: "avgDaysNewToWon",
@@ -345,6 +430,9 @@ const METRIC_INFO = [
     sub: (m) => (m.avgDaysNewToWonSample ? `across ${m.avgDaysNewToWonSample} won jobs` : "no won leads yet"),
     description:
       "The average number of days between a lead coming in and the job being won. Covers the whole sales process end to end, not just the estimate step.",
+    chart: (m) => (
+      <Histogram buckets={histogramBuckets(m.wonDays)} formatBound={fmtDaysBound} unitLabel="Days from lead to won" />
+    ),
   },
   {
     key: "avgDaysPerThousand",
@@ -356,8 +444,123 @@ const METRIC_INFO = [
         : "no completed jobs with start date + revenue yet",
     description:
       "A build-pace measure: how many workdays it takes on average to complete $1,000 of job revenue, based on completed jobs with a start date, completion date (or a manual work-days entry), and revenue. Lower means more revenue completed per day worked.",
+    chart: (m) => (
+      <Histogram buckets={histogramBuckets(m.paceDays, 5)} formatBound={fmtDaysBound} unitLabel="Workdays per $1,000, by completed job" />
+    ),
   },
 ];
+
+// bucketed distribution chart — used for every metric where the average
+// alone hides how spread out the underlying jobs/leads actually are
+function Histogram({ buckets, formatBound, unitLabel }) {
+  if (!buckets.length) {
+    return <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>Not enough data yet.</div>;
+  }
+  const maxCount = Math.max(...buckets.map((b) => b.count), 1);
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 110, borderBottom: `1px solid ${COLORS.border}` }}>
+        {buckets.map((b, i) => (
+          <div
+            key={i}
+            style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}
+          >
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 10.5, color: COLORS.muted, marginBottom: 2, minHeight: 13 }}>
+              {b.count > 0 ? b.count : ""}
+            </div>
+            <div
+              style={{
+                width: "100%",
+                maxWidth: 24,
+                height: b.count > 0 ? `${Math.max((b.count / maxCount) * 100, 4)}%` : 2,
+                background: b.count > 0 ? COLORS.accent : COLORS.border,
+                borderRadius: "4px 4px 0 0",
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        {buckets.map((b, i) => (
+          <div key={i} style={{ flex: 1, textAlign: "center", fontFamily: FONT_UTIL, fontSize: 9.5, color: COLORS.muted }}>
+            {formatBound(b.min)}–{formatBound(b.max)}
+          </div>
+        ))}
+      </div>
+      {unitLabel && (
+        <div style={{ marginTop: 10, fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>{unitLabel}</div>
+      )}
+    </div>
+  );
+}
+
+// two-segment won/lost bar — used for the win-rate metrics
+function ProportionBar({ segments, note }) {
+  const total = segments.reduce((s, seg) => s + seg.count, 0);
+  if (!total) {
+    return <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>Not enough data yet.</div>;
+  }
+  return (
+    <div>
+      <div style={{ display: "flex", height: 28, borderRadius: 6, overflow: "hidden", gap: 2 }}>
+        {segments
+          .filter((seg) => seg.count > 0)
+          .map((seg) => (
+            <div key={seg.label} style={{ width: `${(seg.count / total) * 100}%`, background: seg.color }} />
+          ))}
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+        {segments.map((seg) => (
+          <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 9, height: 9, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.ink }}>
+              {seg.label}: {seg.count} ({Math.round((seg.count / total) * 100)}%)
+            </span>
+          </div>
+        ))}
+      </div>
+      {note && <div style={{ marginTop: 8, fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>{note}</div>}
+    </div>
+  );
+}
+
+// side-by-side magnitude bars — used to show how two related dollar
+// figures compare (e.g. per-won-job vs per-lead)
+function ComparisonBars({ items }) {
+  const max = Math.max(...items.map((it) => it.value || 0), 1);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {items.map((it) => (
+        <div key={it.label}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              fontFamily: FONT_UTIL,
+              fontSize: 12,
+              color: COLORS.muted,
+              marginBottom: 3,
+            }}
+          >
+            <span>{it.label}</span>
+            <span style={{ color: COLORS.ink, fontWeight: 600 }}>{it.formatted}</span>
+          </div>
+          <div style={{ height: 10, borderRadius: 5, background: COLORS.surfaceMuted, overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${Math.max(4, ((it.value || 0) / max) * 100)}%`,
+                height: "100%",
+                background: COLORS.accent,
+                borderRadius: 5,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // best-effort last name for alphabetical sorting — takes the final word of
 // a multi-word name, falling back to the whole name for a single-word one
@@ -1311,9 +1514,10 @@ function App() {
             <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 2, marginBottom: 14 }}>
               {metricInfo.sub(metrics)}
             </div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, lineHeight: 1.5, marginBottom: metricInfo.chart ? 18 : 0 }}>
               {metricInfo.description}
             </div>
+            {metricInfo.chart && metricInfo.chart(metrics)}
           </div>
         </div>
       )}
