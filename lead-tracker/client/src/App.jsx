@@ -317,18 +317,56 @@ function niceStep(raw) {
   return niceBase * Math.pow(10, exp);
 }
 
+function percentile(sortedNums, p) {
+  const idx = (sortedNums.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sortedNums[lo];
+  return sortedNums[lo] + (sortedNums[hi] - sortedNums[lo]) * (idx - lo);
+}
+
+// buckets purely off whatever range the actual data spans — no fixed
+// dollar/day thresholds — so this reads right whether a business's jobs
+// run $100–$1,000 or $20,000–$1.8M. Bucket width is sized off the 90th
+// percentile rather than the true max: with a right-skewed spread (a
+// handful of $30K remodels among a pile of $500 repairs, say), sizing off
+// the absolute max would stretch every bucket wide enough to swallow the
+// whole cluster into one bar. Anything past the 90th-percentile range
+// lands in a final open-ended "+" bucket instead of distorting the rest.
 function histogramBuckets(values, targetCount = 6) {
-  const nums = (values || []).filter((n) => n != null && isFinite(n));
+  const nums = (values || []).filter((n) => n != null && isFinite(n)).sort((a, b) => a - b);
   if (!nums.length) return [];
-  const max = Math.max(...nums);
-  if (max <= 0) return [{ min: 0, max: niceStep(1), count: nums.length }];
-  const step = niceStep(max / targetCount);
-  const bucketCount = Math.max(1, Math.ceil(max / step));
-  const buckets = Array.from({ length: bucketCount }, (_, i) => ({ min: i * step, max: (i + 1) * step, count: 0 }));
+
+  const min = nums[0];
+  const max = nums[nums.length - 1];
+  if (max === min) return [{ min, max, count: nums.length, overflow: false }];
+
+  const p90 = percentile(nums, 0.9);
+  const coreMax = p90 > min ? p90 : max;
+  const step = niceStep((coreMax - min) / targetCount);
+  const startBucket = Math.floor(min / step) * step;
+  const coreBucketCount = Math.max(1, Math.ceil((coreMax - startBucket) / step));
+
+  const buckets = Array.from({ length: coreBucketCount }, (_, i) => ({
+    min: startBucket + i * step,
+    max: startBucket + (i + 1) * step,
+    count: 0,
+    overflow: false,
+  }));
+
+  const lastCoreBound = startBucket + coreBucketCount * step;
+  const hasOverflow = max > lastCoreBound;
+  if (hasOverflow) buckets.push({ min: lastCoreBound, max, count: 0, overflow: true });
+
   nums.forEach((n) => {
-    const idx = Math.min(bucketCount - 1, Math.floor(n / step));
+    if (hasOverflow && n > lastCoreBound) {
+      buckets[buckets.length - 1].count++;
+      return;
+    }
+    const idx = Math.min(coreBucketCount - 1, Math.floor((n - startBucket) / step));
     buckets[idx].count++;
   });
+
   return buckets;
 }
 
@@ -483,7 +521,7 @@ function Histogram({ buckets, formatBound, unitLabel }) {
       <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
         {buckets.map((b, i) => (
           <div key={i} style={{ flex: 1, textAlign: "center", fontFamily: FONT_UTIL, fontSize: 9.5, color: COLORS.muted }}>
-            {formatBound(b.min)}–{formatBound(b.max)}
+            {b.overflow ? `${formatBound(b.min)}+` : `${formatBound(b.min)}–${formatBound(b.max)}`}
           </div>
         ))}
       </div>
