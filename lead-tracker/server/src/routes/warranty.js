@@ -14,9 +14,13 @@ const EDITABLE_FIELDS = new Set(["name", "phone", "email", "issue", "createdAt"]
 
 function photosFor(requestId) {
   return db
-    .prepare(`SELECT id, createdAt, filename FROM warranty_photos WHERE requestId = ? ORDER BY createdAt ASC`)
+    .prepare(`SELECT id, createdAt, filename, type FROM warranty_photos WHERE requestId = ? ORDER BY createdAt ASC`)
     .all(requestId)
-    .map((p) => ({ id: p.id, createdAt: p.createdAt, url: `/api/warranty/photos/${p.filename}` }));
+    .map((p) => ({ id: p.id, createdAt: p.createdAt, type: p.type, url: `/api/warranty/photos/${p.filename}` }));
+}
+
+function hasAfterPhoto(requestId) {
+  return !!db.prepare(`SELECT 1 FROM warranty_photos WHERE requestId = ? AND type = 'after' LIMIT 1`).get(requestId);
 }
 
 function withPhotos(row) {
@@ -75,6 +79,13 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getOr404(req.params.id, res);
   if (!row) return;
+
+  // require photo proof the repair is actually done before letting the
+  // pipeline mark it resolved — mirrors the client's pre-move photo prompt,
+  // but enforced here too since the client gate is just UX, not a guarantee
+  if (!revert && stage === "resolved" && !hasAfterPhoto(row.id)) {
+    return res.status(400).json({ error: "Add at least one after-repair photo before marking this resolved" });
+  }
 
   const ts = new Date().toISOString();
   const patch = { stage };
@@ -147,11 +158,14 @@ router.post("/:id/photos", requireAuth("viewer"), (req, res) => {
 
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: "No image files given" });
+    const type = req.body?.type === "after" ? "after" : "before";
 
     const now = new Date().toISOString();
-    const insert = db.prepare(`INSERT INTO warranty_photos (id, requestId, filename, createdAt) VALUES (?, ?, ?, ?)`);
+    const insert = db.prepare(
+      `INSERT INTO warranty_photos (id, requestId, filename, type, createdAt) VALUES (?, ?, ?, ?, ?)`
+    );
     const tx = db.transaction((uploaded) => {
-      for (const f of uploaded) insert.run(randomUUID(), row.id, f.filename, now);
+      for (const f of uploaded) insert.run(randomUUID(), row.id, f.filename, type, now);
     });
     tx(files);
 

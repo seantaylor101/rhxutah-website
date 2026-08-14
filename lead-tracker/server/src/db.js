@@ -122,6 +122,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     requestId TEXT NOT NULL,
     filename TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'before',
     createdAt TEXT NOT NULL
   );
 `);

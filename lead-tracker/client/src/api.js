@@ -67,8 +67,9 @@ export const api = {
     }),
   editWarrantyRequest: (id, patch) => request(`/warranty/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteWarrantyRequest: (id) => request(`/warranty/${id}`, { method: "DELETE" }),
-  uploadWarrantyPhotos: (id, files) => {
+  uploadWarrantyPhotos: (id, files, type) => {
     const form = new FormData();
+    if (type) form.append("type", type);
     for (const file of files) form.append("photos", file);
     return requestForm(`/warranty/${id}/photos`, form);
   },
