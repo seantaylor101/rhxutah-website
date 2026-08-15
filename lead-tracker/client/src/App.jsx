@@ -857,8 +857,12 @@ function App() {
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
+  const [showGoalPrompt, setShowGoalPrompt] = useState(false);
   const bootHtmlRef = useRef(null);
   const pushPromptCheckedRef = useRef(false);
+  const goalPromptCheckedRef = useRef(false);
+  const showPushPromptRef = useRef(false);
+  const incomeGoalSectionRef = useRef(null);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
@@ -952,6 +956,15 @@ function App() {
     return updated;
   };
 
+  const setMonthlyGoalFromPrompt = async (amount) => {
+    await saveSettings({ goalMonthlyTakeHome: amount });
+    setShowGoalPrompt(false);
+    setShowGoals(true);
+    setTimeout(() => {
+      incomeGoalSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  };
+
   useEffect(() => {
     if (role) loadSettings();
   }, [role, loadSettings]);
@@ -975,6 +988,34 @@ function App() {
         setShowPushPrompt(true);
       })
       .catch(() => {});
+  }, [role, leads]);
+
+  useEffect(() => {
+    showPushPromptRef.current = showPushPrompt;
+  }, [showPushPrompt]);
+
+  // owner-only monthly ritual: the first time the app opens in a new
+  // calendar month, prompt for that month's take-home goal. Delayed so it
+  // doesn't stack on top of the once-ever push prompt on the rare session
+  // where both would otherwise fire together — the push flow is fully
+  // async (a service-worker subscription lookup) but settles well within
+  // this delay in practice
+  useEffect(() => {
+    if (goalPromptCheckedRef.current) return;
+    if (!role || leads === null) return;
+    if (role !== "owner") return;
+    goalPromptCheckedRef.current = true;
+    const monthKey = new Date().toISOString().slice(0, 7);
+    if (localStorage.getItem("rhxGoalPromptMonth") === monthKey) return;
+    // deliberately no cleanup here — `leads` (a dependency) can get a new
+    // array reference again shortly after mount, which would re-run this
+    // effect; a clearTimeout cleanup would cancel the pending timeout right
+    // as the ref-guard above silently blocks it from ever being rescheduled
+    setTimeout(() => {
+      if (showPushPromptRef.current) return;
+      localStorage.setItem("rhxGoalPromptMonth", monthKey);
+      setShowGoalPrompt(true);
+    }, 1200);
   }, [role, leads]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
@@ -1627,7 +1668,7 @@ function App() {
       )}
 
       {editable && (
-        <div style={{ padding: "0 16px" }}>
+        <div ref={incomeGoalSectionRef} style={{ padding: "0 16px" }}>
           <button onClick={() => setShowGoals((v) => !v)} style={lookbackToggle}>
             <Target size={14} color={COLORS.accent} />
             <span>Income goal</span>
@@ -1851,6 +1892,14 @@ function App() {
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
+      )}
+      {showGoalPrompt && (
+        <MonthlyGoalPromptModal
+          monthLabel={new Date().toLocaleDateString(undefined, { month: "long" })}
+          defaultTakeHome={settings.goalMonthlyTakeHome}
+          onSetGoal={setMonthlyGoalFromPrompt}
+          onDismiss={() => setShowGoalPrompt(false)}
+        />
       )}
       {showAccountModal && (
         <AccountModal
@@ -2210,6 +2259,103 @@ function PushPromptModal({ onEnable, onDismiss }) {
           style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1 }}
         >
           Enable notifications
+        </button>
+        <button
+          onClick={onDismiss}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Not now</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MonthlyGoalPromptModal({ monthLabel, defaultTakeHome, onSetGoal, onDismiss }) {
+  useModalBackClose(onDismiss);
+  const [draft, setDraft] = useState(defaultTakeHome ? String(defaultTakeHome) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    const n = parseFloat(draft);
+    if (isNaN(n) || n < 0) {
+      setErr("Enter a non-negative amount");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await onSetGoal(n);
+    } catch (e) {
+      setErr(e.message || "Couldn't save that");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onDismiss}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              background: `${COLORS.accent}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Target size={24} color={COLORS.accent} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 17,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          It's {monthLabel} — start the month off right
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 15.5,
+            fontWeight: 600,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 16,
+          }}
+        >
+          How much do you want to make this month?!
+        </div>
+        <input
+          type="number"
+          inputMode="decimal"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="e.g. 10000"
+          style={{ ...modalInput, textAlign: "center", fontSize: 22, fontWeight: 700 }}
+        />
+        {err && (
+          <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8, textAlign: "center" }}>
+            {err}
+          </div>
+        )}
+        <button
+          onClick={submit}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy ? 0.6 : 1 }}
+        >
+          Set my goal
         </button>
         <button
           onClick={onDismiss}
