@@ -14,6 +14,7 @@ import backupsRoutes from "./routes/backups.js";
 import warrantyRoutes from "./routes/warranty.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
 import { startBackupScheduler } from "./backupService.js";
+import { startGoalReminderScheduler } from "./goalReminders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -58,3 +59,4 @@ app.listen(port, () => console.log(`RHX Job Board listening on port ${port}`));
 
 startReportReminderScheduler();
 startBackupScheduler();
+startGoalReminderScheduler();

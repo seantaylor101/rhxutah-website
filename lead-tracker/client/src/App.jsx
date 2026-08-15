@@ -852,7 +852,9 @@ function App() {
     goalNationalWinRate: 25,
     goalNationalAvgJobValue: 9500,
     goalNationalProfitMargin: 24,
+    goalMonthConfirmed: "",
   });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -945,6 +947,8 @@ function App() {
       setSettings(data);
     } catch {
       // keep the default already in state
+    } finally {
+      setSettingsLoaded(true);
     }
   }, []);
 
@@ -994,29 +998,33 @@ function App() {
     showPushPromptRef.current = showPushPrompt;
   }, [showPushPrompt]);
 
-  // owner-only monthly ritual: the first time the app opens in a new
-  // calendar month, prompt for that month's take-home goal. Delayed so it
+  // owner-only monthly ritual: every time the app opens (not just once) in
+  // a calendar month whose goal hasn't been confirmed yet, prompt for that
+  // month's take-home goal. Driven by the server's goalMonthConfirmed
+  // (stamped whenever the take-home is saved, from either this prompt or
+  // the regular Income Goal panel) rather than a local "seen" flag, so it
+  // keeps asking on every open — across devices — until an actual number
+  // is set, not just until the prompt has been shown once. Delayed so it
   // doesn't stack on top of the once-ever push prompt on the rare session
   // where both would otherwise fire together — the push flow is fully
   // async (a service-worker subscription lookup) but settles well within
   // this delay in practice
   useEffect(() => {
     if (goalPromptCheckedRef.current) return;
-    if (!role || leads === null) return;
+    if (!role || leads === null || !settingsLoaded) return;
     if (role !== "owner") return;
     goalPromptCheckedRef.current = true;
     const monthKey = new Date().toISOString().slice(0, 7);
-    if (localStorage.getItem("rhxGoalPromptMonth") === monthKey) return;
+    if (settings.goalMonthConfirmed === monthKey) return;
     // deliberately no cleanup here — `leads` (a dependency) can get a new
     // array reference again shortly after mount, which would re-run this
     // effect; a clearTimeout cleanup would cancel the pending timeout right
     // as the ref-guard above silently blocks it from ever being rescheduled
     setTimeout(() => {
       if (showPushPromptRef.current) return;
-      localStorage.setItem("rhxGoalPromptMonth", monthKey);
       setShowGoalPrompt(true);
     }, 1200);
-  }, [role, leads]);
+  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when

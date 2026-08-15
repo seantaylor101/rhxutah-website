@@ -32,6 +32,12 @@ function readSettings() {
     goalNationalWinRate: Number(map.goalNationalWinRate ?? 25),
     goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 9500),
     goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 24),
+    // which calendar month (YYYY-MM) the take-home goal was last touched —
+    // stamped automatically below whenever goalMonthlyTakeHome is saved, so
+    // the client can tell "still carrying last month's number" apart from
+    // "actually confirmed for the month I'm in right now" without relying
+    // on per-device localStorage
+    goalMonthConfirmed: map.goalMonthConfirmed || "",
   };
 }
 
@@ -47,6 +53,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
     settings.goalNationalWinRate = null;
     settings.goalNationalAvgJobValue = null;
     settings.goalNationalProfitMargin = null;
+    settings.goalMonthConfirmed = null;
   }
   res.json(settings);
 });
@@ -78,6 +85,14 @@ router.patch("/", requireAuth("owner"), (req, res) => {
       return res.status(400).json({ error: `${key} is out of range` });
     }
     updates[key] = n;
+  }
+
+  // touching the take-home goal — from either the monthly prompt or the
+  // regular Income Goal panel — counts as confirming it for whichever
+  // month that happens in, computed server-side rather than trusted from
+  // the client
+  if (body.goalMonthlyTakeHome !== undefined) {
+    updates.goalMonthConfirmed = new Date().toISOString().slice(0, 7);
   }
 
   if (body.goalDataSource !== undefined) {
