@@ -861,6 +861,14 @@ function App() {
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showGoalPrompt, setShowGoalPrompt] = useState(false);
   const bootHtmlRef = useRef(null);
+  // bumped by every leads/warranty mutation so a slower-resolving fetch
+  // issued before that mutation can tell it's now stale and skip applying
+  // — otherwise a periodic auto-refresh (or one triggered by the tab
+  // regaining focus) that happens to be in flight when an edit commits can
+  // land after the edit's own confirmed update and silently overwrite it
+  // with pre-edit data
+  const leadsVersionRef = useRef(0);
+  const warrantyVersionRef = useRef(0);
   const pushPromptCheckedRef = useRef(false);
   const goalPromptCheckedRef = useRef(false);
   const showPushPromptRef = useRef(false);
@@ -909,11 +917,14 @@ function App() {
   }, []);
 
   const loadLeads = useCallback(async () => {
+    const version = leadsVersionRef.current;
     try {
       const data = await api.listLeads();
+      if (leadsVersionRef.current !== version) return; // an edit/move/etc. raced ahead of this fetch — don't clobber it
       setLeads(data);
       setError("");
     } catch {
+      if (leadsVersionRef.current !== version) return;
       setError("Couldn't load your saved leads.");
       // don't blank out a board that already loaded successfully — a
       // transient failure (deploy restart, brief network blip) shouldn't
@@ -928,8 +939,10 @@ function App() {
   }, [role, loadLeads]);
 
   const loadWarrantyRequests = useCallback(async () => {
+    const version = warrantyVersionRef.current;
     try {
       const data = await api.listWarrantyRequests();
+      if (warrantyVersionRef.current !== version) return;
       setWarrantyRequests(data);
     } catch {
       // keep whatever was already loaded rather than blanking the badge/list
@@ -1112,6 +1125,7 @@ function App() {
       // clearing local state below still logs this device out either way
     }
     setRole(null);
+    leadsVersionRef.current++;
     setLeads(null);
     setShowAccountModal(false);
   };
@@ -1125,6 +1139,7 @@ function App() {
     if (!name.trim() || !source) return;
     try {
       const lead = await api.addLead({ name, job, source, sourceOther });
+      leadsVersionRef.current++;
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
       setActiveStage("new");
@@ -1135,6 +1150,7 @@ function App() {
   };
 
   const moveLead = async (id, stage, date, revert, workDays) => {
+    leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
     try {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
@@ -1148,6 +1164,7 @@ function App() {
 
   const editField = async (id, field, value) => {
     const patch = typeof field === "object" ? field : { [field]: value };
+    leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
     try {
       const updated = await api.editLead(id, patch);
@@ -1161,6 +1178,7 @@ function App() {
 
   const deleteLead = async (id) => {
     const prevLeads = leads;
+    leadsVersionRef.current++;
     setLeads((prev) => prev.filter((l) => l.id !== id));
     try {
       await api.deleteLead(id);
@@ -1179,6 +1197,7 @@ function App() {
   const addWarrantyRequest = async (payload) => {
     try {
       const created = await api.addWarrantyRequest(payload);
+      warrantyVersionRef.current++;
       setWarrantyRequests((prev) => [created, ...prev]);
       setError("");
     } catch {
@@ -1187,6 +1206,7 @@ function App() {
   };
 
   const moveWarrantyRequest = async (id, stage, revert) => {
+    warrantyVersionRef.current++;
     setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? { ...w, stage } : w)));
     try {
       const updated = await api.moveWarrantyRequest(id, stage, revert);
@@ -1200,6 +1220,7 @@ function App() {
 
   const editWarrantyField = async (id, field, value) => {
     const patch = typeof field === "object" ? field : { [field]: value };
+    warrantyVersionRef.current++;
     setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? { ...w, ...patch } : w)));
     try {
       const updated = await api.editWarrantyRequest(id, patch);
@@ -1213,6 +1234,7 @@ function App() {
 
   const deleteWarrantyRequest = async (id) => {
     const prev = warrantyRequests;
+    warrantyVersionRef.current++;
     setWarrantyRequests((p) => p.filter((w) => w.id !== id));
     try {
       await api.deleteWarrantyRequest(id);
@@ -1227,12 +1249,14 @@ function App() {
   // next to the upload button instead of the global banner
   const uploadWarrantyPhotos = async (id, files, type) => {
     const updated = await api.uploadWarrantyPhotos(id, files, type);
+    warrantyVersionRef.current++;
     setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
   };
 
   const deleteWarrantyPhoto = async (id, photoId) => {
     try {
       const updated = await api.deleteWarrantyPhoto(id, photoId);
+      warrantyVersionRef.current++;
       setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
     } catch {
       setError("Couldn't delete that photo — try again.");
@@ -1945,6 +1969,7 @@ function App() {
           editable={editable}
           onSaveReport={async (patch) => {
             const updated = await api.updateReport(reportLead.id, patch);
+            leadsVersionRef.current++;
             setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
           }}
           onClose={() => setReportLead(null)}
