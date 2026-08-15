@@ -846,19 +846,25 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
     overheadPercent: 13,
-    goalAnnualTakeHome: 0,
+    goalMonthlyTakeHome: 0,
     goalMonthlyOverhead: 0,
     goalDataSource: "national",
     goalNationalWinRate: 25,
     goalNationalAvgJobValue: 9500,
-    goalNationalProfitMargin: 8,
+    goalNationalProfitMargin: 24,
+    goalMonthConfirmed: "",
   });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
+  const [showGoalPrompt, setShowGoalPrompt] = useState(false);
   const bootHtmlRef = useRef(null);
   const pushPromptCheckedRef = useRef(false);
+  const goalPromptCheckedRef = useRef(false);
+  const showPushPromptRef = useRef(false);
+  const incomeGoalSectionRef = useRef(null);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
@@ -941,6 +947,8 @@ function App() {
       setSettings(data);
     } catch {
       // keep the default already in state
+    } finally {
+      setSettingsLoaded(true);
     }
   }, []);
 
@@ -950,6 +958,15 @@ function App() {
     const updated = await api.updateSettings(patch);
     setSettings(updated);
     return updated;
+  };
+
+  const setMonthlyGoalFromPrompt = async (amount) => {
+    await saveSettings({ goalMonthlyTakeHome: amount });
+    setShowGoalPrompt(false);
+    setShowGoals(true);
+    setTimeout(() => {
+      incomeGoalSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
   };
 
   useEffect(() => {
@@ -976,6 +993,38 @@ function App() {
       })
       .catch(() => {});
   }, [role, leads]);
+
+  useEffect(() => {
+    showPushPromptRef.current = showPushPrompt;
+  }, [showPushPrompt]);
+
+  // owner-only monthly ritual: every time the app opens (not just once) in
+  // a calendar month whose goal hasn't been confirmed yet, prompt for that
+  // month's take-home goal. Driven by the server's goalMonthConfirmed
+  // (stamped whenever the take-home is saved, from either this prompt or
+  // the regular Income Goal panel) rather than a local "seen" flag, so it
+  // keeps asking on every open — across devices — until an actual number
+  // is set, not just until the prompt has been shown once. Delayed so it
+  // doesn't stack on top of the once-ever push prompt on the rare session
+  // where both would otherwise fire together — the push flow is fully
+  // async (a service-worker subscription lookup) but settles well within
+  // this delay in practice
+  useEffect(() => {
+    if (goalPromptCheckedRef.current) return;
+    if (!role || leads === null || !settingsLoaded) return;
+    if (role !== "owner") return;
+    goalPromptCheckedRef.current = true;
+    const monthKey = new Date().toISOString().slice(0, 7);
+    if (settings.goalMonthConfirmed === monthKey) return;
+    // deliberately no cleanup here — `leads` (a dependency) can get a new
+    // array reference again shortly after mount, which would re-run this
+    // effect; a clearTimeout cleanup would cancel the pending timeout right
+    // as the ref-guard above silently blocks it from ever being rescheduled
+    setTimeout(() => {
+      if (showPushPromptRef.current) return;
+      setShowGoalPrompt(true);
+    }, 1200);
+  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
@@ -1627,7 +1676,7 @@ function App() {
       )}
 
       {editable && (
-        <div style={{ padding: "0 16px" }}>
+        <div ref={incomeGoalSectionRef} style={{ padding: "0 16px" }}>
           <button onClick={() => setShowGoals((v) => !v)} style={lookbackToggle}>
             <Target size={14} color={COLORS.accent} />
             <span>Income goal</span>
@@ -1851,6 +1900,14 @@ function App() {
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
+      )}
+      {showGoalPrompt && (
+        <MonthlyGoalPromptModal
+          monthLabel={new Date().toLocaleDateString(undefined, { month: "long" })}
+          defaultTakeHome={settings.goalMonthlyTakeHome}
+          onSetGoal={setMonthlyGoalFromPrompt}
+          onDismiss={() => setShowGoalPrompt(false)}
+        />
       )}
       {showAccountModal && (
         <AccountModal
@@ -2222,6 +2279,103 @@ function PushPromptModal({ onEnable, onDismiss }) {
   );
 }
 
+function MonthlyGoalPromptModal({ monthLabel, defaultTakeHome, onSetGoal, onDismiss }) {
+  useModalBackClose(onDismiss);
+  const [draft, setDraft] = useState(defaultTakeHome ? String(defaultTakeHome) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    const n = parseFloat(draft);
+    if (isNaN(n) || n < 0) {
+      setErr("Enter a non-negative amount");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await onSetGoal(n);
+    } catch (e) {
+      setErr(e.message || "Couldn't save that");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onDismiss}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              background: `${COLORS.accent}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Target size={24} color={COLORS.accent} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 17,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          It's {monthLabel} — start the month off right
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 15.5,
+            fontWeight: 600,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 16,
+          }}
+        >
+          How much do you want to make this month?!
+        </div>
+        <input
+          type="number"
+          inputMode="decimal"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="e.g. 10000"
+          style={{ ...modalInput, textAlign: "center", fontSize: 22, fontWeight: 700 }}
+        />
+        {err && (
+          <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8, textAlign: "center" }}>
+            {err}
+          </div>
+        )}
+        <button
+          onClick={submit}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy ? 0.6 : 1 }}
+        >
+          Set my goal
+        </button>
+        <button
+          onClick={onDismiss}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Not now</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AccountModal({ role, onSwitch, onLogout, onClose }) {
   useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
@@ -2349,7 +2503,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 }
 
 function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
-  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalAnnualTakeHome ? String(settings.goalAnnualTakeHome) : "");
+  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalMonthlyTakeHome ? String(settings.goalMonthlyTakeHome) : "");
   const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
   const [avgJobDraft, setAvgJobDraft] = useState(String(settings.goalNationalAvgJobValue));
@@ -2383,7 +2537,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
       setErr("Enter a non-negative overhead amount");
       return;
     }
-    const patch = { goalAnnualTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
+    const patch = { goalMonthlyTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
     if (source === "national") {
       const winRate = parseFloat(winRateDraft);
       const avgJob = parseFloat(avgJobDraft);
@@ -2426,22 +2580,22 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
 
   const plan =
     !missing.length && canSubmit && takeHomeNum > 0 && !isNaN(overheadNum) && overheadNum >= 0
-      ? computeGoalPlan({ annualTakeHome: takeHomeNum, monthlyOverhead: overheadNum, ...inputs })
+      ? computeGoalPlan({ annualTakeHome: takeHomeNum * 12, monthlyOverhead: overheadNum, ...inputs })
       : null;
 
   return (
     <div style={lookbackPanel}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 14 }}>
-        Set the annual take-home you want, and this works backward to how many leads it takes to get there.
+        Set the monthly take-home you want, and this works backward to how many leads it takes to get there.
       </div>
 
-      <label style={{ ...modalLabel, marginTop: 0 }}>Desired take-home (per year)</label>
+      <label style={{ ...modalLabel, marginTop: 0 }}>Desired take-home (per month)</label>
       <input
         type="number"
         inputMode="decimal"
         value={takeHomeDraft}
         onChange={(e) => setTakeHomeDraft(e.target.value)}
-        placeholder="e.g. 120000"
+        placeholder="e.g. 10000"
         style={modalInput}
       />
 
@@ -2484,13 +2638,18 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             <input type="number" inputMode="decimal" value={avgJobDraft} onChange={(e) => setAvgJobDraft(e.target.value)} style={modalInput} />
           </div>
           <div>
-            <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin (%)</label>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin per job (%)</label>
             <input type="number" inputMode="decimal" value={marginDraft} onChange={(e) => setMarginDraft(e.target.value)} style={modalInput} />
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+              What's left from a typical job after materials, labor, and day-to-day job costs — not your monthly
+              overhead above, that's already handled separately.
+            </div>
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
             Based on published industry benchmarks — ~25% average close rate for renovation contractors, ~$9,500
-            national average roofing job as a stand-in job value, ~8% average contractor net profit margin. Edit
-            these to fit your trade and region.
+            national average roofing job as a stand-in job value, ~24% average gross profit margin for construction
+            businesses (remodeling/specialty trades often run higher — 30–40%+). Edit these to fit your trade and
+            region.
           </div>
         </div>
       ) : (
@@ -2506,7 +2665,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             {myMetrics.avgWonRevenueSample ? `${fmtCurrency(myMetrics.avgWonRevenue)} (${myMetrics.avgWonRevenueSample} won jobs)` : "not enough data yet"}
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink }}>
-            Profit margin:{" "}
+            Profit margin per job:{" "}
             {myMetrics.avgProfitMarginSample
               ? `${myMetrics.avgProfitMargin.toFixed(0)}% (${myMetrics.avgProfitMarginSample} jobs with cost data)`
               : "not enough data yet"}
@@ -2535,7 +2694,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
       {plan && (
         <div style={{ marginTop: 18 }}>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
-            To take home {fmtCurrency(takeHomeNum)}/year at these rates:
+            To take home {fmtCurrency(takeHomeNum)}/month ({fmtCurrency(takeHomeNum * 12)}/year) at these rates:
           </div>
           <div style={metricsGrid}>
             <div style={metricTile}>

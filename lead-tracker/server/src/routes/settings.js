@@ -9,7 +9,7 @@ function readSettings() {
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return {
     overheadPercent: Number(map.overheadPercent ?? 13),
-    goalAnnualTakeHome: Number(map.goalAnnualTakeHome ?? 0),
+    goalMonthlyTakeHome: Number(map.goalMonthlyTakeHome ?? 0),
     // fixed monthly business overhead (bills, salaried staff like a project
     // manager) that has to be covered before any job profit becomes the
     // owner's take-home — separate from overheadPercent above, which is a
@@ -22,12 +22,22 @@ function readSettings() {
     // for renovation/home-improvement contractors (Hook Agency, home
     // services industry benchmarks); ~$9,500 national average roof
     // replacement cost, as a representative exterior-trades job value
-    // (HomeGuide, RoofingCalc); ~6-8% "realistic baseline" net profit
-    // margin for residential contractors/remodelers (NAHB Eye on Housing,
-    // CFMA Construction Financial Benchmarker, Foundation Software)
+    // (HomeGuide, RoofingCalc); ~24% average GROSS profit margin for
+    // construction businesses (ServiceTitan, Procore) — deliberately the
+    // gross figure (revenue minus materials/labor/typical per-job costs),
+    // not the ~7-8% bottom-line net figure, since goalMonthlyOverhead
+    // above is subtracted separately in the plan math rather than baked
+    // into this percentage. Remodeling/specialty trades commonly run
+    // higher (30-40%+) than the all-construction average — edit to match
     goalNationalWinRate: Number(map.goalNationalWinRate ?? 25),
     goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 9500),
-    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 8),
+    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 24),
+    // which calendar month (YYYY-MM) the take-home goal was last touched —
+    // stamped automatically below whenever goalMonthlyTakeHome is saved, so
+    // the client can tell "still carrying last month's number" apart from
+    // "actually confirmed for the month I'm in right now" without relying
+    // on per-device localStorage
+    goalMonthConfirmed: map.goalMonthConfirmed || "",
   };
 }
 
@@ -37,18 +47,19 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   // keep them out of the viewer-role response, same as job cost/profit
   // fields are stripped on the leads API
   if (req.role !== "owner") {
-    settings.goalAnnualTakeHome = null;
+    settings.goalMonthlyTakeHome = null;
     settings.goalMonthlyOverhead = null;
     settings.goalDataSource = null;
     settings.goalNationalWinRate = null;
     settings.goalNationalAvgJobValue = null;
     settings.goalNationalProfitMargin = null;
+    settings.goalMonthConfirmed = null;
   }
   res.json(settings);
 });
 
 const GOAL_NUMBER_FIELDS = {
-  goalAnnualTakeHome: (n) => Number.isFinite(n) && n >= 0,
+  goalMonthlyTakeHome: (n) => Number.isFinite(n) && n >= 0,
   goalMonthlyOverhead: (n) => Number.isFinite(n) && n >= 0,
   goalNationalWinRate: (n) => Number.isFinite(n) && n > 0 && n <= 100,
   goalNationalAvgJobValue: (n) => Number.isFinite(n) && n > 0,
@@ -74,6 +85,14 @@ router.patch("/", requireAuth("owner"), (req, res) => {
       return res.status(400).json({ error: `${key} is out of range` });
     }
     updates[key] = n;
+  }
+
+  // touching the take-home goal — from either the monthly prompt or the
+  // regular Income Goal panel — counts as confirming it for whichever
+  // month that happens in, computed server-side rather than trusted from
+  // the client
+  if (body.goalMonthlyTakeHome !== undefined) {
+    updates.goalMonthConfirmed = new Date().toISOString().slice(0, 7);
   }
 
   if (body.goalDataSource !== undefined) {
