@@ -316,15 +316,21 @@ function computeMetrics(subset, overheadPercent = 13) {
 // reverse-engineers a take-home target into a lead volume: take-home implies
 // a required revenue (via profit margin), revenue implies a job count (via
 // average job value), and job count implies a lead count (via win rate)
-function computeGoalPlan({ annualTakeHome, winRatePercent, avgJobValue, profitMarginPercent }) {
+function computeGoalPlan({ annualTakeHome, monthlyOverhead, winRatePercent, avgJobValue, profitMarginPercent }) {
   if (!(annualTakeHome > 0) || !(winRatePercent > 0) || !(avgJobValue > 0) || !(profitMarginPercent > 0)) {
     return null;
   }
-  const requiredRevenue = annualTakeHome / (profitMarginPercent / 100);
+  // job profit (the profit-margin cut of revenue) has to cover fixed
+  // overhead — rent/bills, salaried staff like a project manager — before
+  // anything left over becomes the owner's take-home, so both get divided
+  // by the same margin to find the revenue required
+  const annualOverhead = (monthlyOverhead > 0 ? monthlyOverhead : 0) * 12;
+  const requiredRevenue = (annualTakeHome + annualOverhead) / (profitMarginPercent / 100);
   const jobsPerYear = requiredRevenue / avgJobValue;
   const leadsPerYear = jobsPerYear / (winRatePercent / 100);
   return {
     requiredRevenue,
+    annualOverhead,
     jobsPerYear,
     jobsPerMonth: jobsPerYear / 12,
     leadsPerYear,
@@ -841,6 +847,7 @@ function App() {
   const [settings, setSettings] = useState({
     overheadPercent: 13,
     goalAnnualTakeHome: 0,
+    goalMonthlyOverhead: 0,
     goalDataSource: "national",
     goalNationalWinRate: 25,
     goalNationalAvgJobValue: 9500,
@@ -2343,6 +2350,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 
 function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
   const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalAnnualTakeHome ? String(settings.goalAnnualTakeHome) : "");
+  const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
   const [avgJobDraft, setAvgJobDraft] = useState(String(settings.goalNationalAvgJobValue));
   const [marginDraft, setMarginDraft] = useState(String(settings.goalNationalProfitMargin));
@@ -2364,13 +2372,18 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
 
   const takeHomeNum = parseFloat(takeHomeDraft);
   const canSubmit = takeHomeDraft.trim() !== "" && !isNaN(takeHomeNum) && takeHomeNum >= 0;
+  const overheadNum = overheadDraft.trim() === "" ? 0 : parseFloat(overheadDraft);
 
   const submit = async () => {
     if (isNaN(takeHomeNum) || takeHomeNum < 0) {
       setErr("Enter a non-negative take-home amount");
       return;
     }
-    const patch = { goalAnnualTakeHome: takeHomeNum };
+    if (isNaN(overheadNum) || overheadNum < 0) {
+      setErr("Enter a non-negative overhead amount");
+      return;
+    }
+    const patch = { goalAnnualTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
     if (source === "national") {
       const winRate = parseFloat(winRateDraft);
       const avgJob = parseFloat(avgJobDraft);
@@ -2411,7 +2424,10 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
           profitMarginPercent: myMetrics.avgProfitMargin,
         };
 
-  const plan = !missing.length && canSubmit && takeHomeNum > 0 ? computeGoalPlan({ annualTakeHome: takeHomeNum, ...inputs }) : null;
+  const plan =
+    !missing.length && canSubmit && takeHomeNum > 0 && !isNaN(overheadNum) && overheadNum >= 0
+      ? computeGoalPlan({ annualTakeHome: takeHomeNum, monthlyOverhead: overheadNum, ...inputs })
+      : null;
 
   return (
     <div style={lookbackPanel}>
@@ -2428,6 +2444,19 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
         placeholder="e.g. 120000"
         style={modalInput}
       />
+
+      <label style={modalLabel}>Business overhead (per month)</label>
+      <input
+        type="number"
+        inputMode="decimal"
+        value={overheadDraft}
+        onChange={(e) => setOverheadDraft(e.target.value)}
+        placeholder="e.g. 7000"
+        style={modalInput}
+      />
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+        Bills, payroll for staff like a project manager, and other fixed costs — not counting your own take-home.
+      </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 14, marginBottom: 12 }}>
         <button
@@ -2512,7 +2541,9 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             <div style={metricTile}>
               <div style={metricLabel}>Revenue needed</div>
               <div style={metricValue}>{fmtCurrency(plan.requiredRevenue)}</div>
-              <div style={metricSub}>per year</div>
+              <div style={metricSub}>
+                per year{plan.annualOverhead > 0 ? ` (incl. ${fmtCurrency(plan.annualOverhead)} overhead)` : ""}
+              </div>
             </div>
             <div style={metricTile}>
               <div style={metricLabel}>Jobs needed</div>
