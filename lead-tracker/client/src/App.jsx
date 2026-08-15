@@ -846,7 +846,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
     overheadPercent: 13,
-    goalAnnualTakeHome: 0,
+    goalMonthlyTakeHome: 0,
     goalMonthlyOverhead: 0,
     goalDataSource: "national",
     goalNationalWinRate: 25,
@@ -2349,7 +2349,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
 }
 
 function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
-  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalAnnualTakeHome ? String(settings.goalAnnualTakeHome) : "");
+  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalMonthlyTakeHome ? String(settings.goalMonthlyTakeHome) : "");
   const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
   const [avgJobDraft, setAvgJobDraft] = useState(String(settings.goalNationalAvgJobValue));
@@ -2383,7 +2383,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
       setErr("Enter a non-negative overhead amount");
       return;
     }
-    const patch = { goalAnnualTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
+    const patch = { goalMonthlyTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
     if (source === "national") {
       const winRate = parseFloat(winRateDraft);
       const avgJob = parseFloat(avgJobDraft);
@@ -2426,22 +2426,22 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
 
   const plan =
     !missing.length && canSubmit && takeHomeNum > 0 && !isNaN(overheadNum) && overheadNum >= 0
-      ? computeGoalPlan({ annualTakeHome: takeHomeNum, monthlyOverhead: overheadNum, ...inputs })
+      ? computeGoalPlan({ annualTakeHome: takeHomeNum * 12, monthlyOverhead: overheadNum, ...inputs })
       : null;
 
   return (
     <div style={lookbackPanel}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 14 }}>
-        Set the annual take-home you want, and this works backward to how many leads it takes to get there.
+        Set the monthly take-home you want, and this works backward to how many leads it takes to get there.
       </div>
 
-      <label style={{ ...modalLabel, marginTop: 0 }}>Desired take-home (per year)</label>
+      <label style={{ ...modalLabel, marginTop: 0 }}>Desired take-home (per month)</label>
       <input
         type="number"
         inputMode="decimal"
         value={takeHomeDraft}
         onChange={(e) => setTakeHomeDraft(e.target.value)}
-        placeholder="e.g. 120000"
+        placeholder="e.g. 10000"
         style={modalInput}
       />
 
@@ -2535,7 +2535,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
       {plan && (
         <div style={{ marginTop: 18 }}>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
-            To take home {fmtCurrency(takeHomeNum)}/year at these rates:
+            To take home {fmtCurrency(takeHomeNum)}/month ({fmtCurrency(takeHomeNum * 12)}/year) at these rates:
           </div>
           <div style={metricsGrid}>
             <div style={metricTile}>

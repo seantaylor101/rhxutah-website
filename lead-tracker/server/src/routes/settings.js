@@ -9,7 +9,7 @@ function readSettings() {
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return {
     overheadPercent: Number(map.overheadPercent ?? 13),
-    goalAnnualTakeHome: Number(map.goalAnnualTakeHome ?? 0),
+    goalMonthlyTakeHome: Number(map.goalMonthlyTakeHome ?? 0),
     // fixed monthly business overhead (bills, salaried staff like a project
     // manager) that has to be covered before any job profit becomes the
     // owner's take-home — separate from overheadPercent above, which is a
@@ -37,7 +37,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   // keep them out of the viewer-role response, same as job cost/profit
   // fields are stripped on the leads API
   if (req.role !== "owner") {
-    settings.goalAnnualTakeHome = null;
+    settings.goalMonthlyTakeHome = null;
     settings.goalMonthlyOverhead = null;
     settings.goalDataSource = null;
     settings.goalNationalWinRate = null;
@@ -48,7 +48,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 const GOAL_NUMBER_FIELDS = {
-  goalAnnualTakeHome: (n) => Number.isFinite(n) && n >= 0,
+  goalMonthlyTakeHome: (n) => Number.isFinite(n) && n >= 0,
   goalMonthlyOverhead: (n) => Number.isFinite(n) && n >= 0,
   goalNationalWinRate: (n) => Number.isFinite(n) && n > 0 && n <= 100,
   goalNationalAvgJobValue: (n) => Number.isFinite(n) && n > 0,
