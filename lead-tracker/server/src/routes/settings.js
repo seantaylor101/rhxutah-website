@@ -22,12 +22,16 @@ function readSettings() {
     // for renovation/home-improvement contractors (Hook Agency, home
     // services industry benchmarks); ~$9,500 national average roof
     // replacement cost, as a representative exterior-trades job value
-    // (HomeGuide, RoofingCalc); ~6-8% "realistic baseline" net profit
-    // margin for residential contractors/remodelers (NAHB Eye on Housing,
-    // CFMA Construction Financial Benchmarker, Foundation Software)
+    // (HomeGuide, RoofingCalc); ~24% average GROSS profit margin for
+    // construction businesses (ServiceTitan, Procore) — deliberately the
+    // gross figure (revenue minus materials/labor/typical per-job costs),
+    // not the ~7-8% bottom-line net figure, since goalMonthlyOverhead
+    // above is subtracted separately in the plan math rather than baked
+    // into this percentage. Remodeling/specialty trades commonly run
+    // higher (30-40%+) than the all-construction average — edit to match
     goalNationalWinRate: Number(map.goalNationalWinRate ?? 25),
     goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 9500),
-    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 8),
+    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 24),
   };
 }
 

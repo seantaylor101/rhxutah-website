@@ -851,7 +851,7 @@ function App() {
     goalDataSource: "national",
     goalNationalWinRate: 25,
     goalNationalAvgJobValue: 9500,
-    goalNationalProfitMargin: 8,
+    goalNationalProfitMargin: 24,
   });
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
@@ -2484,13 +2484,18 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             <input type="number" inputMode="decimal" value={avgJobDraft} onChange={(e) => setAvgJobDraft(e.target.value)} style={modalInput} />
           </div>
           <div>
-            <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin (%)</label>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin per job (%)</label>
             <input type="number" inputMode="decimal" value={marginDraft} onChange={(e) => setMarginDraft(e.target.value)} style={modalInput} />
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+              What's left from a typical job after materials, labor, and day-to-day job costs — not your monthly
+              overhead above, that's already handled separately.
+            </div>
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
             Based on published industry benchmarks — ~25% average close rate for renovation contractors, ~$9,500
-            national average roofing job as a stand-in job value, ~8% average contractor net profit margin. Edit
-            these to fit your trade and region.
+            national average roofing job as a stand-in job value, ~24% average gross profit margin for construction
+            businesses (remodeling/specialty trades often run higher — 30–40%+). Edit these to fit your trade and
+            region.
           </div>
         </div>
       ) : (
@@ -2506,7 +2511,7 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             {myMetrics.avgWonRevenueSample ? `${fmtCurrency(myMetrics.avgWonRevenue)} (${myMetrics.avgWonRevenueSample} won jobs)` : "not enough data yet"}
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink }}>
-            Profit margin:{" "}
+            Profit margin per job:{" "}
             {myMetrics.avgProfitMarginSample
               ? `${myMetrics.avgProfitMargin.toFixed(0)}% (${myMetrics.avgProfitMarginSample} jobs with cost data)`
               : "not enough data yet"}
