@@ -10,6 +10,11 @@ function readSettings() {
   return {
     overheadPercent: Number(map.overheadPercent ?? 13),
     goalAnnualTakeHome: Number(map.goalAnnualTakeHome ?? 0),
+    // fixed monthly business overhead (bills, salaried staff like a project
+    // manager) that has to be covered before any job profit becomes the
+    // owner's take-home — separate from overheadPercent above, which is a
+    // per-job allocation used in job costing, not a flat recurring cost
+    goalMonthlyOverhead: Number(map.goalMonthlyOverhead ?? 0),
     goalDataSource: map.goalDataSource === "mine" ? "mine" : "national",
     // starting assumptions for the income-goal calculator's "national
     // averages" mode, meant to be edited to fit whatever business is
@@ -33,6 +38,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   // fields are stripped on the leads API
   if (req.role !== "owner") {
     settings.goalAnnualTakeHome = null;
+    settings.goalMonthlyOverhead = null;
     settings.goalDataSource = null;
     settings.goalNationalWinRate = null;
     settings.goalNationalAvgJobValue = null;
@@ -43,6 +49,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 
 const GOAL_NUMBER_FIELDS = {
   goalAnnualTakeHome: (n) => Number.isFinite(n) && n >= 0,
+  goalMonthlyOverhead: (n) => Number.isFinite(n) && n >= 0,
   goalNationalWinRate: (n) => Number.isFinite(n) && n > 0 && n <= 100,
   goalNationalAvgJobValue: (n) => Number.isFinite(n) && n > 0,
   goalNationalProfitMargin: (n) => Number.isFinite(n) && n > 0 && n <= 100,
