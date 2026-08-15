@@ -149,6 +149,13 @@ const Info = (p) => (
     <circle cx="12" cy="8" r="1.1" fill={p.color || "currentColor"} stroke="none" />
   </Icon>
 );
+const Target = (p) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="5" />
+    <circle cx="12" cy="12" r="1.2" fill={p.color || "currentColor"} stroke="none" />
+  </Icon>
+);
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -244,7 +251,7 @@ function resolveWorkDays(lead) {
   return businessDaysBetween(lead.startDate, lead.completedAt);
 }
 
-function computeMetrics(subset) {
+function computeMetrics(subset, overheadPercent = 13) {
   const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
   const avg = (nums) => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null);
 
@@ -256,6 +263,16 @@ function computeMetrics(subset) {
     (l) => l.completedAt && l.startDate && l.revenue > 0 && resolveWorkDays(l) != null
   );
   const decidedCount = wonLeads.length + lostLeads.length;
+
+  // same job-level profit math as the Final Report modal (revenue minus
+  // material/labor/overhead), averaged across won jobs that actually have
+  // cost data entered — feeds the income-goal calculator's "my averages"
+  const costedLeads = wonWithRevenue.filter((l) => l.materialCost != null && l.laborCost != null && l.revenue > 0);
+  const profitMargins = costedLeads.map((l) => {
+    const overheadCost = (l.revenue * overheadPercent) / 100;
+    const profit = l.revenue - l.materialCost - l.laborCost - overheadCost;
+    return (profit / l.revenue) * 100;
+  });
 
   // "estimate win rate" is scoped to leads that actually got a bid sent,
   // separate from lead win rate — a source can look great on one and
@@ -277,6 +294,8 @@ function computeMetrics(subset) {
     estimateWinRateSample: estimateDecidedCount,
     avgWonRevenue: avg(wonWithRevenue.map((l) => l.revenue)),
     avgWonRevenueSample: wonWithRevenue.length,
+    avgProfitMargin: avg(profitMargins),
+    avgProfitMarginSample: profitMargins.length,
     // raw distributions, kept alongside the averages above so each metric's
     // info modal can chart where the underlying numbers actually land
     // instead of just the single blended figure
@@ -291,6 +310,26 @@ function computeMetrics(subset) {
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
     paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
+  };
+}
+
+// reverse-engineers a take-home target into a lead volume: take-home implies
+// a required revenue (via profit margin), revenue implies a job count (via
+// average job value), and job count implies a lead count (via win rate)
+function computeGoalPlan({ annualTakeHome, winRatePercent, avgJobValue, profitMarginPercent }) {
+  if (!(annualTakeHome > 0) || !(winRatePercent > 0) || !(avgJobValue > 0) || !(profitMarginPercent > 0)) {
+    return null;
+  }
+  const requiredRevenue = annualTakeHome / (profitMarginPercent / 100);
+  const jobsPerYear = requiredRevenue / avgJobValue;
+  const leadsPerYear = jobsPerYear / (winRatePercent / 100);
+  return {
+    requiredRevenue,
+    jobsPerYear,
+    jobsPerMonth: jobsPerYear / 12,
+    leadsPerYear,
+    leadsPerMonth: leadsPerYear / 12,
+    leadsPerWeek: leadsPerYear / 52,
   };
 }
 
@@ -797,8 +836,16 @@ function App() {
   const [showMetrics, setShowMetrics] = useState(false);
   const [metricsSource, setMetricsSource] = useState("all");
   const [metricInfo, setMetricInfo] = useState(null); // METRIC_INFO entry | null
+  const [showGoals, setShowGoals] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settings, setSettings] = useState({ overheadPercent: 13 });
+  const [settings, setSettings] = useState({
+    overheadPercent: 13,
+    goalAnnualTakeHome: 0,
+    goalDataSource: "national",
+    goalNationalWinRate: 25,
+    goalNationalAvgJobValue: 8000,
+    goalNationalProfitMargin: 10,
+  });
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -889,6 +936,14 @@ function App() {
       // keep the default already in state
     }
   }, []);
+
+  // shared by the Settings modal and the income-goal panel, so both stay in
+  // sync with whichever one last saved
+  const saveSettings = async (patch) => {
+    const updated = await api.updateSettings(patch);
+    setSettings(updated);
+    return updated;
+  };
 
   useEffect(() => {
     if (role) loadSettings();
@@ -1235,12 +1290,16 @@ function App() {
 
   const metrics = useMemo(() => {
     const group = METRIC_SOURCE_GROUPS.find((g) => g.key === metricsSource) || METRIC_SOURCE_GROUPS[0];
-    return computeMetrics((leads || []).filter(group.match));
-  }, [leads, metricsSource]);
+    return computeMetrics((leads || []).filter(group.match), settings.overheadPercent);
+  }, [leads, metricsSource, settings.overheadPercent]);
 
-  // unfiltered baseline used by the final-report "vs average pace" comparison,
-  // independent of whatever source filter is selected in the metrics panel
-  const allSourcesMetrics = useMemo(() => computeMetrics(leads || []), [leads]);
+  // unfiltered baseline used by the final-report "vs average pace" comparison
+  // and the income-goal calculator's "my averages" mode, independent of
+  // whatever source filter is selected in the metrics panel
+  const allSourcesMetrics = useMemo(
+    () => computeMetrics(leads || [], settings.overheadPercent),
+    [leads, settings.overheadPercent]
+  );
 
   const lookbackResult = useMemo(() => {
     if (!lookbackStart || !lookbackEnd) return null;
@@ -1560,6 +1619,20 @@ function App() {
         </div>
       )}
 
+      {editable && (
+        <div style={{ padding: "0 16px" }}>
+          <button onClick={() => setShowGoals((v) => !v)} style={lookbackToggle}>
+            <Target size={14} color={COLORS.accent} />
+            <span>Income goal</span>
+            {showGoals ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
+          </button>
+        </div>
+      )}
+
+      {editable && showGoals && (
+        <IncomeGoalPanel settings={settings} onSaveSettings={saveSettings} myMetrics={allSourcesMetrics} />
+      )}
+
       <div style={{ padding: "0 16px" }}>
         <button onClick={() => setShowLookback((v) => !v)} style={lookbackToggle}>
           <Calendar size={14} color={COLORS.accent} />
@@ -1783,10 +1856,7 @@ function App() {
       {showSettingsModal && (
         <SettingsModal
           settings={settings}
-          onSave={async (patch) => {
-            const updated = await api.updateSettings(patch);
-            setSettings(updated);
-          }}
+          onSave={saveSettings}
           onClose={() => setShowSettingsModal(false)}
           onOpenBackups={() => {
             setShowSettingsModal(false);
@@ -2267,6 +2337,199 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
           </span>
         </button>
       </div>
+    </div>
+  );
+}
+
+function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
+  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalAnnualTakeHome ? String(settings.goalAnnualTakeHome) : "");
+  const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
+  const [avgJobDraft, setAvgJobDraft] = useState(String(settings.goalNationalAvgJobValue));
+  const [marginDraft, setMarginDraft] = useState(String(settings.goalNationalProfitMargin));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const source = settings.goalDataSource;
+
+  const switchSource = async (next) => {
+    if (next === source) return;
+    try {
+      await onSaveSettings({ goalDataSource: next });
+    } catch {
+      // best-effort — a failed preference switch just doesn't stick, not
+      // worth an error banner over
+    }
+  };
+
+  const takeHomeNum = parseFloat(takeHomeDraft);
+  const canSubmit = takeHomeDraft.trim() !== "" && !isNaN(takeHomeNum) && takeHomeNum >= 0;
+
+  const submit = async () => {
+    if (isNaN(takeHomeNum) || takeHomeNum < 0) {
+      setErr("Enter a non-negative take-home amount");
+      return;
+    }
+    const patch = { goalAnnualTakeHome: takeHomeNum };
+    if (source === "national") {
+      const winRate = parseFloat(winRateDraft);
+      const avgJob = parseFloat(avgJobDraft);
+      const margin = parseFloat(marginDraft);
+      if (isNaN(winRate) || winRate <= 0 || winRate > 100) return setErr("Win rate must be between 0 and 100");
+      if (isNaN(avgJob) || avgJob <= 0) return setErr("Average job value must be greater than 0");
+      if (isNaN(margin) || margin <= 0 || margin > 100) return setErr("Profit margin must be between 0 and 100");
+      patch.goalNationalWinRate = winRate;
+      patch.goalNationalAvgJobValue = avgJob;
+      patch.goalNationalProfitMargin = margin;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await onSaveSettings(patch);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr(e.message || "Couldn't save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const missing = [];
+  if (source === "mine") {
+    if (!myMetrics.closeRateSample) missing.push("win rate");
+    if (!myMetrics.avgWonRevenueSample) missing.push("average job value");
+    if (!myMetrics.avgProfitMarginSample) missing.push("profit margin");
+  }
+
+  const inputs =
+    source === "national"
+      ? { winRatePercent: parseFloat(winRateDraft), avgJobValue: parseFloat(avgJobDraft), profitMarginPercent: parseFloat(marginDraft) }
+      : {
+          winRatePercent: myMetrics.closeRate != null ? myMetrics.closeRate * 100 : null,
+          avgJobValue: myMetrics.avgWonRevenue,
+          profitMarginPercent: myMetrics.avgProfitMargin,
+        };
+
+  const plan = !missing.length && canSubmit && takeHomeNum > 0 ? computeGoalPlan({ annualTakeHome: takeHomeNum, ...inputs }) : null;
+
+  return (
+    <div style={lookbackPanel}>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 14 }}>
+        Set the annual take-home you want, and this works backward to how many leads it takes to get there.
+      </div>
+
+      <label style={{ ...modalLabel, marginTop: 0 }}>Desired take-home (per year)</label>
+      <input
+        type="number"
+        inputMode="decimal"
+        value={takeHomeDraft}
+        onChange={(e) => setTakeHomeDraft(e.target.value)}
+        placeholder="e.g. 120000"
+        style={modalInput}
+      />
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14, marginBottom: 12 }}>
+        <button
+          onClick={() => switchSource("national")}
+          style={{ ...lookbackPresetBtn, ...(source === "national" ? lookbackPresetBtnActive : {}), flex: 1, justifyContent: "center" }}
+        >
+          National averages
+        </button>
+        <button
+          onClick={() => switchSource("mine")}
+          style={{ ...lookbackPresetBtn, ...(source === "mine" ? lookbackPresetBtnActive : {}), flex: 1, justifyContent: "center" }}
+        >
+          My averages
+        </button>
+      </div>
+
+      {source === "national" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Win rate (%)</label>
+            <input type="number" inputMode="decimal" value={winRateDraft} onChange={(e) => setWinRateDraft(e.target.value)} style={modalInput} />
+          </div>
+          <div>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Average job value ($)</label>
+            <input type="number" inputMode="decimal" value={avgJobDraft} onChange={(e) => setAvgJobDraft(e.target.value)} style={modalInput} />
+          </div>
+          <div>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin (%)</label>
+            <input type="number" inputMode="decimal" value={marginDraft} onChange={(e) => setMarginDraft(e.target.value)} style={modalInput} />
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
+            Rough construction-trades starting points — edit these to fit your trade and region.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink }}>
+            Win rate:{" "}
+            {myMetrics.closeRateSample
+              ? `${Math.round(myMetrics.closeRate * 100)}% (${myMetrics.closeRateWon} won / ${myMetrics.closeRateSample} decided)`
+              : "not enough data yet"}
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink }}>
+            Average job value:{" "}
+            {myMetrics.avgWonRevenueSample ? `${fmtCurrency(myMetrics.avgWonRevenue)} (${myMetrics.avgWonRevenueSample} won jobs)` : "not enough data yet"}
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink }}>
+            Profit margin:{" "}
+            {myMetrics.avgProfitMarginSample
+              ? `${myMetrics.avgProfitMargin.toFixed(0)}% (${myMetrics.avgProfitMarginSample} jobs with cost data)`
+              : "not enough data yet"}
+          </div>
+        </div>
+      )}
+
+      {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
+      {saved && <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>Saved.</div>}
+
+      <button
+        onClick={submit}
+        disabled={busy || !canSubmit}
+        style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !canSubmit ? 0.6 : 1 }}
+      >
+        Save
+      </button>
+
+      {missing.length > 0 && (
+        <div style={{ marginTop: 14, fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+          Not enough of your own data yet for {missing.join(", ")} — switch to National averages, or add revenue and cost
+          details to more won jobs' final reports.
+        </div>
+      )}
+
+      {plan && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
+            To take home {fmtCurrency(takeHomeNum)}/year at these rates:
+          </div>
+          <div style={metricsGrid}>
+            <div style={metricTile}>
+              <div style={metricLabel}>Revenue needed</div>
+              <div style={metricValue}>{fmtCurrency(plan.requiredRevenue)}</div>
+              <div style={metricSub}>per year</div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Jobs needed</div>
+              <div style={metricValue}>{Math.ceil(plan.jobsPerYear)}</div>
+              <div style={metricSub}>per year (~{Math.ceil(plan.jobsPerMonth)}/month)</div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Leads / month</div>
+              <div style={metricValue}>{Math.ceil(plan.leadsPerMonth)}</div>
+              <div style={metricSub}>{Math.ceil(plan.leadsPerYear)}/year</div>
+            </div>
+            <div style={metricTile}>
+              <div style={metricLabel}>Leads / week</div>
+              <div style={metricValue}>{plan.leadsPerWeek.toFixed(1)}</div>
+              <div style={metricSub}>plan for {Math.ceil(plan.leadsPerWeek)}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
