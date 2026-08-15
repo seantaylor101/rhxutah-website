@@ -843,8 +843,8 @@ function App() {
     goalAnnualTakeHome: 0,
     goalDataSource: "national",
     goalNationalWinRate: 25,
-    goalNationalAvgJobValue: 8000,
-    goalNationalProfitMargin: 10,
+    goalNationalAvgJobValue: 9500,
+    goalNationalProfitMargin: 8,
   });
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
@@ -2459,7 +2459,9 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
             <input type="number" inputMode="decimal" value={marginDraft} onChange={(e) => setMarginDraft(e.target.value)} style={modalInput} />
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
-            Rough construction-trades starting points — edit these to fit your trade and region.
+            Based on published industry benchmarks — ~25% average close rate for renovation contractors, ~$9,500
+            national average roofing job as a stand-in job value, ~8% average contractor net profit margin. Edit
+            these to fit your trade and region.
           </div>
         </div>
       ) : (

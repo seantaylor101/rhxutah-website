@@ -12,11 +12,17 @@ function readSettings() {
     goalAnnualTakeHome: Number(map.goalAnnualTakeHome ?? 0),
     goalDataSource: map.goalDataSource === "mine" ? "mine" : "national",
     // starting assumptions for the income-goal calculator's "national
-    // averages" mode — rough construction-trades benchmarks, meant to be
-    // edited to fit whatever business is actually using this
+    // averages" mode, meant to be edited to fit whatever business is
+    // actually using this. Sourced (Aug 2026): ~20-30% average close rate
+    // for renovation/home-improvement contractors (Hook Agency, home
+    // services industry benchmarks); ~$9,500 national average roof
+    // replacement cost, as a representative exterior-trades job value
+    // (HomeGuide, RoofingCalc); ~6-8% "realistic baseline" net profit
+    // margin for residential contractors/remodelers (NAHB Eye on Housing,
+    // CFMA Construction Financial Benchmarker, Foundation Software)
     goalNationalWinRate: Number(map.goalNationalWinRate ?? 25),
-    goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 8000),
-    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 10),
+    goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 9500),
+    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 8),
   };
 }
 
