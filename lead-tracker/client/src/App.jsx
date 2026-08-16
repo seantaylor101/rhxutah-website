@@ -330,6 +330,7 @@ function computeGoalPlan({ annualTakeHome, monthlyOverhead, winRatePercent, avgJ
   const leadsPerYear = jobsPerYear / (winRatePercent / 100);
   return {
     requiredRevenue,
+    requiredRevenuePerMonth: requiredRevenue / 12,
     annualOverhead,
     jobsPerYear,
     jobsPerMonth: jobsPerYear / 12,
@@ -1769,7 +1770,12 @@ function App() {
       )}
 
       {editable && showGoals && (
-        <IncomeGoalPanel settings={settings} onSaveSettings={saveSettings} myMetrics={allSourcesMetrics} />
+        <IncomeGoalPanel
+          settings={settings}
+          onSaveSettings={saveSettings}
+          myMetrics={allSourcesMetrics}
+          wonThisMonth={stats.wonMonth}
+        />
       )}
 
       <div style={{ padding: "0 16px" }}>
@@ -2660,7 +2666,44 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
   );
 }
 
-function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
+// live progress bar comparing this month's actual won revenue against the
+// monthly revenue needed to hit the take-home goal — "actual" is whatever's
+// already won this calendar month (stats.wonMonth), so this updates on its
+// own as the board changes, no separate tracking needed
+function GoalProgressMeter({ goal, actual }) {
+  const pct = goal > 0 ? (actual / goal) * 100 : 0;
+  const hit = pct >= 100;
+  const barColor = hit ? COLORS.accent : COLORS.progress;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>This month so far</span>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13.5, color: hit ? COLORS.accent : COLORS.ink }}>
+          {fmtCurrency(actual)} <span style={{ fontWeight: 400, color: COLORS.muted }}>of {fmtCurrency(goal)}</span>
+        </span>
+      </div>
+      <div style={{ height: 10, borderRadius: 5, background: COLORS.surfaceMuted, border: `1px solid ${COLORS.border}`, overflow: "hidden" }}>
+        <div
+          style={{
+            height: "100%",
+            width: `${Math.max(0, Math.min(100, pct))}%`,
+            background: barColor,
+            borderRadius: 5,
+            transition: "width 400ms ease-out",
+          }}
+        />
+      </div>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 5 }}>
+        {hit
+          ? `Goal hit — ${Math.round(pct)}% of this month's target${pct > 100 ? `, ${fmtCurrency(actual - goal)} over` : ""}`
+          : `${Math.round(pct)}% of the way there — ${fmtCurrency(Math.max(0, goal - actual))} to go`}
+      </div>
+    </div>
+  );
+}
+
+function IncomeGoalPanel({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
   const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalMonthlyTakeHome ? String(settings.goalMonthlyTakeHome) : "");
   const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
@@ -2854,12 +2897,15 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics }) {
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
             To take home {fmtCurrency(takeHomeNum)}/month ({fmtCurrency(takeHomeNum * 12)}/year) at these rates:
           </div>
-          <div style={metricsGrid}>
+
+          <GoalProgressMeter goal={plan.requiredRevenuePerMonth} actual={wonThisMonth} />
+
+          <div style={{ ...metricsGrid, marginTop: 14 }}>
             <div style={metricTile}>
-              <div style={metricLabel}>Revenue needed</div>
-              <div style={metricValue}>{fmtCurrency(plan.requiredRevenue)}</div>
+              <div style={metricLabel}>Won revenue needed</div>
+              <div style={metricValue}>{fmtCurrency(plan.requiredRevenuePerMonth)}</div>
               <div style={metricSub}>
-                per year{plan.annualOverhead > 0 ? ` (incl. ${fmtCurrency(plan.annualOverhead)} overhead)` : ""}
+                per month{plan.annualOverhead > 0 ? ` (incl. overhead)` : ""}
               </div>
             </div>
             <div style={metricTile}>
