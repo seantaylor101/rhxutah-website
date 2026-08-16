@@ -2470,32 +2470,34 @@ function MonthlyGoalPromptModal({ monthLabel, defaultTakeHome, onSetGoal, onDism
   );
 }
 
+// deliberately more forceful than the other auto-popups: centered over the
+// middle of the screen rather than a bottom sheet, with no tap-outside or
+// back-gesture dismissal — the owner/viewer has to actively pick "View
+// requests" or "Not now" to get rid of it
 function WarrantyAlertModal({ count, onView, onDismiss }) {
-  useModalBackClose(onDismiss);
-
   return (
-    <div style={modalOverlay} onClick={onDismiss}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+    <div style={{ ...modalOverlay, alignItems: "center", padding: 20, boxSizing: "border-box" }}>
+      <div style={{ ...modalCard, borderRadius: 20, border: `1px solid ${COLORS.border}`, maxWidth: 380 }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
           <div
             style={{
-              width: 52,
-              height: 52,
-              borderRadius: 26,
+              width: 60,
+              height: 60,
+              borderRadius: 30,
               background: `${COLORS.rust}1a`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Wrench size={22} color={COLORS.rust} />
+            <Wrench size={26} color={COLORS.rust} />
           </div>
         </div>
         <div
           style={{
             fontFamily: FONT_DISPLAY,
             fontWeight: 700,
-            fontSize: 17,
+            fontSize: 18,
             color: COLORS.ink,
             textAlign: "center",
             marginBottom: 8,
@@ -2507,10 +2509,10 @@ function WarrantyAlertModal({ count, onView, onDismiss }) {
         <div
           style={{
             fontFamily: FONT_BODY,
-            fontSize: 13.5,
+            fontSize: 14,
             color: COLORS.muted,
             textAlign: "center",
-            marginBottom: 18,
+            marginBottom: 20,
           }}
         >
           Please take the next steps to resolve the issue.
