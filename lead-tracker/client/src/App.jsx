@@ -889,16 +889,13 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'board' | 'archive' | 'warranty'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
-  const [showMetrics, setShowMetrics] = useState(false);
-  const [metricsSource, setMetricsSource] = useState("all");
-  const [metricInfo, setMetricInfo] = useState(null); // METRIC_INFO entry | null
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
     overheadPercent: 13,
@@ -1471,11 +1468,6 @@ function App() {
     };
   }, [leads]);
 
-  const metrics = useMemo(() => {
-    const group = METRIC_SOURCE_GROUPS.find((g) => g.key === metricsSource) || METRIC_SOURCE_GROUPS[0];
-    return computeMetrics((leads || []).filter(group.match), settings.overheadPercent);
-  }, [leads, metricsSource, settings.overheadPercent]);
-
   // unfiltered baseline used by the final-report "vs average pace" comparison
   // and the income-goal calculator's "my averages" mode, independent of
   // whatever source filter is selected in the metrics panel
@@ -1634,7 +1626,15 @@ function App() {
               <div />
             ) : (
               <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
-                {view === "dashboard" ? "Dashboard" : view === "goals" ? "Your Goals" : view === "archive" ? "Archive" : ""}
+                {view === "dashboard"
+                  ? "Dashboard"
+                  : view === "goals"
+                  ? "Your Goals"
+                  : view === "metrics"
+                  ? "Performance Metrics"
+                  : view === "archive"
+                  ? "Archive"
+                  : ""}
               </div>
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1680,6 +1680,7 @@ function App() {
           upcomingAppointment={upcomingAppointment}
           myMetrics={allSourcesMetrics}
           onOpenGoals={() => setView("goals")}
+          onOpenMetrics={() => setView("metrics")}
           onOpenBoard={() => setView("board")}
           onOpenWarranty={() => setView("warranty")}
           onOpenLead={navigateToLead}
@@ -1691,6 +1692,8 @@ function App() {
           myMetrics={allSourcesMetrics}
           wonThisMonth={stats.wonMonth}
         />
+      ) : view === "metrics" ? (
+        <MetricsView leads={leads} overheadPercent={settings.overheadPercent} />
       ) : view === "warranty" ? (
         <WarrantyView
           requests={warrantyRequests}
@@ -1769,73 +1772,6 @@ function App() {
           <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
         </button>
       </div>
-
-      <div style={{ padding: "0 16px" }}>
-        <button onClick={() => setShowMetrics((v) => !v)} style={lookbackToggle}>
-          <TrendingUp size={14} color={COLORS.accent} />
-          <span>Performance metrics</span>
-          {showMetrics ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
-        </button>
-      </div>
-
-      {showMetrics && (
-        <div style={lookbackPanel}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-            {METRIC_SOURCE_GROUPS.map((g) => (
-              <button
-                key={g.key}
-                onClick={() => setMetricsSource(g.key)}
-                style={{
-                  ...lookbackPresetBtn,
-                  ...(metricsSource === g.key ? lookbackPresetBtnActive : {}),
-                }}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 12 }}>
-            Based on {metrics.totalLeads} lead{metrics.totalLeads === 1 ? "" : "s"}
-          </div>
-          <div style={metricsGrid}>
-            {METRIC_INFO.map((info) => (
-              <button key={info.key} onClick={() => setMetricInfo(info)} style={{ ...metricTile, ...metricTileBtn }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                  <div style={metricLabel}>{info.label}</div>
-                  <Info size={13} color={COLORS.muted} />
-                </div>
-                <div style={metricValue}>{info.value(metrics)}</div>
-                <div style={metricSub}>{info.sub(metrics)}</div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {metricInfo && (
-        <div style={modalOverlay} onClick={() => setMetricInfo(null)}>
-          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
-              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
-                {metricInfo.label}
-              </div>
-              <button onClick={() => setMetricInfo(null)} style={iconBtnGhost} aria-label="Close">
-                <X size={18} color={COLORS.muted} />
-              </button>
-            </div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: COLORS.ink }}>
-              {metricInfo.value(metrics)}
-            </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 2, marginBottom: 14 }}>
-              {metricInfo.sub(metrics)}
-            </div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, lineHeight: 1.5, marginBottom: metricInfo.chart ? 18 : 0 }}>
-              {metricInfo.description}
-            </div>
-            {metricInfo.chart && metricInfo.chart(metrics)}
-          </div>
-        </div>
-      )}
 
       <div style={{ padding: "0 16px" }}>
         <button onClick={() => setShowLookback((v) => !v)} style={lookbackToggle}>
@@ -3050,6 +2986,79 @@ function GoalsView({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
   );
 }
 
+// self-contained: owns its own source filter + drill-down modal state, so it
+// only needs the raw leads/overhead inputs to compute from
+function MetricsView({ leads, overheadPercent }) {
+  const [metricsSource, setMetricsSource] = useState("all");
+  const [metricInfo, setMetricInfo] = useState(null); // METRIC_INFO entry | null
+
+  const metrics = useMemo(() => {
+    const group = METRIC_SOURCE_GROUPS.find((g) => g.key === metricsSource) || METRIC_SOURCE_GROUPS[0];
+    return computeMetrics((leads || []).filter(group.match), overheadPercent);
+  }, [leads, metricsSource, overheadPercent]);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={lookbackPanel}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {METRIC_SOURCE_GROUPS.map((g) => (
+            <button
+              key={g.key}
+              onClick={() => setMetricsSource(g.key)}
+              style={{
+                ...lookbackPresetBtn,
+                ...(metricsSource === g.key ? lookbackPresetBtnActive : {}),
+              }}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 12 }}>
+          Based on {metrics.totalLeads} lead{metrics.totalLeads === 1 ? "" : "s"}
+        </div>
+        <div style={metricsGrid}>
+          {METRIC_INFO.map((info) => (
+            <button key={info.key} onClick={() => setMetricInfo(info)} style={{ ...metricTile, ...metricTileBtn }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                <div style={metricLabel}>{info.label}</div>
+                <Info size={13} color={COLORS.muted} />
+              </div>
+              <div style={metricValue}>{info.value(metrics)}</div>
+              <div style={metricSub}>{info.sub(metrics)}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {metricInfo && (
+        <div style={modalOverlay} onClick={() => setMetricInfo(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+                {metricInfo.label}
+              </div>
+              <button onClick={() => setMetricInfo(null)} style={iconBtnGhost} aria-label="Close">
+                <X size={18} color={COLORS.muted} />
+              </button>
+            </div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: COLORS.ink }}>
+              {metricInfo.value(metrics)}
+            </div>
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 2, marginBottom: 14 }}>
+              {metricInfo.sub(metrics)}
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, lineHeight: 1.5, marginBottom: metricInfo.chart ? 18 : 0 }}>
+              {metricInfo.description}
+            </div>
+            {metricInfo.chart && metricInfo.chart(metrics)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardTile({ onClick, icon, title, children, accent, big }) {
   return (
     <button
@@ -3086,6 +3095,7 @@ function DashboardView({
   upcomingAppointment,
   myMetrics,
   onOpenGoals,
+  onOpenMetrics,
   onOpenBoard,
   onOpenWarranty,
   onOpenLead,
@@ -3150,6 +3160,23 @@ function DashboardView({
           </div>
         </DashboardTile>
 
+        <DashboardTile onClick={onOpenMetrics} icon={<TrendingUp size={15} color={COLORS.accent} />} title="Metrics" accent={COLORS.accent}>
+          {myMetrics.closeRateSample ? (
+            <>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
+                {Math.round(myMetrics.closeRate * 100)}%
+              </div>
+              <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
+                close rate — tap for full breakdown
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>Not enough data yet</div>
+          )}
+        </DashboardTile>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <DashboardTile onClick={onOpenWarranty} icon={<Wrench size={15} color={COLORS.rust} />} title="Warranty" accent={COLORS.rust}>
           <div
             style={{
@@ -3167,27 +3194,27 @@ function DashboardView({
               : `unresolved request${openWarrantyCount === 1 ? "" : "s"}`}
           </div>
         </DashboardTile>
-      </div>
 
-      <DashboardTile
-        onClick={() => (upcomingAppointment ? onOpenLead(upcomingAppointment.id) : onOpenBoard())}
-        icon={<Calendar size={15} color={COLORS.amber} />}
-        title="Next Appointment"
-        accent={COLORS.amber}
-      >
-        {upcomingAppointment ? (
-          <>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 16, color: COLORS.ink }}>
-              {upcomingAppointment.name}
-            </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 3 }}>
-              {fmtDateTime(upcomingAppointment.appointmentAt)}
-            </div>
-          </>
-        ) : (
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No appointments scheduled</div>
-        )}
-      </DashboardTile>
+        <DashboardTile
+          onClick={() => (upcomingAppointment ? onOpenLead(upcomingAppointment.id) : onOpenBoard())}
+          icon={<Calendar size={15} color={COLORS.amber} />}
+          title="Next Appointment"
+          accent={COLORS.amber}
+        >
+          {upcomingAppointment ? (
+            <>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
+                {upcomingAppointment.name}
+              </div>
+              <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
+                {fmtDateTime(upcomingAppointment.appointmentAt)}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>None scheduled</div>
+          )}
+        </DashboardTile>
+      </div>
     </div>
   );
 }
