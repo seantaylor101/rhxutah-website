@@ -1600,10 +1600,14 @@ function App() {
       )}
 
       <header style={header}>
-        <img src="/logo-mark-white.png" alt="" style={{ width: 84, height: 84, flexShrink: 0 }} />
+        <img
+          src="/logo-mark.png"
+          alt=""
+          style={{ width: 64, height: 64, borderRadius: 14, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}
+        />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
-            RHX Job Board
+            Lead Slayer
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark, marginBottom: 12 }}>
             Track every lead from first contact to paid job
@@ -2087,12 +2091,11 @@ function LoginScreen({ onLogin }) {
         input:focus, button:focus-visible { outline: 2px solid ${COLORS.accent}; outline-offset: 2px; }
       `}</style>
       <div style={{ width: "100%", maxWidth: 340 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, justifyContent: "center" }}>
-          <img src="/logo-mark-accent.png" alt="" style={{ width: 40, height: 40 }} />
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
-            RHX Job Board
-          </div>
-        </div>
+        <img
+          src="/logo-hero.jpg"
+          alt="Lead Slayer"
+          style={{ width: "100%", maxWidth: 260, display: "block", margin: "0 auto 20px", borderRadius: 12 }}
+        />
         <label style={modalLabel}>Passcode</label>
         <input
           type="password"

@@ -37,11 +37,11 @@ export function buildEvent(lead) {
     .join("\r\n");
 }
 
-export function buildCalendar(leads, { name = "RHX Appointments" } = {}) {
+export function buildCalendar(leads, { name = "Lead Slayer Appointments" } = {}) {
   return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//RHX Job Board//Appointments//EN",
+    "PRODID:-//Lead Slayer//Appointments//EN",
     "CALSCALE:GREGORIAN",
     `X-WR-CALNAME:${escapeText(name)}`,
     // hints some calendar clients (including Apple Calendar) respect for

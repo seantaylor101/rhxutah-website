@@ -1,4 +1,4 @@
-# RHX Job Board
+# Lead Slayer
 
 A lead/job tracker board (New Lead → Bid → Won/Lost → In Progress → Completed → Paid), rebuilt
 as a self-hosted app with a real backend instead of client-side `window.storage`.
