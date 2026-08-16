@@ -59,9 +59,9 @@ function readSettings() {
 router.get("/", requireAuth("viewer"), (req, res) => {
   const settings = readSettings();
   // the income-goal figures are the owner's personal take-home target —
-  // keep them out of the viewer-role response, same as job cost/profit
-  // fields are stripped on the leads API
-  if (req.role !== "owner") {
+  // keep them out of the response unless this user has financial visibility,
+  // same as job cost/profit fields are stripped on the leads API
+  if (!req.user.isAdmin && !req.user.permissions.viewFinancials) {
     settings.goalMonthlyTakeHome = null;
     settings.goalMonthlyOverhead = null;
     settings.goalDataSource = null;
@@ -81,7 +81,7 @@ const GOAL_NUMBER_FIELDS = {
   goalNationalProfitMargin: (n) => Number.isFinite(n) && n > 0 && n <= 100,
 };
 
-router.patch("/", requireAuth("owner"), (req, res) => {
+router.patch("/", requireAuth("manageSettings"), (req, res) => {
   const body = req.body || {};
   const updates = {};
 

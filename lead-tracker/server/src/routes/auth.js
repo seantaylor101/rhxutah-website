@@ -1,7 +1,8 @@
 import { Router } from "express";
-import { createHash, timingSafeEqual } from "crypto";
+import { db } from "../db.js";
 import { COOKIE_NAME, signSession } from "../auth.js";
-import { requireAuth } from "../middleware/requireAuth.js";
+import { requireAuth, userFromRow } from "../middleware/requireAuth.js";
+import { verifyPassword } from "../passwords.js";
 
 const router = Router();
 const isProd = process.env.NODE_ENV === "production";
@@ -13,19 +14,10 @@ const cookieOptions = {
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
 
-// Constant-time compare: hash both sides to a fixed-length digest first so
-// timingSafeEqual (which requires equal-length buffers) never short-circuits
-// on the attacker-controlled input's length, and never throws on a mismatch.
-function safeCompare(a, b) {
-  const hashA = createHash("sha256").update(String(a)).digest();
-  const hashB = createHash("sha256").update(String(b)).digest();
-  return timingSafeEqual(hashA, hashB);
-}
-
-// Small in-memory per-IP limiter — the passcodes are the entire auth model
-// here, so the login endpoint is the actual front door and needs its own
-// throttle independent of anything downstream. Resets on redeploy, which is
-// fine for this purpose (mirrors the limiter on the public intake route).
+// Small in-memory per-IP limiter — the login endpoint is the actual front
+// door and needs its own throttle independent of anything downstream.
+// Resets on redeploy, which is fine for this purpose (mirrors the limiter
+// on the public intake route).
 const attempts = new Map();
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 8;
@@ -52,17 +44,16 @@ router.post("/login", (req, res) => {
     return res.status(429).json({ error: "Too many attempts — try again later" });
   }
 
-  const { passcode } = req.body || {};
-  if (!passcode) return res.status(400).json({ error: "Passcode required" });
+  const { email, password } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
-  let role = null;
-  if (process.env.OWNER_PASSCODE && safeCompare(passcode, process.env.OWNER_PASSCODE)) role = "owner";
-  else if (process.env.VIEWER_PASSCODE && safeCompare(passcode, process.env.VIEWER_PASSCODE)) role = "viewer";
+  const row = db.prepare(`SELECT * FROM users WHERE email = ?`).get(String(email).trim().toLowerCase());
+  if (!row || !verifyPassword(password, row.passwordHash)) {
+    return res.status(401).json({ error: "Incorrect email or password" });
+  }
 
-  if (!role) return res.status(401).json({ error: "Incorrect passcode" });
-
-  res.cookie(COOKIE_NAME, signSession(role), cookieOptions);
-  res.json({ role });
+  res.cookie(COOKIE_NAME, signSession(row.id), cookieOptions);
+  res.json({ user: userFromRow(row) });
 });
 
 router.post("/logout", (req, res) => {
@@ -71,7 +62,7 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/me", requireAuth("viewer"), (req, res) => {
-  res.json({ role: req.role });
+  res.json({ user: req.user });
 });
 
 export default router;

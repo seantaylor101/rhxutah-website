@@ -4,11 +4,11 @@ import { listBackups, restoreBackup } from "../backupService.js";
 
 const router = Router();
 
-router.get("/", requireAuth("owner"), (req, res) => {
+router.get("/", requireAuth("manageSettings"), (req, res) => {
   res.json({ backups: listBackups() });
 });
 
-router.post("/:filename/restore", requireAuth("owner"), (req, res) => {
+router.post("/:filename/restore", requireAuth("manageSettings"), (req, res) => {
   try {
     const result = restoreBackup(req.params.filename);
     res.json({ ok: true, ...result });
