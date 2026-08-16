@@ -12,9 +12,11 @@ import notificationsRoutes from "./routes/notifications.js";
 import settingsRoutes from "./routes/settings.js";
 import backupsRoutes from "./routes/backups.js";
 import warrantyRoutes from "./routes/warranty.js";
+import calendarRoutes from "./routes/calendar.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
 import { startBackupScheduler } from "./backupService.js";
 import { startGoalReminderScheduler } from "./goalReminders.js";
+import { startAppointmentReminderScheduler } from "./appointmentReminders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -40,6 +42,7 @@ app.use("/api/notifications", notificationsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/backups", backupsRoutes);
 app.use("/api/warranty", warrantyRoutes);
+app.use("/api/calendar", calendarRoutes);
 app.use("/api/public", publicCors, publicRoutes);
 
 const clientDist = path.join(__dirname, "../../client/dist");
@@ -60,3 +63,4 @@ app.listen(port, () => console.log(`RHX Job Board listening on port ${port}`));
 startReportReminderScheduler();
 startBackupScheduler();
 startGoalReminderScheduler();
+startAppointmentReminderScheduler();

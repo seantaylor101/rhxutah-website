@@ -63,6 +63,12 @@ if (!existingColumns.has("wentWrong")) {
 if (!existingColumns.has("actualWorkDays")) {
   db.exec(`ALTER TABLE leads ADD COLUMN actualWorkDays REAL`);
 }
+if (!existingColumns.has("appointmentAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN appointmentAt TEXT`);
+}
+if (!existingColumns.has("appointmentReminderSentAt")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN appointmentReminderSentAt TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (

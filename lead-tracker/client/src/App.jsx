@@ -682,6 +682,23 @@ function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// <input type="datetime-local"> wants "YYYY-MM-DDTHH:MM" in local time, with
+// no timezone suffix — build it from the local field values, not toISOString
+// (which would shift to UTC and drift the displayed time)
+function isoToDateTimeLocal(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const off = d.getTimezoneOffset();
+  const local = new Date(d.getTime() - off * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 function startOfWeek(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -860,6 +877,9 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showGoalPrompt, setShowGoalPrompt] = useState(false);
+  const [showWarrantyAlert, setShowWarrantyAlert] = useState(false);
+  const [warrantyLoaded, setWarrantyLoaded] = useState(false);
+  const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
   const bootHtmlRef = useRef(null);
   // bumped by every leads/warranty mutation so a slower-resolving fetch
   // issued before that mutation can tell it's now stale and skip applying
@@ -871,15 +891,19 @@ function App() {
   const warrantyVersionRef = useRef(0);
   const pushPromptCheckedRef = useRef(false);
   const goalPromptCheckedRef = useRef(false);
+  const warrantyAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
   const incomeGoalSectionRef = useRef(null);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
   // a device can sit on a build from days ago until it's force-quit — check
-  // whether a newer index.html has been deployed each time the app comes
-  // back to the foreground, and offer a tap-to-refresh instead of leaving
-  // stale UI (e.g. a since-removed edit affordance) up until a force-quit
+  // whether a newer index.html has been deployed both whenever the app
+  // comes back to the foreground AND on a standing timer (a device that's
+  // simply left open, never backgrounded, would otherwise never see a
+  // shipped fix — exactly the scenario that made an already-fixed bug look
+  // like it was still broken), and offer a tap-to-refresh rather than
+  // leaving stale UI/logic up until a force-quit
   useEffect(() => {
     const fetchIndexHtml = () => fetch("/", { cache: "no-store" }).then((r) => r.text());
     fetchIndexHtml()
@@ -900,7 +924,13 @@ function App() {
       if (document.visibilityState === "visible") checkForUpdate();
     };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    }, 5 * 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -947,6 +977,8 @@ function App() {
     } catch {
       // keep whatever was already loaded rather than blanking the badge/list
       // on a transient failure
+    } finally {
+      setWarrantyLoaded(true);
     }
   }, []);
 
@@ -1038,6 +1070,33 @@ function App() {
       setShowGoalPrompt(true);
     }, 1200);
   }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
+
+  // gives the push/goal prompts (which fire on their own 1200ms delay) a
+  // head start before the warranty alert gets a turn — set once per mount,
+  // deliberately not re-triggered by anything else
+  useEffect(() => {
+    const t = setTimeout(() => setWarrantyAlertDelayElapsed(true), 1800);
+    return () => clearTimeout(t);
+  }, []);
+
+  // every time the app opens (any role), if there's at least one unresolved
+  // warranty request, prompt for it — unlike the monthly goal prompt this
+  // has no "confirmed" state to suppress it, since simply having the app
+  // open doesn't resolve a warranty request; it keeps showing once per
+  // session for as long as anything is still open. Re-checks (rather than a
+  // one-shot check) whenever the other two auto-popups' state changes, so a
+  // goal/push prompt that's still open at the 1800ms mark doesn't
+  // permanently suppress this for the rest of the session — it fires as
+  // soon as they clear instead
+  useEffect(() => {
+    if (warrantyAlertShownRef.current) return;
+    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed) return;
+    if (showPushPrompt || showGoalPrompt) return;
+    const stillOpen = warrantyRequests.filter((w) => w.stage !== "resolved").length;
+    if (stillOpen === 0) return;
+    warrantyAlertShownRef.current = true;
+    setShowWarrantyAlert(true);
+  }, [role, warrantyLoaded, warrantyAlertDelayElapsed, warrantyRequests, showPushPrompt, showGoalPrompt]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
@@ -1933,6 +1992,16 @@ function App() {
           onDismiss={() => setShowGoalPrompt(false)}
         />
       )}
+      {showWarrantyAlert && (
+        <WarrantyAlertModal
+          count={openWarrantyCount}
+          onView={() => {
+            setShowWarrantyAlert(false);
+            setView("warranty");
+          }}
+          onDismiss={() => setShowWarrantyAlert(false)}
+        />
+      )}
       {showAccountModal && (
         <AccountModal
           role={role}
@@ -2401,6 +2470,68 @@ function MonthlyGoalPromptModal({ monthLabel, defaultTakeHome, onSetGoal, onDism
   );
 }
 
+function WarrantyAlertModal({ count, onView, onDismiss }) {
+  useModalBackClose(onDismiss);
+
+  return (
+    <div style={modalOverlay} onClick={onDismiss}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              background: `${COLORS.rust}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Wrench size={22} color={COLORS.rust} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 17,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          {count === 1 ? "You have a warranty request" : `You have ${count} warranty requests`} that{" "}
+          {count === 1 ? "has" : "have"} not been resolved
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 13.5,
+            color: COLORS.muted,
+            textAlign: "center",
+            marginBottom: 18,
+          }}
+        >
+          Please take the next steps to resolve the issue.
+        </div>
+        <button
+          onClick={onView}
+          style={{ ...addBtn, background: COLORS.rust, width: "100%", justifyContent: "center" }}
+        >
+          View requests
+        </button>
+        <button
+          onClick={onDismiss}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Not now</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AccountModal({ role, onSwitch, onLogout, onClose }) {
   useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
@@ -2757,6 +2888,23 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const feedUrl = settings.calendarFeedToken
+    ? `${window.location.protocol}//${window.location.host}/api/calendar/feed/${settings.calendarFeedToken}.ics`
+    : "";
+  const webcalUrl = feedUrl.replace(/^https?:\/\//, "webcal://");
+
+  const copyFeedLink = async () => {
+    try {
+      await navigator.clipboard.writeText(feedUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // clipboard API can be unavailable (e.g. non-HTTPS) — the link is
+      // still selectable/copyable by hand from the input below
+    }
+  };
 
   const submit = async () => {
     const n = parseFloat(draft);
@@ -2811,6 +2959,46 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
         >
           Save
         </button>
+
+        {feedUrl && (
+          <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${COLORS.border}` }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 4 }}>
+              Sales appointments calendar
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 10 }}>
+              Subscribe once from your iPhone or Mac (Settings/Calendar → Add Account → Other → Add Subscribed
+              Calendar) and every appointment set in the app will show up automatically, kept in sync in the
+              background.
+            </div>
+            <a
+              href={webcalUrl}
+              style={{
+                ...addBtn,
+                width: "100%",
+                justifyContent: "center",
+                textDecoration: "none",
+                boxSizing: "border-box",
+              }}
+            >
+              Subscribe in Apple Calendar
+            </a>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input readOnly value={feedUrl} style={{ ...modalInput, flex: 1, fontSize: 12 }} onClick={(e) => e.target.select()} />
+              <button
+                onClick={copyFeedLink}
+                style={{ ...iconBtn, background: COLORS.accent, flexShrink: 0 }}
+                aria-label="Copy calendar link"
+              >
+                <Check size={18} color="#fff" />
+              </button>
+            </div>
+            {linkCopied && (
+              <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 6 }}>
+                Link copied.
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           onClick={onOpenBackups}
@@ -4244,6 +4432,8 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const [editingSource, setEditingSource] = useState(false);
   const [sourceDraft, setSourceDraft] = useState(lead.source || "");
   const [sourceOtherDraft, setSourceOtherDraft] = useState(lead.sourceOther || "");
+  const [editingAppointment, setEditingAppointment] = useState(false);
+  const [appointmentDraft, setAppointmentDraft] = useState(isoToDateTimeLocal(lead.appointmentAt));
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
@@ -4325,6 +4515,24 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
       sourceOther: needsOther ? sourceOtherDraft.trim() : "",
     });
     setEditingSource(false);
+  };
+
+  const openAppointmentEdit = () => {
+    setAppointmentDraft(isoToDateTimeLocal(lead.appointmentAt));
+    setEditingAppointment(true);
+  };
+
+  const saveAppointment = () => {
+    // datetime-local has no timezone info — new Date(...) on it is parsed in
+    // the browser's local zone, which is what we want since it's what the
+    // owner picked on their own device
+    onEditField(lead.id, "appointmentAt", appointmentDraft ? new Date(appointmentDraft).toISOString() : null);
+    setEditingAppointment(false);
+  };
+
+  const clearAppointment = () => {
+    onEditField(lead.id, "appointmentAt", null);
+    setEditingAppointment(false);
   };
 
   return (
@@ -4604,6 +4812,79 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
                 <X size={18} color="#fff" />
               </button>
             </>
+          )}
+        </div>
+
+        {/* sales appointment — editable at any stage in case it needs rescheduling;
+            drives the 7am-of push reminder and the Apple Calendar feed */}
+        <div style={{ marginTop: 10 }}>
+          <div
+            onClick={!editingAppointment && editable ? openAppointmentEdit : undefined}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingAppointment && editable ? "pointer" : "default",
+            }}
+          >
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Appointment</span>
+            {!editingAppointment ? (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.appointmentAt ? "#4A463D" : "#B8B0A0" }}>
+                {lead.appointmentAt ? fmtDateTime(lead.appointmentAt) : "not set"}
+              </span>
+            ) : (
+              <>
+                <input
+                  type="datetime-local"
+                  autoFocus
+                  value={appointmentDraft}
+                  onChange={(e) => setAppointmentDraft(e.target.value)}
+                  style={inlineInput}
+                />
+                <button onClick={saveAppointment} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save appointment">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingAppointment(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel appointment edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+          {editingAppointment && lead.appointmentAt && (
+            <button
+              onClick={clearAppointment}
+              style={{
+                marginTop: 6,
+                background: "none",
+                border: "none",
+                padding: 0,
+                fontFamily: FONT_UTIL,
+                fontSize: 12.5,
+                color: COLORS.rust,
+                cursor: "pointer",
+                textDecoration: "underline",
+              }}
+            >
+              Clear appointment
+            </button>
+          )}
+          {!editingAppointment && lead.appointmentAt && (
+            <a
+              href={`/api/calendar/leads/${lead.id}.ics`}
+              style={{
+                marginTop: 6,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontFamily: FONT_UTIL,
+                fontSize: 12.5,
+                color: COLORS.accent,
+                textDecoration: "none",
+              }}
+            >
+              <Calendar size={13} color={COLORS.accent} />
+              Add to calendar
+            </a>
           )}
         </div>
 

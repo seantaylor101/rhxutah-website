@@ -20,6 +20,7 @@ const EDITABLE_FIELDS = new Set([
   "email",
   "source",
   "sourceOther",
+  "appointmentAt",
 ]);
 
 function rowToLead(row) {
@@ -225,6 +226,12 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   }
   if ("sourceOther" in updates) {
     updates.sourceOther = String(updates.sourceOther || "").trim();
+  }
+  if ("appointmentAt" in updates) {
+    updates.appointmentAt = updates.appointmentAt || null;
+    // a changed/cleared appointment needs its own fresh 7am reminder, not the
+    // old appointment's already-sent flag silently suppressing it
+    updates.appointmentReminderSentAt = null;
   }
 
   const fields = Object.keys(updates);

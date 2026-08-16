@@ -1,8 +1,20 @@
 import { Router } from "express";
+import { randomBytes } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = Router();
+
+// opaque token gating the public, unauthenticated calendar-subscription feed
+// (Apple Calendar's fetcher can't carry the app's session cookie) — generated
+// once on first use and persisted like any other setting
+export function getOrCreateCalendarFeedToken() {
+  const existing = db.prepare(`SELECT value FROM settings WHERE key = 'calendarFeedToken'`).get();
+  if (existing) return existing.value;
+  const token = randomBytes(24).toString("hex");
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('calendarFeedToken', ?)`).run(token);
+  return token;
+}
 
 function readSettings() {
   const rows = db.prepare(`SELECT key, value FROM settings`).all();
@@ -38,6 +50,9 @@ function readSettings() {
     // "actually confirmed for the month I'm in right now" without relying
     // on per-device localStorage
     goalMonthConfirmed: map.goalMonthConfirmed || "",
+    // visible to both roles — same as the leads/appointments data it exposes,
+    // just handed to Apple Calendar instead of rendered in the app
+    calendarFeedToken: getOrCreateCalendarFeedToken(),
   };
 }
 
