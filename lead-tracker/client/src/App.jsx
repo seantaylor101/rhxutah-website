@@ -118,6 +118,12 @@ const Grid = (p) => (
     <rect x="14" y="14" width="7" height="7" />
   </Icon>
 );
+const Home = (p) => (
+  <Icon {...p}>
+    <path d="M3 10.5 12 3l9 7.5" />
+    <path d="M5.5 9.5V21h13V9.5" />
+  </Icon>
+);
 const Wrench = (p) => (
   <Icon {...p}>
     <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -338,6 +344,39 @@ function computeGoalPlan({ annualTakeHome, monthlyOverhead, winRatePercent, avgJ
     leadsPerMonth: leadsPerYear / 12,
     leadsPerWeek: leadsPerYear / 52,
   };
+}
+
+// same math as computeGoalPlan, but reading straight off the saved settings
+// (not in-progress draft inputs) — used anywhere that needs "the current
+// goal" without an editing form attached, like the dashboard tile and the
+// Goals page's read-only status view
+function computeGoalPlanFromSettings(settings, myMetrics) {
+  const takeHomeNum = Number(settings.goalMonthlyTakeHome) || 0;
+  const overheadNum = Number(settings.goalMonthlyOverhead) || 0;
+  const source = settings.goalDataSource;
+  const missing = [];
+  if (source === "mine") {
+    if (!myMetrics.closeRateSample) missing.push("win rate");
+    if (!myMetrics.avgWonRevenueSample) missing.push("average job value");
+    if (!myMetrics.avgProfitMarginSample) missing.push("profit margin");
+  }
+  const inputs =
+    source === "national"
+      ? {
+          winRatePercent: settings.goalNationalWinRate,
+          avgJobValue: settings.goalNationalAvgJobValue,
+          profitMarginPercent: settings.goalNationalProfitMargin,
+        }
+      : {
+          winRatePercent: myMetrics.closeRate != null ? myMetrics.closeRate * 100 : null,
+          avgJobValue: myMetrics.avgWonRevenue,
+          profitMarginPercent: myMetrics.avgProfitMargin,
+        };
+  const plan =
+    !missing.length && takeHomeNum > 0
+      ? computeGoalPlan({ annualTakeHome: takeHomeNum * 12, monthlyOverhead: overheadNum, ...inputs })
+      : null;
+  return { plan, missing, takeHomeNum };
 }
 
 function fmtDays(n) {
@@ -850,7 +889,7 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("board"); // 'board' | 'archive' | 'warranty'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'board' | 'archive' | 'warranty'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
@@ -860,7 +899,6 @@ function App() {
   const [showMetrics, setShowMetrics] = useState(false);
   const [metricsSource, setMetricsSource] = useState("all");
   const [metricInfo, setMetricInfo] = useState(null); // METRIC_INFO entry | null
-  const [showGoals, setShowGoals] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
     overheadPercent: 13,
@@ -894,7 +932,6 @@ function App() {
   const goalPromptCheckedRef = useRef(false);
   const warrantyAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
-  const incomeGoalSectionRef = useRef(null);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
@@ -1009,10 +1046,7 @@ function App() {
   const setMonthlyGoalFromPrompt = async (amount) => {
     await saveSettings({ goalMonthlyTakeHome: amount });
     setShowGoalPrompt(false);
-    setShowGoals(true);
-    setTimeout(() => {
-      incomeGoalSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 100);
+    setView("goals");
   };
 
   useEffect(() => {
@@ -1333,6 +1367,15 @@ function App() {
     return c;
   }, [leads]);
 
+  // soonest not-yet-passed sales appointment, for the dashboard's
+  // Appointments tile
+  const upcomingAppointment = useMemo(() => {
+    const now = Date.now();
+    return (leads || [])
+      .filter((l) => !l.archived && l.appointmentAt && new Date(l.appointmentAt).getTime() >= now)
+      .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))[0] || null;
+  }, [leads]);
+
   const visible = useMemo(
     () =>
       (leads || [])
@@ -1574,19 +1617,33 @@ function App() {
             Track every lead from first contact to paid job
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            {editable ? (
-              <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
-                <Plus size={16} strokeWidth={2.5} />
-                New Lead
-              </button>
+            {view === "board" ? (
+              editable ? (
+                <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
+                  <Plus size={16} strokeWidth={2.5} />
+                  New Lead
+                </button>
+              ) : (
+                <div style={viewBadge}>
+                  <Eye size={13} color={COLORS.mutedOnDark} />
+                  <span>View only</span>
+                </div>
+              )
+            ) : view === "warranty" ? (
+              // WarrantyView renders its own in-content title + back control
+              <div />
             ) : (
-              <div style={viewBadge}>
-                <Eye size={13} color={COLORS.mutedOnDark} />
-                <span>View only</span>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
+                {view === "dashboard" ? "Dashboard" : view === "goals" ? "Your Goals" : view === "archive" ? "Archive" : ""}
               </div>
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {view !== "warranty" && (
+              {view !== "dashboard" && (
+                <button onClick={() => setView("dashboard")} style={headerIconBtn} aria-label="Dashboard">
+                  <Home size={20} color={COLORS.surface} strokeWidth={2} />
+                </button>
+              )}
+              {(view === "board" || view === "archive") && (
                 <button
                   onClick={() => setView(view === "board" ? "archive" : "board")}
                   style={headerIconBtn}
@@ -1613,7 +1670,28 @@ function App() {
         </div>
       </header>
 
-      {view === "warranty" ? (
+      {view === "dashboard" ? (
+        <DashboardView
+          editable={editable}
+          settings={settings}
+          stats={stats}
+          counts={counts}
+          openWarrantyCount={openWarrantyCount}
+          upcomingAppointment={upcomingAppointment}
+          myMetrics={allSourcesMetrics}
+          onOpenGoals={() => setView("goals")}
+          onOpenBoard={() => setView("board")}
+          onOpenWarranty={() => setView("warranty")}
+          onOpenLead={navigateToLead}
+        />
+      ) : view === "goals" ? (
+        <GoalsView
+          settings={settings}
+          onSaveSettings={saveSettings}
+          myMetrics={allSourcesMetrics}
+          wonThisMonth={stats.wonMonth}
+        />
+      ) : view === "warranty" ? (
         <WarrantyView
           requests={warrantyRequests}
           editable={editable}
@@ -1624,7 +1702,7 @@ function App() {
           onAdd={addWarrantyRequest}
           onUploadPhotos={uploadWarrantyPhotos}
           onDeletePhoto={deleteWarrantyPhoto}
-          onBack={() => setView("board")}
+          onBack={() => setView("dashboard")}
         />
       ) : (
         <>
@@ -1757,25 +1835,6 @@ function App() {
             {metricInfo.chart && metricInfo.chart(metrics)}
           </div>
         </div>
-      )}
-
-      {editable && (
-        <div ref={incomeGoalSectionRef} style={{ padding: "0 16px" }}>
-          <button onClick={() => setShowGoals((v) => !v)} style={lookbackToggle}>
-            <Target size={14} color={COLORS.accent} />
-            <span>Income goal</span>
-            {showGoals ? <ChevronUp size={14} color={COLORS.accent} /> : <ChevronDown size={14} color={COLORS.accent} />}
-          </button>
-        </div>
-      )}
-
-      {editable && showGoals && (
-        <IncomeGoalPanel
-          settings={settings}
-          onSaveSettings={saveSettings}
-          myMetrics={allSourcesMetrics}
-          wonThisMonth={stats.wonMonth}
-        />
       )}
 
       <div style={{ padding: "0 16px" }}>
@@ -2703,7 +2762,46 @@ function GoalProgressMeter({ goal, actual }) {
   );
 }
 
-function IncomeGoalPanel({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
+// the meter + breakdown tiles, shared by the editing form's live preview and
+// the Goals page's read-only status view
+function GoalPlanSummary({ plan, wonThisMonth, takeHomeNum }) {
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
+        To take home {fmtCurrency(takeHomeNum)}/month ({fmtCurrency(takeHomeNum * 12)}/year) at these rates:
+      </div>
+
+      <GoalProgressMeter goal={plan.requiredRevenuePerMonth} actual={wonThisMonth} />
+
+      <div style={{ ...metricsGrid, marginTop: 14 }}>
+        <div style={metricTile}>
+          <div style={metricLabel}>Won revenue needed</div>
+          <div style={metricValue}>{fmtCurrency(plan.requiredRevenuePerMonth)}</div>
+          <div style={metricSub}>per month{plan.annualOverhead > 0 ? ` (incl. overhead)` : ""}</div>
+        </div>
+        <div style={metricTile}>
+          <div style={metricLabel}>Jobs needed</div>
+          <div style={metricValue}>{Math.ceil(plan.jobsPerYear)}</div>
+          <div style={metricSub}>per year (~{Math.ceil(plan.jobsPerMonth)}/month)</div>
+        </div>
+        <div style={metricTile}>
+          <div style={metricLabel}>Leads / month</div>
+          <div style={metricValue}>{Math.ceil(plan.leadsPerMonth)}</div>
+          <div style={metricSub}>{Math.ceil(plan.leadsPerYear)}/year</div>
+        </div>
+        <div style={metricTile}>
+          <div style={metricLabel}>Leads / week</div>
+          <div style={metricValue}>{plan.leadsPerWeek.toFixed(1)}</div>
+          <div style={metricSub}>plan for {Math.ceil(plan.leadsPerWeek)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// wraps the editable inputs; used both for first-time setup (no onCancel)
+// and for revising an existing goal from the Goals page (onCancel provided)
+function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, onSaved, onCancel }) {
   const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalMonthlyTakeHome ? String(settings.goalMonthlyTakeHome) : "");
   const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
@@ -2755,7 +2853,10 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics, wonThisMonth }) 
     try {
       await onSaveSettings(patch);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => {
+        setSaved(false);
+        onSaved?.();
+      }, 700);
     } catch (e) {
       setErr(e.message || "Couldn't save");
     } finally {
@@ -2877,13 +2978,24 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics, wonThisMonth }) 
       {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
       {saved && <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>Saved.</div>}
 
-      <button
-        onClick={submit}
-        disabled={busy || !canSubmit}
-        style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !canSubmit ? 0.6 : 1 }}
-      >
-        Save
-      </button>
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button
+          onClick={submit}
+          disabled={busy || !canSubmit}
+          style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: busy || !canSubmit ? 0.6 : 1 }}
+        >
+          Save
+        </button>
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            style={{ ...roleOption, flex: 1, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+          >
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+          </button>
+        )}
+      </div>
 
       {missing.length > 0 && (
         <div style={{ marginTop: 14, fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
@@ -2892,40 +3004,190 @@ function IncomeGoalPanel({ settings, onSaveSettings, myMetrics, wonThisMonth }) 
         </div>
       )}
 
-      {plan && (
-        <div style={{ marginTop: 18 }}>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
-            To take home {fmtCurrency(takeHomeNum)}/month ({fmtCurrency(takeHomeNum * 12)}/year) at these rates:
-          </div>
+      {plan && <GoalPlanSummary plan={plan} wonThisMonth={wonThisMonth} takeHomeNum={takeHomeNum} />}
+    </div>
+  );
+}
 
-          <GoalProgressMeter goal={plan.requiredRevenuePerMonth} actual={wonThisMonth} />
+// wraps the editor: shows a read-only status view (live meter + breakdown)
+// by default once a goal exists — the main thing to see at a glance — and
+// only reveals the adjustable inputs when "Edit goal" is tapped
+function GoalsView({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
+  const { plan, missing, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
+  const hasGoal = takeHomeNum > 0;
+  const [editing, setEditing] = useState(!hasGoal);
 
-          <div style={{ ...metricsGrid, marginTop: 14 }}>
-            <div style={metricTile}>
-              <div style={metricLabel}>Won revenue needed</div>
-              <div style={metricValue}>{fmtCurrency(plan.requiredRevenuePerMonth)}</div>
-              <div style={metricSub}>
-                per month{plan.annualOverhead > 0 ? ` (incl. overhead)` : ""}
-              </div>
+  return (
+    <div style={{ padding: 16 }}>
+      {hasGoal && !editing ? (
+        <div style={lookbackPanel}>
+          {plan ? (
+            <GoalPlanSummary plan={plan} wonThisMonth={wonThisMonth} takeHomeNum={takeHomeNum} />
+          ) : (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+              Not enough of your own data yet for {missing.join(", ")} — switch to National averages, or add revenue
+              and cost details to more won jobs' final reports.
             </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Jobs needed</div>
-              <div style={metricValue}>{Math.ceil(plan.jobsPerYear)}</div>
-              <div style={metricSub}>per year (~{Math.ceil(plan.jobsPerMonth)}/month)</div>
-            </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Leads / month</div>
-              <div style={metricValue}>{Math.ceil(plan.leadsPerMonth)}</div>
-              <div style={metricSub}>{Math.ceil(plan.leadsPerYear)}/year</div>
-            </div>
-            <div style={metricTile}>
-              <div style={metricLabel}>Leads / week</div>
-              <div style={metricValue}>{plan.leadsPerWeek.toFixed(1)}</div>
-              <div style={metricSub}>plan for {Math.ceil(plan.leadsPerWeek)}</div>
-            </div>
-          </div>
+          )}
+          <button
+            onClick={() => setEditing(true)}
+            style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 18 }}
+          >
+            Edit goal
+          </button>
         </div>
+      ) : (
+        <IncomeGoalEditor
+          settings={settings}
+          onSaveSettings={onSaveSettings}
+          myMetrics={myMetrics}
+          wonThisMonth={wonThisMonth}
+          onSaved={() => setEditing(false)}
+          onCancel={hasGoal ? () => setEditing(false) : null}
+        />
       )}
+    </div>
+  );
+}
+
+function DashboardTile({ onClick, icon, title, children, accent, big }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        ...statCard,
+        ...statCardBtn,
+        display: "block",
+        width: "100%",
+        borderLeft: `4px solid ${accent || COLORS.accent}`,
+        padding: big ? "18px" : "14px 16px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        {icon}
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: big ? 15 : 13.5, color: COLORS.ink }}>
+          {title}
+        </span>
+      </div>
+      {children}
+    </button>
+  );
+}
+
+// the home screen — leads with "how am I doing on my goals" as the headline
+// tile, with Job Board / Warranty / Appointments as quick-glance tiles below
+// that tap through to their full views
+function DashboardView({
+  editable,
+  settings,
+  stats,
+  counts,
+  openWarrantyCount,
+  upcomingAppointment,
+  myMetrics,
+  onOpenGoals,
+  onOpenBoard,
+  onOpenWarranty,
+  onOpenLead,
+}) {
+  const { plan, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
+  const hasGoal = takeHomeNum > 0;
+  const pct = plan && plan.requiredRevenuePerMonth > 0 ? (stats.wonMonth / plan.requiredRevenuePerMonth) * 100 : 0;
+  const activeLeadsCount = STAGES.reduce((sum, s) => sum + (counts[s.key] || 0), 0);
+
+  return (
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+      {editable && (
+        <DashboardTile onClick={onOpenGoals} icon={<Target size={16} color={COLORS.accent} />} title="Goals" big>
+          {hasGoal && plan ? (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, flexWrap: "wrap", gap: 4 }}>
+                <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.ink }}>
+                  {fmtCurrency(stats.wonMonth)}
+                </span>
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>
+                  of {fmtCurrency(plan.requiredRevenuePerMonth)} this month
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 8,
+                  borderRadius: 4,
+                  background: COLORS.surfaceMuted,
+                  border: `1px solid ${COLORS.border}`,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${Math.max(0, Math.min(100, pct))}%`,
+                    background: pct >= 100 ? COLORS.accent : COLORS.progress,
+                    borderRadius: 4,
+                  }}
+                />
+              </div>
+              <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 6 }}>
+                {pct >= 100 ? "Goal hit for this month — tap to see the full breakdown" : `${Math.round(pct)}% of the way there — tap for details`}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+              Set a monthly take-home target to see your progress here.
+            </div>
+          )}
+        </DashboardTile>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <DashboardTile onClick={onOpenBoard} icon={<Grid size={15} color={COLORS.info} />} title="Job Board" accent={COLORS.info}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink }}>
+            {activeLeadsCount}
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 400, fontSize: 13, color: COLORS.muted }}> active</span>
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
+            {counts.new || 0} new · {counts.won || 0} won · {counts.progress || 0} in progress
+          </div>
+        </DashboardTile>
+
+        <DashboardTile onClick={onOpenWarranty} icon={<Wrench size={15} color={COLORS.rust} />} title="Warranty" accent={COLORS.rust}>
+          <div
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontWeight: 700,
+              fontSize: 22,
+              color: openWarrantyCount > 0 ? COLORS.rust : COLORS.ink,
+            }}
+          >
+            {openWarrantyCount}
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
+            {openWarrantyCount === 0
+              ? "All clear"
+              : `unresolved request${openWarrantyCount === 1 ? "" : "s"}`}
+          </div>
+        </DashboardTile>
+      </div>
+
+      <DashboardTile
+        onClick={() => (upcomingAppointment ? onOpenLead(upcomingAppointment.id) : onOpenBoard())}
+        icon={<Calendar size={15} color={COLORS.amber} />}
+        title="Next Appointment"
+        accent={COLORS.amber}
+      >
+        {upcomingAppointment ? (
+          <>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 16, color: COLORS.ink }}>
+              {upcomingAppointment.name}
+            </div>
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 3 }}>
+              {fmtDateTime(upcomingAppointment.appointmentAt)}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No appointments scheduled</div>
+        )}
+      </DashboardTile>
     </div>
   );
 }
@@ -3253,7 +3515,7 @@ function WarrantyView({
           <button
             onClick={onBack}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
-            aria-label="Back to board"
+            aria-label="Back to dashboard"
           >
             <ChevronLeft size={20} color={COLORS.ink} />
             <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: COLORS.ink }}>
