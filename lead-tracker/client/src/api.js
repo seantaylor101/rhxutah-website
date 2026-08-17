@@ -47,6 +47,10 @@ export const api = {
     }),
   editLead: (id, patch) => request(`/leads/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
+  setScopeOfWork: (id, items) =>
+    request(`/leads/${id}/scope-of-work`, { method: "PUT", body: JSON.stringify({ items }) }),
+  toggleScopeOfWorkItem: (id, itemId, done) =>
+    request(`/leads/${id}/scope-of-work`, { method: "PATCH", body: JSON.stringify({ itemId, done }) }),
   deleteLead: (id) => request(`/leads/${id}`, { method: "DELETE" }),
   getSettings: () => request("/settings"),
   updateSettings: (patch) => request("/settings", { method: "PATCH", body: JSON.stringify(patch) }),
@@ -74,4 +78,6 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
+  listActivityLog: () => request("/activity/log"),
+  listAccessLog: () => request("/activity/access"),
 };

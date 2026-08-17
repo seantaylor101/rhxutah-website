@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDueReportReminders } from "../reportReminders.js";
 import { sendPushToRole } from "../pushService.js";
+import { logMove } from "../activityLog.js";
 
 const router = Router();
 
@@ -18,13 +19,22 @@ const EDITABLE_FIELDS = new Set([
   "job",
   "phone",
   "email",
+  "address",
   "source",
   "sourceOther",
   "appointmentAt",
 ]);
 
 function rowToLead(row) {
-  return { ...row, archived: !!row.archived };
+  let scopeOfWork = [];
+  if (row.scopeOfWork) {
+    try {
+      scopeOfWork = JSON.parse(row.scopeOfWork);
+    } catch {
+      scopeOfWork = [];
+    }
+  }
+  return { ...row, archived: !!row.archived, scopeOfWork };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -35,6 +45,7 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     job: String(job || "").trim(),
     phone: String(phone || "").trim(),
     email: String(email || "").trim(),
+    address: "",
     stage: "new",
     createdAt: new Date().toISOString(),
     startDate: "",
@@ -47,11 +58,12 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     sourceOther: source === "other" || source === "website" ? String(sourceOther || "").trim() : "",
     archived: 0,
     archivedAt: null,
+    scopeOfWork: "",
   };
 
   db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt)
-     VALUES (@id, @name, @job, @phone, @email, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt)`
+    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork)
+     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork)`
   ).run(lead);
 
   return lead;
@@ -122,11 +134,19 @@ const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", 
 const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
-router.post("/:id/move", requireAuth("owner"), (req, res) => {
+// viewer-level so the project manager can advance a job from "in progress"
+// to "completed" — every other transition (including reverts) stays
+// owner-only, enforced below since requireAuth only checks the floor
+router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   const { stage, date, revert, workDays } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
+
+  if (req.role !== "owner") {
+    const viewerAllowed = !revert && row.stage === "progress" && stage === "completed";
+    if (!viewerAllowed) return res.status(403).json({ error: "Editor access required" });
+  }
 
   let ts = new Date().toISOString();
   if (date) {
@@ -186,6 +206,15 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   });
 
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+
+  logMove({
+    type: "lead",
+    entityId: row.id,
+    entityName: row.name,
+    fromStage: row.stage,
+    toStage: stage,
+    role: req.role,
+  });
 
   // a lead just landed in "completed" — send the first "complete final
   // report" reminder right away instead of waiting for the next hourly sweep
@@ -273,6 +302,58 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
     id: row.id,
   });
 
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+function readScopeOfWork(row) {
+  if (!row.scopeOfWork) return [];
+  try {
+    return JSON.parse(row.scopeOfWork);
+  } catch {
+    return [];
+  }
+}
+
+// full replace of the scope-of-work checklist — owner-only, used both for
+// the initial fill-out right after marking a lead won and for later edits
+// to the item list
+router.put("/:id/scope-of-work", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const items = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!items) return res.status(400).json({ error: "items array is required" });
+
+  const cleaned = [];
+  for (const item of items) {
+    const text = String(item?.text || "").trim();
+    if (!text) continue;
+    cleaned.push({
+      id: typeof item?.id === "string" && item.id ? item.id : randomUUID(),
+      text,
+      done: !!item?.done,
+    });
+  }
+
+  db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(cleaned), row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+// toggling a single item's done state — viewer-level so the project
+// manager can check items off as the crew works through them
+router.patch("/:id/scope-of-work", requireAuth("viewer"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const { itemId, done } = req.body || {};
+  if (!itemId) return res.status(400).json({ error: "itemId is required" });
+
+  const items = readScopeOfWork(row);
+  const item = items.find((i) => i.id === itemId);
+  if (!item) return res.status(404).json({ error: "Checklist item not found" });
+  item.done = !!done;
+
+  db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
