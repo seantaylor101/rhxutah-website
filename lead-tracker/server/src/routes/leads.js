@@ -192,11 +192,21 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     patch.paidAt = ts;
   } else if (stage === "progress") {
     patch.paidAt = null;
-  } else {
-    // new / lost
+  } else if (stage === "lost") {
+    // a lead can be marked lost from any point in the process (a won job
+    // can still fall through before it starts, a job in progress can get
+    // cancelled, etc) — clear every later-stage timestamp so stats keep
+    // reading this as "not won" regardless of how far it got. bidSentAt is
+    // deliberately kept: the bid was still genuinely sent
     patch.wonAt = null;
     patch.paidAt = null;
-    if (stage === "new") patch.bidSentAt = null;
+    patch.completedAt = null;
+    patch.actualWorkDays = null;
+  } else {
+    // new (reopen)
+    patch.wonAt = null;
+    patch.paidAt = null;
+    patch.bidSentAt = null;
   }
 
   const fields = Object.keys(patch);

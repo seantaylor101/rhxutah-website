@@ -6129,7 +6129,7 @@ function LeadTicket({
             completed, which ActionRow's per-stage switch already limits to
             just the "Mark complete" button once lead.stage is "progress" */}
         {(editable || (role === "viewer" && lead.stage === "progress")) && (
-          <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} />
+          <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
         {/* scope-of-work checklist — visible once a job is won; owner can
@@ -6197,7 +6197,7 @@ function priorDateFor(lead, stage) {
   return null;
 }
 
-function ActionRow({ lead, onMove, onOpenReport, settings }) {
+function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {
   const [confirmStage, setConfirmStage] = useState(null);
   const [pendingCompleteDate, setPendingCompleteDate] = useState(null);
   const [showWorkDays, setShowWorkDays] = useState(false);
@@ -6251,7 +6251,7 @@ function ActionRow({ lead, onMove, onOpenReport, settings }) {
       actions = [btn("Bid sent", "bid")];
       break;
     case "bid":
-      actions = [btn("Won", "won"), btn("Lost", "lost", "secondary")];
+      actions = [btn("Won", "won")];
       break;
     case "lost":
       actions = [btn("Reopen as new", "new", "secondary")];
@@ -6270,6 +6270,16 @@ function ActionRow({ lead, onMove, onOpenReport, settings }) {
       break;
     default:
       actions = [];
+  }
+
+  // a lead can fall through at any point — even after it's won or the job's
+  // underway — so "Lost" is available from every stage except the two
+  // endpoints: already-lost, and paid (the money's already collected).
+  // Owner-only: this ActionRow also renders in a stripped-down form for the
+  // viewer on "progress" leads (to advance to "completed" only) and losing
+  // a job is a bigger call than that, so it stays out of that restricted view
+  if (editable && lead.stage !== "lost" && lead.stage !== "paid") {
+    actions = [...actions, btn("Lost", "lost", "secondary")];
   }
 
   if (onOpenReport && (lead.stage === "completed" || lead.stage === "paid")) {
