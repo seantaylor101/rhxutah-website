@@ -937,6 +937,10 @@ function App() {
     goalNationalAvgJobValue: 9500,
     goalNationalProfitMargin: 24,
     goalMonthConfirmed: "",
+    popupPushEnabled: true,
+    popupGoalEnabled: true,
+    popupWarrantyEnabled: true,
+    popupMissingInfoEnabled: true,
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
@@ -1093,8 +1097,9 @@ function App() {
   // how the prompt gets dismissed (Enable, Not now, tap-outside, back-gesture)
   useEffect(() => {
     if (pushPromptCheckedRef.current) return;
-    if (!role || leads === null) return;
+    if (!role || leads === null || !settingsLoaded) return;
     pushPromptCheckedRef.current = true;
+    if (!settings.popupPushEnabled) return;
     if (!pushSupported()) return;
     if (localStorage.getItem("rhxPushPromptSeen")) return;
     getPushSubscription()
@@ -1104,7 +1109,7 @@ function App() {
         setShowPushPrompt(true);
       })
       .catch(() => {});
-  }, [role, leads]);
+  }, [role, leads, settingsLoaded, settings.popupPushEnabled]);
 
   useEffect(() => {
     showPushPromptRef.current = showPushPrompt;
@@ -1126,6 +1131,7 @@ function App() {
     if (!role || leads === null || !settingsLoaded) return;
     if (role !== "owner") return;
     goalPromptCheckedRef.current = true;
+    if (!settings.popupGoalEnabled) return;
     const monthKey = new Date().toISOString().slice(0, 7);
     if (settings.goalMonthConfirmed === monthKey) return;
     // deliberately no cleanup here — `leads` (a dependency) can get a new
@@ -1136,7 +1142,7 @@ function App() {
       if (showPushPromptRef.current) return;
       setShowGoalPrompt(true);
     }, 1200);
-  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
+  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed, settings.popupGoalEnabled]);
 
   // gives the push/goal prompts (which fire on their own 1200ms delay) a
   // head start before the warranty alert gets a turn — set once per mount,
@@ -1151,13 +1157,14 @@ function App() {
   // missing them — a plain "Close" popup, no other action
   const maybeShowMissingInfoAlert = useCallback(() => {
     if (missingInfoAlertShownRef.current) return;
-    if (role !== "owner" || leads === null) return;
+    if (role !== "owner" || leads === null || !settingsLoaded) return;
     missingInfoAlertShownRef.current = true;
+    if (!settings.popupMissingInfoEnabled) return;
     const missing = leads.filter(
       (l) => !l.archived && l.stage !== "lost" && (!l.phone || !l.email || !l.address)
     );
     if (missing.length > 0) setShowMissingInfoAlert(true);
-  }, [role, leads]);
+  }, [role, leads, settingsLoaded, settings.popupMissingInfoEnabled]);
 
   // every time the app opens (any role), if there's at least one unresolved
   // warranty request, prompt for it — unlike the monthly goal prompt this
@@ -1170,19 +1177,32 @@ function App() {
   // soon as they clear instead
   useEffect(() => {
     if (warrantyAlertShownRef.current) return;
-    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed) return;
+    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed || !settingsLoaded) return;
     if (showPushPrompt || showGoalPrompt) return;
-    const stillOpen = warrantyRequests.filter((w) => w.stage !== "resolved").length;
+    const stillOpen = settings.popupWarrantyEnabled
+      ? warrantyRequests.filter((w) => w.stage !== "resolved").length
+      : 0;
     if (stillOpen === 0) {
-      // no warranty popup this session — the missing-customer-info alert
-      // would otherwise wait forever for a "warranty popup exited" event
-      // that's never coming, so give it its turn right here instead
+      // no warranty popup this session (either nothing's open, or the
+      // toggle is off) — the missing-customer-info alert would otherwise
+      // wait forever for a "warranty popup exited" event that's never
+      // coming, so give it its turn right here instead
       maybeShowMissingInfoAlert();
       return;
     }
     warrantyAlertShownRef.current = true;
     setShowWarrantyAlert(true);
-  }, [role, warrantyLoaded, warrantyAlertDelayElapsed, warrantyRequests, showPushPrompt, showGoalPrompt, maybeShowMissingInfoAlert]);
+  }, [
+    role,
+    warrantyLoaded,
+    warrantyAlertDelayElapsed,
+    settingsLoaded,
+    settings.popupWarrantyEnabled,
+    warrantyRequests,
+    showPushPrompt,
+    showGoalPrompt,
+    maybeShowMissingInfoAlert,
+  ]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
@@ -3546,6 +3566,65 @@ function DashboardView({
   );
 }
 
+// small pill switch used for the popup on/off toggles below
+function ToggleSwitch({ on, onChange, label }) {
+  return (
+    <button
+      onClick={() => onChange(!on)}
+      aria-pressed={on}
+      aria-label={label}
+      style={{
+        width: 42,
+        height: 24,
+        borderRadius: 12,
+        border: "none",
+        background: on ? COLORS.accent : "#D8D2C2",
+        position: "relative",
+        cursor: "pointer",
+        flexShrink: 0,
+        padding: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: on ? 21 : 3,
+          width: 18,
+          height: 18,
+          borderRadius: 9,
+          background: "#fff",
+          transition: "left 0.15s ease",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+        }}
+      />
+    </button>
+  );
+}
+
+const POPUP_TOGGLES = [
+  {
+    key: "popupPushEnabled",
+    label: "Enable notifications prompt",
+    description: "Asks a device to turn on push notifications, once ever per device.",
+  },
+  {
+    key: "popupGoalEnabled",
+    label: "Monthly income goal prompt",
+    description: "Asks the owner to set a take-home goal at the start of each month.",
+  },
+  {
+    key: "popupWarrantyEnabled",
+    label: "Open warranty requests alert",
+    description: "Reminds anyone who opens the app about unresolved warranty requests.",
+  },
+  {
+    key: "popupMissingInfoEnabled",
+    label: "Missing customer info alert",
+    description: "Reminds the owner about leads missing a phone, email, or address.",
+  },
+];
+
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.overheadPercent));
@@ -3553,6 +3632,20 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [popupErr, setPopupErr] = useState("");
+  const [togglingKey, setTogglingKey] = useState(null);
+
+  const togglePopup = async (key, value) => {
+    setTogglingKey(key);
+    setPopupErr("");
+    try {
+      await onSave({ [key]: value });
+    } catch (e) {
+      setPopupErr(e.message || "Couldn't save that");
+    } finally {
+      setTogglingKey(null);
+    }
+  };
 
   const feedUrl = settings.calendarFeedToken
     ? `${window.location.protocol}//${window.location.host}/api/calendar/feed/${settings.calendarFeedToken}.ics`
@@ -3663,6 +3756,44 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
             )}
           </div>
         )}
+
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${COLORS.border}` }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 2 }}>
+            Popups
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 4 }}>
+            Turn off any of these auto-popups. Applies to everyone using the app.
+          </div>
+          {POPUP_TOGGLES.map(({ key, label, description }) => (
+            <div
+              key={key}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "10px 0",
+                borderBottom: `1px solid ${COLORS.border}`,
+                opacity: togglingKey === key ? 0.6 : 1,
+              }}
+            >
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>{label}</div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
+                  {description}
+                </div>
+              </div>
+              <ToggleSwitch
+                on={settings[key] !== false}
+                onChange={(next) => togglePopup(key, next)}
+                label={label}
+              />
+            </div>
+          ))}
+          {popupErr && (
+            <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{popupErr}</div>
+          )}
+        </div>
 
         <button
           onClick={onOpenBackups}

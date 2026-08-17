@@ -53,6 +53,15 @@ function readSettings() {
     // visible to both roles — same as the leads/appointments data it exposes,
     // just handed to Apple Calendar instead of rendered in the app
     calendarFeedToken: getOrCreateCalendarFeedToken(),
+    // owner-controlled on/off switches for the app's auto-popups. Visible to
+    // both roles (unlike the goal figures above) since the warranty alert
+    // popup shows to the viewer too, and the client needs these to decide
+    // whether to show it — default on (map value only ever set to "0" to
+    // turn one off, so anything else, including unset, means enabled
+    popupPushEnabled: map.popupPushEnabled !== "0",
+    popupGoalEnabled: map.popupGoalEnabled !== "0",
+    popupWarrantyEnabled: map.popupWarrantyEnabled !== "0",
+    popupMissingInfoEnabled: map.popupMissingInfoEnabled !== "0",
   };
 }
 
@@ -80,6 +89,8 @@ const GOAL_NUMBER_FIELDS = {
   goalNationalAvgJobValue: (n) => Number.isFinite(n) && n > 0,
   goalNationalProfitMargin: (n) => Number.isFinite(n) && n > 0 && n <= 100,
 };
+
+const POPUP_TOGGLE_FIELDS = ["popupPushEnabled", "popupGoalEnabled", "popupWarrantyEnabled", "popupMissingInfoEnabled"];
 
 router.patch("/", requireAuth("owner"), (req, res) => {
   const body = req.body || {};
@@ -115,6 +126,13 @@ router.patch("/", requireAuth("owner"), (req, res) => {
       return res.status(400).json({ error: "goalDataSource must be 'national' or 'mine'" });
     }
     updates.goalDataSource = body.goalDataSource;
+  }
+
+  for (const key of POPUP_TOGGLE_FIELDS) {
+    if (body[key] === undefined) continue;
+    // stored as "0"/"1" like every other setting (String(value) below) —
+    // readSettings() treats anything but "0" as enabled
+    updates[key] = body[key] ? "1" : "0";
   }
 
   if (Object.keys(updates).length === 0) {
