@@ -2,6 +2,7 @@ import { Router } from "express";
 import { createHash, timingSafeEqual } from "crypto";
 import { COOKIE_NAME, signSession } from "../auth.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { logAccess } from "../activityLog.js";
 
 const router = Router();
 const isProd = process.env.NODE_ENV === "production";
@@ -61,6 +62,8 @@ router.post("/login", (req, res) => {
 
   if (!role) return res.status(401).json({ error: "Incorrect passcode" });
 
+  if (role === "viewer") logAccess("viewer");
+
   res.cookie(COOKIE_NAME, signSession(role), cookieOptions);
   res.json({ role });
 });
@@ -71,6 +74,9 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/me", requireAuth("viewer"), (req, res) => {
+  // the client checks this once every time the app opens — the natural
+  // point to log a project-manager "opened the app" event
+  if (req.role === "viewer") logAccess("viewer");
   res.json({ role: req.role });
 });
 

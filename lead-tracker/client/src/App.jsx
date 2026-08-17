@@ -162,6 +162,37 @@ const Target = (p) => (
     <circle cx="12" cy="12" r="1.2" fill={p.color || "currentColor"} stroke="none" />
   </Icon>
 );
+const Phone = (p) => (
+  <Icon {...p}>
+    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+  </Icon>
+);
+const MessageCircle = (p) => (
+  <Icon {...p}>
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+  </Icon>
+);
+const MapPin = (p) => (
+  <Icon {...p}>
+    <path d="M21 10c0 6.5-9 13-9 13s-9-6.5-9-13a9 9 0 0 1 18 0z" />
+    <circle cx="12" cy="10" r="3" />
+  </Icon>
+);
+const ListChecks = (p) => (
+  <Icon {...p}>
+    <path d="M3.5 6.5 5 8l2.5-2.5" />
+    <path d="M3.5 12.5 5 14l2.5-2.5" />
+    <path d="M3.5 18.5 5 20l2.5-2.5" />
+    <line x1="11" y1="6" x2="21" y2="6" />
+    <line x1="11" y1="12" x2="21" y2="12" />
+    <line x1="11" y1="18" x2="21" y2="18" />
+  </Icon>
+);
+const Activity = (p) => (
+  <Icon {...p}>
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+  </Icon>
+);
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -906,6 +937,10 @@ function App() {
     goalNationalAvgJobValue: 9500,
     goalNationalProfitMargin: 24,
     goalMonthConfirmed: "",
+    popupPushEnabled: true,
+    popupGoalEnabled: true,
+    popupWarrantyEnabled: true,
+    popupMissingInfoEnabled: true,
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
@@ -916,6 +951,9 @@ function App() {
   const [showWarrantyAlert, setShowWarrantyAlert] = useState(false);
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
+  const [scopeOfWorkLead, setScopeOfWorkLead] = useState(null);
+  const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
+  const [showActivityLog, setShowActivityLog] = useState(false);
   const bootHtmlRef = useRef(null);
   // bumped by every leads/warranty mutation so a slower-resolving fetch
   // issued before that mutation can tell it's now stale and skip applying
@@ -928,6 +966,7 @@ function App() {
   const pushPromptCheckedRef = useRef(false);
   const goalPromptCheckedRef = useRef(false);
   const warrantyAlertShownRef = useRef(false);
+  const missingInfoAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
   const editable = role === "owner";
 
@@ -1058,8 +1097,9 @@ function App() {
   // how the prompt gets dismissed (Enable, Not now, tap-outside, back-gesture)
   useEffect(() => {
     if (pushPromptCheckedRef.current) return;
-    if (!role || leads === null) return;
+    if (!role || leads === null || !settingsLoaded) return;
     pushPromptCheckedRef.current = true;
+    if (!settings.popupPushEnabled) return;
     if (!pushSupported()) return;
     if (localStorage.getItem("rhxPushPromptSeen")) return;
     getPushSubscription()
@@ -1069,7 +1109,7 @@ function App() {
         setShowPushPrompt(true);
       })
       .catch(() => {});
-  }, [role, leads]);
+  }, [role, leads, settingsLoaded, settings.popupPushEnabled]);
 
   useEffect(() => {
     showPushPromptRef.current = showPushPrompt;
@@ -1091,6 +1131,7 @@ function App() {
     if (!role || leads === null || !settingsLoaded) return;
     if (role !== "owner") return;
     goalPromptCheckedRef.current = true;
+    if (!settings.popupGoalEnabled) return;
     const monthKey = new Date().toISOString().slice(0, 7);
     if (settings.goalMonthConfirmed === monthKey) return;
     // deliberately no cleanup here — `leads` (a dependency) can get a new
@@ -1101,7 +1142,7 @@ function App() {
       if (showPushPromptRef.current) return;
       setShowGoalPrompt(true);
     }, 1200);
-  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
+  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed, settings.popupGoalEnabled]);
 
   // gives the push/goal prompts (which fire on their own 1200ms delay) a
   // head start before the warranty alert gets a turn — set once per mount,
@@ -1110,6 +1151,20 @@ function App() {
     const t = setTimeout(() => setWarrantyAlertDelayElapsed(true), 1800);
     return () => clearTimeout(t);
   }, []);
+
+  // owner-only: once per app open, after the warranty-request alert (if any)
+  // is exited, nudge to fill in phone/email/address on leads that are
+  // missing them — a plain "Close" popup, no other action
+  const maybeShowMissingInfoAlert = useCallback(() => {
+    if (missingInfoAlertShownRef.current) return;
+    if (role !== "owner" || leads === null || !settingsLoaded) return;
+    missingInfoAlertShownRef.current = true;
+    if (!settings.popupMissingInfoEnabled) return;
+    const missing = leads.filter(
+      (l) => !l.archived && l.stage !== "lost" && (!l.phone || !l.email || !l.address)
+    );
+    if (missing.length > 0) setShowMissingInfoAlert(true);
+  }, [role, leads, settingsLoaded, settings.popupMissingInfoEnabled]);
 
   // every time the app opens (any role), if there's at least one unresolved
   // warranty request, prompt for it — unlike the monthly goal prompt this
@@ -1122,13 +1177,32 @@ function App() {
   // soon as they clear instead
   useEffect(() => {
     if (warrantyAlertShownRef.current) return;
-    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed) return;
+    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed || !settingsLoaded) return;
     if (showPushPrompt || showGoalPrompt) return;
-    const stillOpen = warrantyRequests.filter((w) => w.stage !== "resolved").length;
-    if (stillOpen === 0) return;
+    const stillOpen = settings.popupWarrantyEnabled
+      ? warrantyRequests.filter((w) => w.stage !== "resolved").length
+      : 0;
+    if (stillOpen === 0) {
+      // no warranty popup this session (either nothing's open, or the
+      // toggle is off) — the missing-customer-info alert would otherwise
+      // wait forever for a "warranty popup exited" event that's never
+      // coming, so give it its turn right here instead
+      maybeShowMissingInfoAlert();
+      return;
+    }
     warrantyAlertShownRef.current = true;
     setShowWarrantyAlert(true);
-  }, [role, warrantyLoaded, warrantyAlertDelayElapsed, warrantyRequests, showPushPrompt, showGoalPrompt]);
+  }, [
+    role,
+    warrantyLoaded,
+    warrantyAlertDelayElapsed,
+    settingsLoaded,
+    settings.popupWarrantyEnabled,
+    warrantyRequests,
+    showPushPrompt,
+    showGoalPrompt,
+    maybeShowMissingInfoAlert,
+  ]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
@@ -1247,8 +1321,33 @@ function App() {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
+      // just marked won — prompt to fill out the scope-of-work checklist so
+      // the project manager knows exactly what to plan for
+      if (!revert && stage === "won") setScopeOfWorkLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
+      loadLeads();
+    }
+  };
+
+  const saveScopeOfWork = async (id, items) => {
+    const updated = await api.setScopeOfWork(id, items);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    return updated;
+  };
+
+  const toggleScopeOfWorkItem = async (id, itemId, done) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, scopeOfWork: l.scopeOfWork.map((i) => (i.id === itemId ? { ...i, done } : i)) } : l
+      )
+    );
+    try {
+      const updated = await api.toggleScopeOfWorkItem(id, itemId, done);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
       loadLeads();
     }
   };
@@ -1971,8 +2070,10 @@ function App() {
                   onEditField={editField}
                   onDelete={deleteLead}
                   editable={editable}
+                  role={role}
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
+                  onOpenScopeOfWork={setScopeOfWorkLead}
                   settings={settings}
                 />
               </div>
@@ -2002,17 +2103,41 @@ function App() {
           count={openWarrantyCount}
           onView={() => {
             setShowWarrantyAlert(false);
+            maybeShowMissingInfoAlert();
             setView("warranty");
           }}
-          onDismiss={() => setShowWarrantyAlert(false)}
+          onDismiss={() => {
+            setShowWarrantyAlert(false);
+            maybeShowMissingInfoAlert();
+          }}
         />
       )}
+      {showMissingInfoAlert && (
+        <MissingInfoAlertModal
+          leads={leads}
+          onClose={() => setShowMissingInfoAlert(false)}
+        />
+      )}
+      {scopeOfWorkLead && (
+        <ScopeOfWorkModal
+          lead={leads.find((l) => l.id === scopeOfWorkLead.id) || scopeOfWorkLead}
+          canEdit={editable}
+          onSave={(items) => saveScopeOfWork(scopeOfWorkLead.id, items)}
+          onToggle={(itemId, done) => toggleScopeOfWorkItem(scopeOfWorkLead.id, itemId, done)}
+          onClose={() => setScopeOfWorkLead(null)}
+        />
+      )}
+      {showActivityLog && <ActivityLogModal role={role} onClose={() => setShowActivityLog(false)} />}
       {showAccountModal && (
         <AccountModal
           role={role}
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
+          onOpenActivityLog={() => {
+            setShowAccountModal(false);
+            setShowActivityLog(true);
+          }}
         />
       )}
       {showSettingsModal && (
@@ -2538,7 +2663,97 @@ function WarrantyAlertModal({ count, onView, onDismiss }) {
   );
 }
 
-function AccountModal({ role, onSwitch, onLogout, onClose }) {
+// owner-only, once per app open (see maybeShowMissingInfoAlert), deliberately
+// bare — the ask is just "go fill these in", so a single Close button is all
+// this needs
+function MissingInfoAlertModal({ leads, onClose }) {
+  const missing = (leads || []).filter(
+    (l) => !l.archived && l.stage !== "lost" && (!l.phone || !l.email || !l.address)
+  );
+
+  return (
+    <div style={{ ...modalOverlay, alignItems: "center", padding: 20, boxSizing: "border-box" }}>
+      <div style={{ ...modalCard, borderRadius: 20, border: `1px solid ${COLORS.border}`, maxWidth: 380 }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+          <div
+            style={{
+              width: 60,
+              height: 60,
+              borderRadius: 30,
+              background: `${COLORS.amber}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <User size={26} color={COLORS.amber} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 18,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          {missing.length === 1 ? "1 lead is" : `${missing.length} leads are`} missing customer info
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 14,
+            color: COLORS.muted,
+            textAlign: "center",
+            marginBottom: missing.length ? 12 : 20,
+          }}
+        >
+          Please update these leads with a phone number, email, and address when you get a chance.
+        </div>
+        {missing.length > 0 && (
+          <div
+            style={{
+              maxHeight: 140,
+              overflowY: "auto",
+              marginBottom: 20,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 10,
+            }}
+          >
+            {missing.map((l) => (
+              <div
+                key={l.id}
+                style={{
+                  padding: "8px 12px",
+                  borderBottom: `1px solid ${COLORS.border}`,
+                  fontFamily: FONT_BODY,
+                  fontSize: 13.5,
+                  color: COLORS.ink,
+                }}
+              >
+                {l.name}
+                <span style={{ color: COLORS.muted }}>
+                  {" — missing "}
+                  {[!l.phone && "phone", !l.email && "email", !l.address && "address"].filter(Boolean).join(", ")}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          onClick={onClose}
+          style={{ ...addBtn, background: COLORS.accent, width: "100%", justifyContent: "center" }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AccountModal({ role, onSwitch, onLogout, onClose, onOpenActivityLog }) {
   useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
@@ -2634,6 +2849,18 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
           </>
         )}
 
+        <button onClick={onOpenActivityLog} style={{ ...roleOption, cursor: "pointer" }}>
+          <Activity size={16} color={COLORS.ink} />
+          <div>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+              Activity log
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted }}>
+              {role === "owner" ? "Lead/warranty moves and viewer app opens" : "Recent lead and warranty moves"}
+            </div>
+          </div>
+        </button>
+
         <label style={modalLabel}>Switch access with a different passcode</label>
         <input
           type="password"
@@ -2659,6 +2886,123 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
             Log out on this device
           </span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+function stageLabel(type, stage) {
+  const list = type === "warranty" ? WARRANTY_STAGES : STAGES;
+  return list.find((s) => s.key === stage)?.short || stage;
+}
+
+// lead/warranty move history for everyone; the project-manager app-open
+// history is an extra owner-only tab
+function ActivityLogModal({ role, onClose }) {
+  useModalBackClose(onClose);
+  const [tab, setTab] = useState("moves"); // 'moves' | 'access'
+  const [moves, setMoves] = useState(null);
+  const [access, setAccess] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api
+      .listActivityLog()
+      .then(setMoves)
+      .catch(() => setErr("Couldn't load the activity log"));
+  }, []);
+
+  useEffect(() => {
+    if (role !== "owner" || tab !== "access" || access !== null) return;
+    api
+      .listAccessLog()
+      .then(setAccess)
+      .catch(() => setErr("Couldn't load the access log"));
+  }, [role, tab, access]);
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Activity log
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+
+        {role === "owner" && (
+          <div style={{ display: "flex", gap: 8, margin: "10px 0 16px" }}>
+            <button
+              onClick={() => setTab("moves")}
+              style={{
+                ...tabBtn,
+                background: tab === "moves" ? COLORS.accent : "transparent",
+                borderColor: tab === "moves" ? COLORS.accent : COLORS.border,
+                color: tab === "moves" ? "#fff" : COLORS.ink,
+              }}
+            >
+              Lead &amp; warranty moves
+            </button>
+            <button
+              onClick={() => setTab("access")}
+              style={{
+                ...tabBtn,
+                background: tab === "access" ? COLORS.accent : "transparent",
+                borderColor: tab === "access" ? COLORS.accent : COLORS.border,
+                color: tab === "access" ? "#fff" : COLORS.ink,
+              }}
+            >
+              Project manager access
+            </button>
+          </div>
+        )}
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
+
+        {tab === "moves" ? (
+          moves === null ? (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted }}>Loading…</div>
+          ) : moves.length === 0 ? (
+            <div style={emptyState}>
+              <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+                Stage moves will show up here.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {moves.map((m) => (
+                <div key={m.id} style={{ padding: "9px 2px", borderBottom: `1px solid ${COLORS.border}` }}>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink }}>
+                    <strong>{m.entityName}</strong> {m.type === "warranty" ? "(warranty)" : ""} moved
+                    {m.fromStage ? ` ${stageLabel(m.type, m.fromStage)} →` : ""} {stageLabel(m.type, m.toStage)}
+                  </div>
+                  <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: "#8A8478" }}>
+                    {m.role === "owner" ? "You" : "Project manager"} · {fmtRelativeTime(m.createdAt)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : access === null ? (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted }}>Loading…</div>
+        ) : access.length === 0 ? (
+          <div style={emptyState}>
+            <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+              No project manager app opens logged yet.
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {access.map((a) => (
+              <div key={a.id} style={{ padding: "9px 2px", borderBottom: `1px solid ${COLORS.border}` }}>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink }}>Project manager opened the app</div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: "#8A8478" }}>{fmtDateTime(a.createdAt)}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3222,6 +3566,65 @@ function DashboardView({
   );
 }
 
+// small pill switch used for the popup on/off toggles below
+function ToggleSwitch({ on, onChange, label }) {
+  return (
+    <button
+      onClick={() => onChange(!on)}
+      aria-pressed={on}
+      aria-label={label}
+      style={{
+        width: 42,
+        height: 24,
+        borderRadius: 12,
+        border: "none",
+        background: on ? COLORS.accent : "#D8D2C2",
+        position: "relative",
+        cursor: "pointer",
+        flexShrink: 0,
+        padding: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: on ? 21 : 3,
+          width: 18,
+          height: 18,
+          borderRadius: 9,
+          background: "#fff",
+          transition: "left 0.15s ease",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+        }}
+      />
+    </button>
+  );
+}
+
+const POPUP_TOGGLES = [
+  {
+    key: "popupPushEnabled",
+    label: "Enable notifications prompt",
+    description: "Asks a device to turn on push notifications, once ever per device.",
+  },
+  {
+    key: "popupGoalEnabled",
+    label: "Monthly income goal prompt",
+    description: "Asks the owner to set a take-home goal at the start of each month.",
+  },
+  {
+    key: "popupWarrantyEnabled",
+    label: "Open warranty requests alert",
+    description: "Reminds anyone who opens the app about unresolved warranty requests.",
+  },
+  {
+    key: "popupMissingInfoEnabled",
+    label: "Missing customer info alert",
+    description: "Reminds the owner about leads missing a phone, email, or address.",
+  },
+];
+
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.overheadPercent));
@@ -3229,6 +3632,20 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [popupErr, setPopupErr] = useState("");
+  const [togglingKey, setTogglingKey] = useState(null);
+
+  const togglePopup = async (key, value) => {
+    setTogglingKey(key);
+    setPopupErr("");
+    try {
+      await onSave({ [key]: value });
+    } catch (e) {
+      setPopupErr(e.message || "Couldn't save that");
+    } finally {
+      setTogglingKey(null);
+    }
+  };
 
   const feedUrl = settings.calendarFeedToken
     ? `${window.location.protocol}//${window.location.host}/api/calendar/feed/${settings.calendarFeedToken}.ics`
@@ -3339,6 +3756,44 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
             )}
           </div>
         )}
+
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${COLORS.border}` }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 2 }}>
+            Popups
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 4 }}>
+            Turn off any of these auto-popups. Applies to everyone using the app.
+          </div>
+          {POPUP_TOGGLES.map(({ key, label, description }) => (
+            <div
+              key={key}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "10px 0",
+                borderBottom: `1px solid ${COLORS.border}`,
+                opacity: togglingKey === key ? 0.6 : 1,
+              }}
+            >
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>{label}</div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
+                  {description}
+                </div>
+              </div>
+              <ToggleSwitch
+                on={settings[key] !== false}
+                onChange={(next) => togglePopup(key, next)}
+                label={label}
+              />
+            </div>
+          ))}
+          {popupErr && (
+            <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{popupErr}</div>
+          )}
+        </div>
 
         <button
           onClick={onOpenBackups}
@@ -4752,7 +5207,170 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   );
 }
 
-function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted, onOpenReport, settings }) {
+// scope-of-work checklist for a won job. `canEdit` (owner) gets full
+// add/remove/edit-text controls plus Save; everyone else (the project
+// manager) can only check items off as the crew works through them.
+function ScopeOfWorkModal({ lead, canEdit, onSave, onToggle, onClose }) {
+  useModalBackClose(onClose);
+  const [items, setItems] = useState(lead.scopeOfWork || []);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const addItem = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setItems((prev) => [...prev, { id: `new-${Date.now()}-${prev.length}`, text, done: false }]);
+    setDraft("");
+  };
+
+  const removeItem = (id) => setItems((prev) => prev.filter((i) => i.id !== id));
+  const updateText = (id, text) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, text } : i)));
+
+  const toggle = async (id, done) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done } : i)));
+    if (!onToggle) return;
+    try {
+      await onToggle(id, done);
+    } catch {
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done: !done } : i)));
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr("");
+    try {
+      await onSave(items);
+      onClose();
+    } catch (e) {
+      setErr(e.message || "Couldn't save the checklist");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Scope of work
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          {canEdit
+            ? `${lead.name} — job won! List out what needs to happen so the project manager knows exactly what to plan for and who to hire.`
+            : `${lead.name} — check items off as they're taken care of.`}
+        </div>
+
+        {items.length === 0 && !canEdit && (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted, marginBottom: 12 }}>
+            Nothing on the checklist yet.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: canEdit ? 12 : 20 }}>
+          {items.map((item) => (
+            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                onClick={() => toggle(item.id, !item.done)}
+                aria-label={item.done ? "Mark item not done" : "Mark item done"}
+                style={{
+                  width: 24,
+                  height: 24,
+                  flexShrink: 0,
+                  borderRadius: 6,
+                  border: `1.5px solid ${item.done ? COLORS.accent : COLORS.border}`,
+                  background: item.done ? COLORS.accent : "transparent",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                {item.done && <Check size={15} color="#fff" />}
+              </button>
+              {canEdit ? (
+                <input
+                  value={item.text}
+                  onChange={(e) => updateText(item.id, e.target.value)}
+                  style={{ ...inlineInput, flex: 1 }}
+                />
+              ) : (
+                <span
+                  style={{
+                    flex: 1,
+                    fontFamily: FONT_BODY,
+                    fontSize: 14.5,
+                    color: item.done ? COLORS.muted : COLORS.ink,
+                    textDecoration: item.done ? "line-through" : "none",
+                  }}
+                >
+                  {item.text}
+                </span>
+              )}
+              {canEdit && (
+                <button onClick={() => removeItem(item.id)} style={iconBtnGhost} aria-label="Remove item">
+                  <X size={16} color="#9A9184" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {canEdit && (
+          <>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addItem())}
+                placeholder="e.g. Order gutters, schedule crew"
+                style={{ ...modalInput, flex: 1 }}
+              />
+              <button onClick={addItem} style={{ ...iconBtn, background: COLORS.accent, width: 44 }} aria-label="Add item">
+                <Plus size={18} color="#fff" />
+              </button>
+            </div>
+            {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
+            <button
+              onClick={save}
+              disabled={saving}
+              style={{ ...addBtn, background: COLORS.accent, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1 }}
+            >
+              {saving ? "Saving…" : "Save checklist"}
+            </button>
+          </>
+        )}
+        {!canEdit && (
+          <button
+            onClick={onClose}
+            style={{ ...addBtn, background: COLORS.accent, width: "100%", justifyContent: "center" }}
+          >
+            Close
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LeadTicket({
+  lead,
+  onMove,
+  onEditField,
+  onDelete,
+  editable,
+  role,
+  highlighted,
+  onOpenReport,
+  onOpenScopeOfWork,
+  settings,
+}) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
@@ -4761,6 +5379,8 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const [phoneDraft, setPhoneDraft] = useState(lead.phone || "");
   const [editingEmail, setEditingEmail] = useState(false);
   const [emailDraft, setEmailDraft] = useState(lead.email || "");
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState(lead.address || "");
   const [editingReceived, setEditingReceived] = useState(false);
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
@@ -4798,6 +5418,11 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
   const saveEmail = () => {
     onEditField(lead.id, "email", emailDraft.trim());
     setEditingEmail(false);
+  };
+
+  const saveAddress = () => {
+    onEditField(lead.id, "address", addressDraft.trim());
+    setEditingAddress(false);
   };
 
   const openReceivedEdit = () => {
@@ -5028,13 +5653,32 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           >
             {!editingPhone ? (
               lead.phone ? (
-                <a
-                  href={`tel:${lead.phone}`}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}
-                >
-                  {lead.phone}
-                </a>
+                <>
+                  <a
+                    href={`tel:${lead.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.accent, fontWeight: 600, textDecoration: "none" }}
+                  >
+                    {lead.phone}
+                  </a>
+                  {/* visible to both roles — anyone with the lead open can reach the customer directly */}
+                  <a
+                    href={`tel:${lead.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="Call customer"
+                    style={{ ...iconBtnGhost, display: "inline-flex" }}
+                  >
+                    <Phone size={15} color={COLORS.accent} />
+                  </a>
+                  <a
+                    href={`sms:${lead.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="Text customer"
+                    style={{ ...iconBtnGhost, display: "inline-flex" }}
+                  >
+                    <MessageCircle size={15} color={COLORS.accent} />
+                  </a>
+                </>
               ) : (
                 <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
               )
@@ -5116,6 +5760,72 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
                   <Check size={18} color="#fff" />
                 </button>
                 <button onClick={() => setEditingEmail(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel email edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* address — tap it to open turn-by-turn directions in Apple Maps, tap elsewhere in the row to edit */}
+        {(lead.address || editable) && (
+          <div
+            onClick={
+              !editingAddress && editable
+                ? () => {
+                    setAddressDraft(lead.address || "");
+                    setEditingAddress(true);
+                  }
+                : undefined
+            }
+            style={{
+              marginTop: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingAddress && editable ? "pointer" : "default",
+            }}
+          >
+            {!editingAddress ? (
+              lead.address ? (
+                <a
+                  href={`https://maps.apple.com/?daddr=${encodeURIComponent(lead.address)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontFamily: FONT_UTIL,
+                    fontSize: 14,
+                    color: COLORS.accent,
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: 260,
+                  }}
+                >
+                  <MapPin size={14} color={COLORS.accent} />
+                  {lead.address}
+                </a>
+              ) : (
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No address set</span>
+              )
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  value={addressDraft}
+                  onChange={(e) => setAddressDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveAddress()}
+                  placeholder="e.g. 123 Main St, Lehi, UT"
+                  style={{ ...inlineInput, flex: 1 }}
+                />
+                <button onClick={saveAddress} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save address">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingAddress(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel address edit">
                   <X size={18} color="#fff" />
                 </button>
               </>
@@ -5414,8 +6124,30 @@ function LeadTicket({ lead, onMove, onEditField, onDelete, editable, highlighted
           </div>
         )}
 
-        {/* actions */}
-        {editable && <ActionRow lead={lead} onMove={onMove} onOpenReport={onOpenReport} settings={settings} />}
+        {/* actions — owners get the full stage-move row; the project manager
+            (viewer) only gets to advance a job from in-progress to
+            completed, which ActionRow's per-stage switch already limits to
+            just the "Mark complete" button once lead.stage is "progress" */}
+        {(editable || (role === "viewer" && lead.stage === "progress")) && (
+          <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
+        )}
+
+        {/* scope-of-work checklist — visible once a job is won; owner can
+            always open it to add/edit, the project manager only sees it once
+            there's actually something on the list to check off */}
+        {onOpenScopeOfWork &&
+          ["won", "progress", "completed", "paid"].includes(lead.stage) &&
+          (editable || (lead.scopeOfWork && lead.scopeOfWork.length > 0)) && (
+            <button
+              onClick={() => onOpenScopeOfWork(lead)}
+              style={{ ...actionBtn, marginTop: 8, background: "transparent", color: "#6B6558", border: "1px solid #D8D2C2" }}
+            >
+              <ListChecks size={13} />
+              {lead.scopeOfWork && lead.scopeOfWork.length > 0
+                ? `Scope of work (${lead.scopeOfWork.filter((i) => i.done).length}/${lead.scopeOfWork.length})`
+                : "Add scope of work"}
+            </button>
+          )}
       </div>
     </div>
   );
@@ -5465,7 +6197,7 @@ function priorDateFor(lead, stage) {
   return null;
 }
 
-function ActionRow({ lead, onMove, onOpenReport, settings }) {
+function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {
   const [confirmStage, setConfirmStage] = useState(null);
   const [pendingCompleteDate, setPendingCompleteDate] = useState(null);
   const [showWorkDays, setShowWorkDays] = useState(false);
@@ -5519,7 +6251,7 @@ function ActionRow({ lead, onMove, onOpenReport, settings }) {
       actions = [btn("Bid sent", "bid")];
       break;
     case "bid":
-      actions = [btn("Won", "won"), btn("Lost", "lost", "secondary")];
+      actions = [btn("Won", "won")];
       break;
     case "lost":
       actions = [btn("Reopen as new", "new", "secondary")];
@@ -5538,6 +6270,16 @@ function ActionRow({ lead, onMove, onOpenReport, settings }) {
       break;
     default:
       actions = [];
+  }
+
+  // a lead can fall through at any point — even after it's won or the job's
+  // underway — so "Lost" is available from every stage except the two
+  // endpoints: already-lost, and paid (the money's already collected).
+  // Owner-only: this ActionRow also renders in a stripped-down form for the
+  // viewer on "progress" leads (to advance to "completed" only) and losing
+  // a job is a bigger call than that, so it stays out of that restricted view
+  if (editable && lead.stage !== "lost" && lead.stage !== "paid") {
+    actions = [...actions, btn("Lost", "lost", "secondary")];
   }
 
   if (onOpenReport && (lead.stage === "completed" || lead.stage === "paid")) {

@@ -107,6 +107,10 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | GET    | /api/auth/me      | viewer | current role                               |
 | GET    | /api/leads        | viewer | list leads (also sweeps paid → archive)    |
 | POST   | /api/leads        | owner  | create a lead                              |
-| POST   | /api/leads/:id/move | owner | move a lead to a new stage                 |
-| PATCH  | /api/leads/:id    | owner  | edit name / createdAt / startDate / revenue |
+| POST   | /api/leads/:id/move | owner (viewer may move progress→completed) | move a lead to a new stage |
+| PATCH  | /api/leads/:id    | owner  | edit name / createdAt / startDate / revenue / address / etc. |
+| PUT    | /api/leads/:id/scope-of-work | owner | replace the won-job scope-of-work checklist |
+| PATCH  | /api/leads/:id/scope-of-work | viewer | check/uncheck one checklist item           |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |
+| GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
+| GET    | /api/activity/access | owner | project-manager (viewer) app-open history |

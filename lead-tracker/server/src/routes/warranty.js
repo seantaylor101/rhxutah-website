@@ -6,6 +6,7 @@ import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendPushToRole } from "../pushService.js";
 import { warrantyPhotoUpload, WARRANTY_PHOTOS_DIR, SAFE_FILENAME } from "../uploads.js";
+import { logMove } from "../activityLog.js";
 
 const router = Router();
 
@@ -105,6 +106,15 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   });
 
   res.json(withPhotos(db.prepare(`SELECT * FROM warranty_requests WHERE id = ?`).get(row.id)));
+
+  logMove({
+    type: "warranty",
+    entityId: row.id,
+    entityName: row.name,
+    fromStage: row.stage,
+    toStage: stage,
+    role: req.role,
+  });
 
   // best-effort — the move is already saved, don't let a push hiccup affect
   // the response

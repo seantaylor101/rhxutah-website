@@ -69,6 +69,15 @@ if (!existingColumns.has("appointmentAt")) {
 if (!existingColumns.has("appointmentReminderSentAt")) {
   db.exec(`ALTER TABLE leads ADD COLUMN appointmentReminderSentAt TEXT`);
 }
+if (!existingColumns.has("address")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN address TEXT DEFAULT ''`);
+}
+if (!existingColumns.has("scopeOfWork")) {
+  // JSON-encoded array of { id, text, done } checklist items, filled out
+  // right after a lead is marked won so the project manager knows exactly
+  // what to plan for and who to hire
+  db.exec(`ALTER TABLE leads ADD COLUMN scopeOfWork TEXT DEFAULT ''`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -132,3 +141,30 @@ db.exec(`
     createdAt TEXT NOT NULL
   );
 `);
+
+// audit trail of every lead/warranty-request stage move, for the owner's
+// "who moved what, when" activity log
+db.exec(`
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    entityId TEXT NOT NULL,
+    entityName TEXT NOT NULL,
+    fromStage TEXT,
+    toStage TEXT NOT NULL,
+    role TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_createdAt ON activity_log (createdAt DESC)`);
+
+// records every time the viewer (project manager) role opens the app, so
+// the owner can see how often it's actually being used
+db.exec(`
+  CREATE TABLE IF NOT EXISTS access_log (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_access_log_createdAt ON access_log (createdAt DESC)`);
