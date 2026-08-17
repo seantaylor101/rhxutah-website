@@ -953,7 +953,6 @@ function App() {
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
   const [scopeOfWorkLead, setScopeOfWorkLead] = useState(null);
   const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
-  const [showActivityLog, setShowActivityLog] = useState(false);
   const bootHtmlRef = useRef(null);
   // bumped by every leads/warranty mutation so a slower-resolving fetch
   // issued before that mutation can tell it's now stale and skip applying
@@ -1776,6 +1775,7 @@ function App() {
       {view === "dashboard" ? (
         <DashboardView
           editable={editable}
+          role={role}
           settings={settings}
           stats={stats}
           counts={counts}
@@ -2127,17 +2127,12 @@ function App() {
           onClose={() => setScopeOfWorkLead(null)}
         />
       )}
-      {showActivityLog && <ActivityLogModal role={role} onClose={() => setShowActivityLog(false)} />}
       {showAccountModal && (
         <AccountModal
           role={role}
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
-          onOpenActivityLog={() => {
-            setShowAccountModal(false);
-            setShowActivityLog(true);
-          }}
         />
       )}
       {showSettingsModal && (
@@ -2753,7 +2748,7 @@ function MissingInfoAlertModal({ leads, onClose }) {
   );
 }
 
-function AccountModal({ role, onSwitch, onLogout, onClose, onOpenActivityLog }) {
+function AccountModal({ role, onSwitch, onLogout, onClose }) {
   useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
@@ -2849,18 +2844,6 @@ function AccountModal({ role, onSwitch, onLogout, onClose, onOpenActivityLog }) 
           </>
         )}
 
-        <button onClick={onOpenActivityLog} style={{ ...roleOption, cursor: "pointer" }}>
-          <Activity size={16} color={COLORS.ink} />
-          <div>
-            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
-              Activity log
-            </div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted }}>
-              {role === "owner" ? "Lead/warranty moves and viewer app opens" : "Recent lead and warranty moves"}
-            </div>
-          </div>
-        </button>
-
         <label style={modalLabel}>Switch access with a different passcode</label>
         <input
           type="password"
@@ -2896,114 +2879,70 @@ function stageLabel(type, stage) {
   return list.find((s) => s.key === stage)?.short || stage;
 }
 
-// lead/warranty move history for everyone; the project-manager app-open
-// history is an extra owner-only tab
-function ActivityLogModal({ role, onClose }) {
-  useModalBackClose(onClose);
-  const [tab, setTab] = useState("moves"); // 'moves' | 'access'
-  const [moves, setMoves] = useState(null);
-  const [access, setAccess] = useState(null);
+// running activity feed embedded directly on the dashboard, below the
+// tiles — lead/warranty moves for everyone, plus (owner-only, since the
+// server only includes it for that role) every time the project manager
+// opens the app. Fetches fresh each time the dashboard mounts (switching
+// views unmounts it, so no separate polling is needed).
+function ActivityFeed({ role }) {
+  const [entries, setEntries] = useState(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
     api
-      .listActivityLog()
-      .then(setMoves)
-      .catch(() => setErr("Couldn't load the activity log"));
+      .listActivityFeed()
+      .then(setEntries)
+      .catch(() => setErr("Couldn't load recent activity"));
   }, []);
 
-  useEffect(() => {
-    if (role !== "owner" || tab !== "access" || access !== null) return;
-    api
-      .listAccessLog()
-      .then(setAccess)
-      .catch(() => setErr("Couldn't load the access log"));
-  }, [role, tab, access]);
+  const actorLabel = (entryRole) => {
+    if (entryRole === role) return "You";
+    return entryRole === "owner" ? "The owner" : "Project manager";
+  };
 
   return (
-    <div style={modalOverlay} onClick={onClose}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
-            Activity log
-          </div>
-          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-            <X size={18} color={COLORS.muted} />
-          </button>
+    <div style={{ ...statCard, marginTop: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+        <Activity size={15} color={COLORS.muted} />
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13.5, color: COLORS.ink }}>
+          Recent activity
         </div>
-
-        {role === "owner" && (
-          <div style={{ display: "flex", gap: 8, margin: "10px 0 16px" }}>
-            <button
-              onClick={() => setTab("moves")}
-              style={{
-                ...tabBtn,
-                background: tab === "moves" ? COLORS.accent : "transparent",
-                borderColor: tab === "moves" ? COLORS.accent : COLORS.border,
-                color: tab === "moves" ? "#fff" : COLORS.ink,
-              }}
-            >
-              Lead &amp; warranty moves
-            </button>
-            <button
-              onClick={() => setTab("access")}
-              style={{
-                ...tabBtn,
-                background: tab === "access" ? COLORS.accent : "transparent",
-                borderColor: tab === "access" ? COLORS.accent : COLORS.border,
-                color: tab === "access" ? "#fff" : COLORS.ink,
-              }}
-            >
-              Project manager access
-            </button>
-          </div>
-        )}
-
-        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
-
-        {tab === "moves" ? (
-          moves === null ? (
-            <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted }}>Loading…</div>
-          ) : moves.length === 0 ? (
-            <div style={emptyState}>
-              <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-                Stage moves will show up here.
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {moves.map((m) => (
-                <div key={m.id} style={{ padding: "9px 2px", borderBottom: `1px solid ${COLORS.border}` }}>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink }}>
-                    <strong>{m.entityName}</strong> {m.type === "warranty" ? "(warranty)" : ""} moved
-                    {m.fromStage ? ` ${stageLabel(m.type, m.fromStage)} →` : ""} {stageLabel(m.type, m.toStage)}
-                  </div>
-                  <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: "#8A8478" }}>
-                    {m.role === "owner" ? "You" : "Project manager"} · {fmtRelativeTime(m.createdAt)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        ) : access === null ? (
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted }}>Loading…</div>
-        ) : access.length === 0 ? (
-          <div style={emptyState}>
-            <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-              No project manager app opens logged yet.
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {access.map((a) => (
-              <div key={a.id} style={{ padding: "9px 2px", borderBottom: `1px solid ${COLORS.border}` }}>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink }}>Project manager opened the app</div>
-                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: "#8A8478" }}>{fmtDateTime(a.createdAt)}</div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
+
+      {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+
+      {entries === null ? (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginTop: 8 }}>Loading…</div>
+      ) : entries.length === 0 ? (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginTop: 8 }}>
+          Lead and warranty moves will show up here as they happen.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {entries.map((e) =>
+            e.kind === "access" ? (
+              <div key={e.id} style={{ padding: "9px 0", borderTop: `1px solid ${COLORS.border}` }}>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink }}>
+                  Project manager opened the app
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: "#8A8478" }}>
+                  {fmtRelativeTime(e.createdAt)}
+                </div>
+              </div>
+            ) : (
+              <div key={e.id} style={{ padding: "9px 0", borderTop: `1px solid ${COLORS.border}` }}>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink }}>
+                  <strong>{e.entityName}</strong> {e.type === "warranty" ? "(warranty) " : ""}moved
+                  {e.fromStage ? ` ${stageLabel(e.type, e.fromStage)} →` : ""} {stageLabel(e.type, e.toStage)}
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: "#8A8478" }}>
+                  {actorLabel(e.role)} · {fmtRelativeTime(e.createdAt)}
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3435,6 +3374,7 @@ function DashboardTile({ onClick, icon, title, children, accent, big }) {
 // that tap through to their full views
 function DashboardView({
   editable,
+  role,
   settings,
   stats,
   counts,
@@ -3562,6 +3502,8 @@ function DashboardView({
           )}
         </DashboardTile>
       </div>
+
+      <ActivityFeed role={role} />
     </div>
   );
 }
