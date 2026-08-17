@@ -13,7 +13,11 @@ router.post("/subscribe", requireAuth("viewer"), (req, res) => {
   if (!sub || !sub.endpoint || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
     return res.status(400).json({ error: "Invalid subscription" });
   }
-  saveSubscription(sub, req.role);
+  // push targeting still speaks "owner"/"viewer" (see pushService.js/goalReminders.js/etc)
+  // — admin maps to "owner" so financial/goal reminders keep reaching them,
+  // everyone else maps to "viewer" so team-wide notices (e.g. "lead won")
+  // keep reaching the crew, same as the old shared-passcode roles did
+  saveSubscription(sub, req.user.isAdmin ? "owner" : "viewer");
   res.status(201).json({ ok: true });
 });
 

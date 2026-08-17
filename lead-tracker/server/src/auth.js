@@ -7,14 +7,14 @@ if (!SECRET) {
 
 export const COOKIE_NAME = "rhx_session";
 
-export function signSession(role) {
-  return jwt.sign({ role }, SECRET, { expiresIn: "30d" });
+export function signSession(userId) {
+  return jwt.sign({ userId }, SECRET, { expiresIn: "30d" });
 }
 
 export function verifySession(token) {
   try {
     const payload = jwt.verify(token, SECRET);
-    if (payload.role !== "owner" && payload.role !== "viewer") return null;
+    if (!payload.userId) return null;
     return payload;
   } catch {
     return null;

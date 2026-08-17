@@ -32,7 +32,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   res.json(rows.map(withPhotos));
 });
 
-router.post("/", requireAuth("owner"), (req, res) => {
+router.post("/", requireAuth("editWarranty"), (req, res) => {
   const { name, phone, email, issue } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
 
@@ -116,7 +116,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   }
 });
 
-router.patch("/:id", requireAuth("owner"), (req, res) => {
+router.patch("/:id", requireAuth("editWarranty"), (req, res) => {
   const row = getOr404(req.params.id, res);
   if (!row) return;
 
@@ -175,7 +175,7 @@ router.post("/:id/photos", requireAuth("viewer"), (req, res) => {
 
 // deleting a photo (not the whole request) stays owner-only, same tier as
 // editing/deleting the request itself
-router.delete("/:id/photos/:photoId", requireAuth("owner"), (req, res) => {
+router.delete("/:id/photos/:photoId", requireAuth("editWarranty"), (req, res) => {
   const row = getOr404(req.params.id, res);
   if (!row) return;
   const photo = db
@@ -197,7 +197,7 @@ router.get("/photos/:filename", requireAuth("viewer"), (req, res) => {
   });
 });
 
-router.delete("/:id", requireAuth("owner"), (req, res) => {
+router.delete("/:id", requireAuth("editWarranty"), (req, res) => {
   const row = getOr404(req.params.id, res);
   if (!row) return;
   const photos = db.prepare(`SELECT filename FROM warranty_photos WHERE requestId = ?`).all(row.id);

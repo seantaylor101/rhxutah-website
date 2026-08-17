@@ -15,9 +15,9 @@ services:
         value: /app/data/leads.db
       - key: SESSION_SECRET
         generateValue: true
-      - key: OWNER_PASSCODE
+      - key: ADMIN_EMAIL
         sync: false
-      - key: VIEWER_PASSCODE
+      - key: ADMIN_PASSWORD
         sync: false
       - key: FORM_INTAKE_KEY
         sync: false

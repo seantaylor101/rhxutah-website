@@ -31,8 +31,12 @@ async function requestForm(path, formData) {
 
 export const api = {
   me: () => request("/auth/me"),
-  login: (passcode) => request("/auth/login", { method: "POST", body: JSON.stringify({ passcode }) }),
+  login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),
+  listTeam: () => request("/team"),
+  addTeamMember: (payload) => request("/team", { method: "POST", body: JSON.stringify(payload) }),
+  updateTeamMember: (id, patch) => request(`/team/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  removeTeamMember: (id) => request(`/team/${id}`, { method: "DELETE" }),
   listLeads: () => request("/leads"),
   addLead: (payload) => request("/leads", { method: "POST", body: JSON.stringify(payload) }),
   moveLead: (id, stage, date, revert, workDays) =>

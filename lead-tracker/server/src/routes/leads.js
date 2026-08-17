@@ -95,9 +95,10 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   sweepArchive();
   const rows = db.prepare(`SELECT * FROM leads ORDER BY createdAt DESC`).all();
   const leads = rows.map(rowToLead);
-  // profit is owner-only: strip the cost inputs at the API layer too, not
-  // just in the UI, so a viewer can't recover them by inspecting the response
-  if (req.role !== "owner") {
+  // profit is financial data: strip the cost inputs at the API layer too, not
+  // just in the UI, so someone without financial visibility can't recover
+  // them by inspecting the response
+  if (!req.user.isAdmin && !req.user.permissions.viewFinancials) {
     for (const lead of leads) {
       lead.materialCost = null;
       lead.laborCost = null;
@@ -106,7 +107,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
   res.json(leads);
 });
 
-router.post("/", requireAuth("owner"), (req, res) => {
+router.post("/", requireAuth("editLeads"), (req, res) => {
   const { name, job, phone, email, source, sourceOther } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
@@ -122,7 +123,7 @@ const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", 
 const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
-router.post("/:id/move", requireAuth("owner"), (req, res) => {
+router.post("/:id/move", requireAuth("editLeads"), (req, res) => {
   const { stage, date, revert, workDays } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getLeadOr404(req.params.id, res);
@@ -203,7 +204,7 @@ router.post("/:id/move", requireAuth("owner"), (req, res) => {
   }
 });
 
-router.patch("/:id", requireAuth("owner"), (req, res) => {
+router.patch("/:id", requireAuth("editLeads"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
@@ -243,7 +244,7 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
-router.patch("/:id/report", requireAuth("owner"), (req, res) => {
+router.patch("/:id/report", requireAuth("editLeads"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
@@ -276,7 +277,7 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
-router.delete("/:id", requireAuth("owner"), (req, res) => {
+router.delete("/:id", requireAuth("editLeads"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);

@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { hashPassword } from "./passwords.js";
 
 export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data", "leads.db");
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -132,3 +134,44 @@ db.exec(`
     createdAt TEXT NOT NULL
   );
 `);
+
+// replaces the old two-shared-passcode model — every team member gets their
+// own account. isAdmin is full access + team management, never toggleable
+// through the API; everyone else gets whichever granular permissions the
+// admin turns on for them.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    passwordHash TEXT NOT NULL,
+    isAdmin INTEGER NOT NULL DEFAULT 0,
+    canEditLeads INTEGER NOT NULL DEFAULT 0,
+    canEditWarranty INTEGER NOT NULL DEFAULT 0,
+    canViewFinancials INTEGER NOT NULL DEFAULT 0,
+    canManageSettings INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL
+  );
+`);
+
+// bootstraps the one true administrator from env vars on first boot — there's
+// no in-app "sign up" flow, so without this nobody could ever log in. Only
+// fires once (skipped once any admin row exists), so it's safe to leave the
+// env vars set permanently rather than having to remove them after first run.
+const hasAdmin = db.prepare(`SELECT 1 FROM users WHERE isAdmin = 1 LIMIT 1`).get();
+if (!hasAdmin && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+  const email = process.env.ADMIN_EMAIL.trim().toLowerCase();
+  const existing = db.prepare(`SELECT id FROM users WHERE email = ?`).get(email);
+  if (existing) {
+    db.prepare(`UPDATE users SET isAdmin = 1 WHERE id = ?`).run(existing.id);
+  } else {
+    db.prepare(
+      `INSERT INTO users (id, email, passwordHash, isAdmin, canEditLeads, canEditWarranty, canViewFinancials, canManageSettings, createdAt)
+       VALUES (@id, @email, @passwordHash, 1, 1, 1, 1, 1, @createdAt)`
+    ).run({
+      id: randomUUID(),
+      email,
+      passwordHash: hashPassword(process.env.ADMIN_PASSWORD),
+      createdAt: new Date().toISOString(),
+    });
+  }
+}

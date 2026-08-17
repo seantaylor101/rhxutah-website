@@ -882,8 +882,16 @@ class ErrorBoundary extends React.Component {
 }
 
 function App() {
+  // shown full-screen on every fresh app open, for a fixed minimum beat,
+  // regardless of how quickly the session check resolves underneath it
+  const [showSplash, setShowSplash] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setShowSplash(false), 1300);
+    return () => clearTimeout(t);
+  }, []);
+
   const [authChecked, setAuthChecked] = useState(false);
-  const [role, setRole] = useState(null); // null = not signed in on this device
+  const [user, setUser] = useState(null); // null = not signed in on this device; else { id, email, isAdmin, permissions }
   const [leads, setLeads] = useState(null); // null = loading
   const [activeStage, setActiveStage] = useState("new");
   const [showAdd, setShowAdd] = useState(false);
@@ -910,6 +918,7 @@ function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
   const [showBackupsModal, setShowBackupsModal] = useState(false);
+  const [showTeamModal, setShowTeamModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showGoalPrompt, setShowGoalPrompt] = useState(false);
@@ -929,7 +938,11 @@ function App() {
   const goalPromptCheckedRef = useRef(false);
   const warrantyAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
-  const editable = role === "owner";
+  const isAdmin = !!user?.isAdmin;
+  const canEditLeads = isAdmin || !!user?.permissions?.editLeads;
+  const canEditWarranty = isAdmin || !!user?.permissions?.editWarranty;
+  const canViewFinancials = isAdmin || !!user?.permissions?.viewFinancials;
+  const canManageSettings = isAdmin || !!user?.permissions?.manageSettings;
 
   // installed PWAs get suspended in the background instead of reloading, so
   // a device can sit on a build from days ago until it's force-quit — check
@@ -972,9 +985,9 @@ function App() {
     (async () => {
       try {
         const me = await api.me();
-        setRole(me.role);
+        setUser(me.user);
       } catch {
-        setRole(null);
+        setUser(null);
       } finally {
         setAuthChecked(true);
       }
@@ -1000,8 +1013,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (role) loadLeads();
-  }, [role, loadLeads]);
+    if (user) loadLeads();
+  }, [user, loadLeads]);
 
   const loadWarrantyRequests = useCallback(async () => {
     const version = warrantyVersionRef.current;
@@ -1018,8 +1031,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (role) loadWarrantyRequests();
-  }, [role, loadWarrantyRequests]);
+    if (user) loadWarrantyRequests();
+  }, [user, loadWarrantyRequests]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -1047,8 +1060,8 @@ function App() {
   };
 
   useEffect(() => {
-    if (role) loadSettings();
-  }, [role, loadSettings]);
+    if (user) loadSettings();
+  }, [user, loadSettings]);
 
   // offer to enable push the first time the app is ever opened on a device
   // — runs once (guarded by the ref, not just the effect deps, since `leads`
@@ -1058,7 +1071,7 @@ function App() {
   // how the prompt gets dismissed (Enable, Not now, tap-outside, back-gesture)
   useEffect(() => {
     if (pushPromptCheckedRef.current) return;
-    if (!role || leads === null) return;
+    if (!user || leads === null) return;
     pushPromptCheckedRef.current = true;
     if (!pushSupported()) return;
     if (localStorage.getItem("rhxPushPromptSeen")) return;
@@ -1069,7 +1082,7 @@ function App() {
         setShowPushPrompt(true);
       })
       .catch(() => {});
-  }, [role, leads]);
+  }, [user, leads]);
 
   useEffect(() => {
     showPushPromptRef.current = showPushPrompt;
@@ -1088,8 +1101,8 @@ function App() {
   // this delay in practice
   useEffect(() => {
     if (goalPromptCheckedRef.current) return;
-    if (!role || leads === null || !settingsLoaded) return;
-    if (role !== "owner") return;
+    if (!user || leads === null || !settingsLoaded) return;
+    if (!canViewFinancials) return;
     goalPromptCheckedRef.current = true;
     const monthKey = new Date().toISOString().slice(0, 7);
     if (settings.goalMonthConfirmed === monthKey) return;
@@ -1101,7 +1114,7 @@ function App() {
       if (showPushPromptRef.current) return;
       setShowGoalPrompt(true);
     }, 1200);
-  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed]);
+  }, [user, canViewFinancials, leads, settingsLoaded, settings.goalMonthConfirmed]);
 
   // gives the push/goal prompts (which fire on their own 1200ms delay) a
   // head start before the warranty alert gets a turn — set once per mount,
@@ -1111,7 +1124,7 @@ function App() {
     return () => clearTimeout(t);
   }, []);
 
-  // every time the app opens (any role), if there's at least one unresolved
+  // every time the app opens (any signed-in team member), if there's at least one unresolved
   // warranty request, prompt for it — unlike the monthly goal prompt this
   // has no "confirmed" state to suppress it, since simply having the app
   // open doesn't resolve a warranty request; it keeps showing once per
@@ -1122,19 +1135,19 @@ function App() {
   // soon as they clear instead
   useEffect(() => {
     if (warrantyAlertShownRef.current) return;
-    if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed) return;
+    if (!user || !warrantyLoaded || !warrantyAlertDelayElapsed) return;
     if (showPushPrompt || showGoalPrompt) return;
     const stillOpen = warrantyRequests.filter((w) => w.stage !== "resolved").length;
     if (stillOpen === 0) return;
     warrantyAlertShownRef.current = true;
     setShowWarrantyAlert(true);
-  }, [role, warrantyLoaded, warrantyAlertDelayElapsed, warrantyRequests, showPushPrompt, showGoalPrompt]);
+  }, [user, warrantyLoaded, warrantyAlertDelayElapsed, warrantyRequests, showPushPrompt, showGoalPrompt]);
 
   // light auto-refresh while the app is actually visible, so a PWA left
   // open in the background doesn't keep showing stale data — pauses when
   // backgrounded and refetches immediately the moment it's foregrounded
   useEffect(() => {
-    if (!role) return;
+    if (!user) return;
     let interval = null;
     const refresh = () => {
       loadLeads();
@@ -1156,7 +1169,7 @@ function App() {
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [role, loadLeads, loadWarrantyRequests]);
+  }, [user, loadLeads, loadWarrantyRequests]);
 
   const navigateToLead = useCallback(
     (leadId) => {
@@ -1203,9 +1216,9 @@ function App() {
     return () => clearTimeout(t);
   }, [highlightedLeadId]);
 
-  const handleLogin = async (passcode) => {
-    const res = await api.login(passcode); // throws on a bad passcode
-    setRole(res.role);
+  const handleLogin = async (email, password) => {
+    const res = await api.login(email, password); // throws on bad credentials
+    setUser(res.user);
     setShowAccountModal(false);
   };
 
@@ -1215,7 +1228,7 @@ function App() {
     } catch {
       // clearing local state below still logs this device out either way
     }
-    setRole(null);
+    setUser(null);
     leadsVersionRef.current++;
     setLeads(null);
     setShowAccountModal(false);
@@ -1517,6 +1530,10 @@ function App() {
 
   const stageIdx = STAGES.findIndex((s) => s.key === activeStage);
 
+  if (showSplash) {
+    return <SplashScreen />;
+  }
+
   if (!authChecked) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
@@ -1525,7 +1542,7 @@ function App() {
     );
   }
 
-  if (!role) {
+  if (!user) {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
@@ -1614,7 +1631,7 @@ function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             {view === "board" ? (
-              editable ? (
+              canEditLeads ? (
                 <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
                   <Plus size={16} strokeWidth={2.5} />
                   New Lead
@@ -1661,7 +1678,7 @@ function App() {
                 </button>
               )}
               <NotificationBell onOpenLead={navigateToLead} />
-              {editable && (
+              {(canManageSettings || isAdmin) && (
                 <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
                   <Gear size={20} color={COLORS.surface} strokeWidth={2} />
                 </button>
@@ -1676,7 +1693,7 @@ function App() {
 
       {view === "dashboard" ? (
         <DashboardView
-          editable={editable}
+          canViewFinancials={canViewFinancials}
           settings={settings}
           stats={stats}
           counts={counts}
@@ -1701,8 +1718,8 @@ function App() {
       ) : view === "warranty" ? (
         <WarrantyView
           requests={warrantyRequests}
-          editable={editable}
-          canMove={!!role}
+          editable={canEditWarranty}
+          canMove={!!user}
           onMove={moveWarrantyRequest}
           onEditField={editWarrantyField}
           onDelete={deleteWarrantyRequest}
@@ -1970,7 +1987,7 @@ function App() {
                   onMove={moveLead}
                   onEditField={editField}
                   onDelete={deleteLead}
-                  editable={editable}
+                  editable={canEditLeads}
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
                   settings={settings}
@@ -1980,7 +1997,7 @@ function App() {
           </main>
         </>
       ) : (
-        <ArchiveView leads={leads} editable={editable} onOpenReport={setReportLead} />
+        <ArchiveView leads={leads} editable={canEditLeads} onOpenReport={setReportLead} />
       )}
         </>
       )}
@@ -2009,8 +2026,7 @@ function App() {
       )}
       {showAccountModal && (
         <AccountModal
-          role={role}
-          onSwitch={handleLogin}
+          user={user}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
         />
@@ -2020,12 +2036,18 @@ function App() {
           settings={settings}
           onSave={saveSettings}
           onClose={() => setShowSettingsModal(false)}
+          isAdmin={isAdmin}
+          onOpenTeam={() => {
+            setShowSettingsModal(false);
+            setShowTeamModal(true);
+          }}
           onOpenBackups={() => {
             setShowSettingsModal(false);
             setShowBackupsModal(true);
           }}
         />
       )}
+      {showTeamModal && <TeamModal onClose={() => setShowTeamModal(false)} />}
       {showBackupsModal && (
         <BackupsModal
           onClose={() => setShowBackupsModal(false)}
@@ -2040,7 +2062,7 @@ function App() {
           lead={leads.find((l) => l.id === reportLead.id) || reportLead}
           settings={settings}
           allMetrics={allSourcesMetrics}
-          editable={editable}
+          editable={canEditLeads}
           onSaveReport={async (patch) => {
             const updated = await api.updateReport(reportLead.id, patch);
             leadsVersionRef.current++;
@@ -2065,19 +2087,54 @@ function App() {
   );
 }
 
+function SplashScreen() {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "radial-gradient(circle at 50% 32%, #3A1414 0%, #150808 70%)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 999,
+      }}
+    >
+      <style>{`
+        @keyframes splashIn {
+          from { opacity: 0; transform: scale(0.94); }
+          to { opacity: 1; transform: scale(1); }
+        }
+      `}</style>
+      <img
+        src="/logo-hero.jpg"
+        alt="Lead Slayer"
+        style={{
+          width: "min(78vw, 340px)",
+          borderRadius: 16,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+          animation: "splashIn 500ms ease-out",
+        }}
+      />
+    </div>
+  );
+}
+
 function LoginScreen({ onLogin }) {
-  const [passcode, setPasscode] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    if (!passcode || busy) return;
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!email || !password || busy) return;
     setBusy(true);
     setErr("");
     try {
-      await onLogin(passcode);
+      await onLogin(email, password);
     } catch (e) {
-      setErr(e.message || "Incorrect passcode");
+      setErr(e.message || "Incorrect email or password");
     } finally {
       setBusy(false);
     }
@@ -2096,24 +2153,42 @@ function LoginScreen({ onLogin }) {
           alt="Lead Slayer"
           style={{ width: "100%", maxWidth: 260, display: "block", margin: "0 auto 20px", borderRadius: 12 }}
         />
-        <label style={modalLabel}>Passcode</label>
-        <input
-          type="password"
-          autoFocus
-          value={passcode}
-          onChange={(e) => setPasscode(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          style={modalInput}
-          placeholder="Enter your passcode"
-        />
-        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
-        <button
-          onClick={submit}
-          disabled={busy || !passcode}
-          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !passcode ? 0.6 : 1 }}
-        >
-          {busy ? "Checking…" : "Enter"}
-        </button>
+        {/* a real <form> with proper autocomplete hints, not a JS-only submit
+            handler, so Safari/Chrome offer to save the password and iOS
+            Keychain/Face ID can autofill it on future visits */}
+        <form onSubmit={submit} autoComplete="on">
+          <label style={modalLabel} htmlFor="login-email">Email</label>
+          <input
+            id="login-email"
+            name="username"
+            type="email"
+            autoComplete="username"
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={modalInput}
+            placeholder="you@company.com"
+          />
+          <label style={modalLabel} htmlFor="login-password">Password</label>
+          <input
+            id="login-password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={modalInput}
+            placeholder="Enter your password"
+          />
+          {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+          <button
+            type="submit"
+            disabled={busy || !email || !password}
+            style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !email || !password ? 0.6 : 1 }}
+          >
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
       </div>
     </div>
   );
@@ -2538,11 +2613,8 @@ function WarrantyAlertModal({ count, onView, onDismiss }) {
   );
 }
 
-function AccountModal({ role, onSwitch, onLogout, onClose }) {
+function AccountModal({ user, onLogout, onClose }) {
   useModalBackClose(onClose);
-  const [passcode, setPasscode] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
   const [pushStatus, setPushStatus] = useState("checking"); // checking | unsupported | enabled | disabled
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState("");
@@ -2597,9 +2669,27 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 4 }}>
+          Signed in as <strong style={{ color: COLORS.ink }}>{user.email}</strong>
+        </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          Signed in as <strong style={{ color: COLORS.ink }}>{role === "owner" ? "Editor" : "Viewer"}</strong> on
-          this device.
+          {user.isAdmin
+            ? "Administrator — full access, manages the team in Settings."
+            : [
+                user.permissions.editLeads && "edit leads",
+                user.permissions.editWarranty && "edit warranty requests",
+                user.permissions.viewFinancials && "view financials",
+                user.permissions.manageSettings && "manage settings",
+              ].filter(Boolean).length
+            ? `Can ${[
+                user.permissions.editLeads && "edit leads",
+                user.permissions.editWarranty && "edit warranty requests",
+                user.permissions.viewFinancials && "view financials",
+                user.permissions.manageSettings && "manage settings",
+              ]
+                .filter(Boolean)
+                .join(", ")}.`
+            : "View-only access."}
         </div>
 
         {pushStatus !== "unsupported" && (
@@ -2634,23 +2724,6 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
           </>
         )}
 
-        <label style={modalLabel}>Switch access with a different passcode</label>
-        <input
-          type="password"
-          value={passcode}
-          onChange={(e) => setPasscode(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          style={modalInput}
-          placeholder="Enter passcode"
-        />
-        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
-        <button
-          onClick={submit}
-          disabled={busy || !passcode}
-          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 12, opacity: busy || !passcode ? 0.6 : 1 }}
-        >
-          Switch
-        </button>
         <button
           onClick={onLogout}
           style={{ ...roleOption, marginTop: 16, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
@@ -3090,7 +3163,7 @@ function DashboardTile({ onClick, icon, title, children, accent, big }) {
 // tile, with Job Board / Warranty / Appointments as quick-glance tiles below
 // that tap through to their full views
 function DashboardView({
-  editable,
+  canViewFinancials,
   settings,
   stats,
   counts,
@@ -3110,7 +3183,7 @@ function DashboardView({
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      {editable && (
+      {canViewFinancials && (
         <DashboardTile onClick={onOpenGoals} icon={<Target size={16} color={COLORS.accent} />} title="Goals" big>
           {hasGoal && plan ? (
             <>
@@ -3222,7 +3295,7 @@ function DashboardView({
   );
 }
 
-function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
+function SettingsModal({ settings, onSave, onClose, onOpenBackups, onOpenTeam, isAdmin }) {
   useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.overheadPercent));
   const [busy, setBusy] = useState(false);
@@ -3340,11 +3413,28 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
           </div>
         )}
 
+        {isAdmin && (
+          <button
+            onClick={onOpenTeam}
+            style={{
+              ...roleOption,
+              marginTop: 10,
+              justifyContent: "center",
+              borderColor: COLORS.border,
+              cursor: "pointer",
+            }}
+          >
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+              Manage team
+            </span>
+          </button>
+        )}
+
         <button
           onClick={onOpenBackups}
           style={{
             ...roleOption,
-            marginTop: 20,
+            marginTop: 10,
             justifyContent: "center",
             borderColor: COLORS.border,
             cursor: "pointer",
@@ -3490,6 +3580,255 @@ function BackupsModal({ onClose, onRestored }) {
                 ))}
               </div>
             )
+        )}
+      </div>
+    </div>
+  );
+}
+
+const PERMISSION_LABELS = {
+  editLeads: "Edit leads",
+  editWarranty: "Edit warranty requests",
+  viewFinancials: "View financials",
+  manageSettings: "Manage settings & backups",
+};
+
+// admin-only: who can sign in at all, and what each of them can do. There's
+// no invite-email flow — the admin sets a temporary password directly and
+// shares it with the person out of band
+function TeamModal({ onClose }) {
+  useModalBackClose(onClose);
+  const [members, setMembers] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState("");
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPerms, setNewPerms] = useState({
+    editLeads: false,
+    editWarranty: false,
+    viewFinancials: false,
+    manageSettings: false,
+  });
+  const [addBusy, setAddBusy] = useState(false);
+  const [addErr, setAddErr] = useState("");
+
+  useEffect(() => {
+    api
+      .listTeam()
+      .then(setMembers)
+      .catch((e) => setLoadErr(e.message || "Couldn't load team"));
+  }, []);
+
+  const togglePermission = async (member, key) => {
+    setBusyId(member.id);
+    setErr("");
+    try {
+      const updated = await api.updateTeamMember(member.id, {
+        permissions: { ...member.permissions, [key]: !member.permissions[key] },
+      });
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+    } catch (e) {
+      setErr(e.message || "Couldn't update permissions");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const removeMember = async (member) => {
+    if (!window.confirm(`Remove ${member.email}? They'll lose access immediately.`)) return;
+    setBusyId(member.id);
+    setErr("");
+    try {
+      await api.removeTeamMember(member.id);
+      setMembers((prev) => prev.filter((m) => m.id !== member.id));
+    } catch (e) {
+      setErr(e.message || "Couldn't remove team member");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const addMember = async () => {
+    if (!newEmail || newPassword.length < 8) {
+      setAddErr("Enter an email and a password of at least 8 characters");
+      return;
+    }
+    setAddBusy(true);
+    setAddErr("");
+    try {
+      const added = await api.addTeamMember({ email: newEmail, password: newPassword, permissions: newPerms });
+      setMembers((prev) => [...prev, added]);
+      setNewEmail("");
+      setNewPassword("");
+      setNewPerms({ editLeads: false, editWarranty: false, viewFinancials: false, manageSettings: false });
+      setShowAdd(false);
+    } catch (e) {
+      setAddErr(e.message || "Couldn't add team member");
+    } finally {
+      setAddBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Team</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Only people you add here can sign in. Toggle what each person can do.
+        </div>
+
+        {loadErr && (
+          <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{loadErr}</div>
+        )}
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
+
+        {members === null ? (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>Loading…</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {members.map((m) => (
+              <div key={m.id} style={{ ...metricTile, opacity: busyId === m.id ? 0.6 : 1 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: m.isAdmin ? 0 : 8,
+                  }}
+                >
+                  <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
+                    {m.email}
+                  </div>
+                  {m.isAdmin ? (
+                    <span style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.accent, fontWeight: 700 }}>
+                      ADMIN
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => removeMember(m)}
+                      disabled={busyId === m.id}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        color: COLORS.rust,
+                        fontFamily: FONT_UTIL,
+                        fontSize: 12,
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {!m.isAdmin && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {Object.entries(PERMISSION_LABELS).map(([key, label]) => (
+                      <label
+                        key={key}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          fontFamily: FONT_UTIL,
+                          fontSize: 12,
+                          color: COLORS.ink,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!m.permissions[key]}
+                          disabled={busyId === m.id}
+                          onChange={() => togglePermission(m, key)}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showAdd ? (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${COLORS.border}` }}>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Email</label>
+            <input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              style={modalInput}
+              placeholder="them@company.com"
+            />
+            <label style={modalLabel}>Temporary password</label>
+            <input
+              type="text"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              style={modalInput}
+              placeholder="At least 8 characters"
+            />
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+              Share this with them directly — they can sign in with it right away.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+              {Object.entries(PERMISSION_LABELS).map(([key, label]) => (
+                <label
+                  key={key}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    fontFamily: FONT_UTIL,
+                    fontSize: 12,
+                    color: COLORS.ink,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={newPerms[key]}
+                    onChange={() => setNewPerms((p) => ({ ...p, [key]: !p[key] }))}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            {addErr && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{addErr}</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button
+                onClick={addMember}
+                disabled={addBusy}
+                style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: addBusy ? 0.6 : 1 }}
+              >
+                Add
+              </button>
+              <button
+                onClick={() => {
+                  setShowAdd(false);
+                  setAddErr("");
+                }}
+                style={{ ...roleOption, flex: 1, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+              >
+                <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setShowAdd(true)} style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 16 }}>
+            <Plus size={16} strokeWidth={2.5} />
+            Add team member
+          </button>
         )}
       </div>
     </div>
