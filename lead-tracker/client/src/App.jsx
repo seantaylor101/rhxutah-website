@@ -1676,20 +1676,10 @@ function App() {
       )}
 
       <header style={header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <img
-            src="/logo-badge.png"
-            alt=""
-            style={{ height: 170, width: "auto", flexShrink: 0 }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
-              Lead Slayer
-            </div>
-            <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark }}>
-              Track every lead from first contact to paid job
-            </div>
-          </div>
+        {/* the logo itself carries the app name now, so it gets the whole
+            row to grow into instead of sharing space with a title/tagline */}
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 220, width: "auto" }} />
         </div>
         {/* toolbar row lives on its own full-width line rather than squeezed
             beside the logo, so it keeps the whole header width to itself
