@@ -1679,7 +1679,7 @@ function App() {
         <img
           src="/logo-mark.png"
           alt=""
-          style={{ width: 64, height: 64, borderRadius: 14, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}
+          style={{ width: 92, height: 92, borderRadius: 18, flexShrink: 0, boxShadow: "0 3px 8px rgba(0,0,0,0.35)" }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
@@ -1688,7 +1688,7 @@ function App() {
           <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark, marginBottom: 12 }}>
             Track every lead from first contact to paid job
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, rowGap: 10 }}>
             {view === "board" ? (
               editable ? (
                 <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
