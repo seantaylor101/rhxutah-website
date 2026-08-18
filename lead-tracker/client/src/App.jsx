@@ -1299,10 +1299,10 @@ function App() {
     setShowPushPrompt(false);
   };
 
-  const addLead = async (name, job, source, sourceOther) => {
+  const addLead = async (name, job, phone, email, source, sourceOther) => {
     if (!name.trim() || !source) return;
     try {
-      const lead = await api.addLead({ name, job, source, sourceOther });
+      const lead = await api.addLead({ name, job, phone, email, source, sourceOther });
       leadsVersionRef.current++;
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
@@ -1669,31 +1669,6 @@ function App() {
           }}
         >
           A newer version is available — tap to refresh
-        </button>
-      )}
-
-      {view !== "warranty" && openWarrantyCount > 0 && (
-        <button
-          onClick={() => setView("warranty")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            width: "100%",
-            padding: "10px 16px",
-            background: COLORS.rust,
-            border: "none",
-            cursor: "pointer",
-            fontFamily: FONT_BODY,
-            fontWeight: 600,
-            fontSize: 13,
-            color: "#fff",
-          }}
-        >
-          <Wrench size={15} color="#fff" strokeWidth={2.2} />
-          {openWarrantyCount} warranty request{openWarrantyCount === 1 ? "" : "s"}{" "}
-          {openWarrantyCount === 1 ? "needs" : "need"} attention — tap to view
         </button>
       )}
 
@@ -6379,18 +6354,46 @@ function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
   );
 }
 
+// the Contact Picker API is a per-pick, no-standing-permission design (no
+// "Allow access to your contacts" dialog — each tap opens the device's own
+// contact list and only the one contact you tap is ever shared). Supported
+// on Chrome/Edge for Android; not implemented in Safari, so it's undefined
+// on iPhone/iPad/Mac and every desktop browser — feature-detected below so
+// the button simply doesn't appear where it can't work
+function contactPickerSupported() {
+  return typeof navigator !== "undefined" && "contacts" in navigator && "ContactsManager" in window;
+}
+
 function AddLeadModal({ onAdd, onClose }) {
   useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
+  const [contactErr, setContactErr] = useState("");
 
   const canSubmit = name.trim() && source && (source !== "other" || sourceOther.trim());
 
   const submit = () => {
     if (!canSubmit) return;
-    onAdd(name, job, source, sourceOther);
+    onAdd(name, job, phone, email, source, sourceOther);
+  };
+
+  const importFromContacts = async () => {
+    setContactErr("");
+    try {
+      const picked = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
+      const c = picked && picked[0];
+      if (!c) return;
+      if (c.name && c.name[0]) setName(c.name[0]);
+      if (c.tel && c.tel[0]) setPhone(c.tel[0]);
+      if (c.email && c.email[0]) setEmail(c.email[0]);
+    } catch (e) {
+      // AbortError just means the picker was cancelled — not an error worth surfacing
+      if (e && e.name !== "AbortError") setContactErr("Couldn't open contacts — try again.");
+    }
   };
 
   return (
@@ -6404,6 +6407,24 @@ function AddLeadModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
+
+        {contactPickerSupported() && (
+          <>
+            <button
+              onClick={importFromContacts}
+              style={{ ...roleOption, cursor: "pointer", marginBottom: 4, justifyContent: "center" }}
+            >
+              <User size={16} color={COLORS.ink} />
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                Import from Contacts
+              </span>
+            </button>
+            {contactErr && (
+              <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
+            )}
+          </>
+        )}
+
         <label style={modalLabel}>Name</label>
         <input
           autoFocus
@@ -6418,6 +6439,24 @@ function AddLeadModal({ onAdd, onClose }) {
           value={job}
           onChange={(e) => setJob(e.target.value)}
           placeholder="e.g. Gutters, Lehi"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Phone (optional)</label>
+        <input
+          type="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="e.g. (801) 555-0123"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Email (optional)</label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="e.g. name@example.com"
           style={modalInput}
           onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
         />
