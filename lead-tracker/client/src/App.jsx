@@ -200,8 +200,11 @@ const COLORS = {
   bg: "#F7F7F5",
   surface: "#FFFFFF",
   surfaceMuted: "#EEF1EC",
-  header: "#32473D",
-  headerLine: "rgba(255,255,255,0.16)",
+  // deep brick-maroon pulled from the logo's ray background and darkened
+  // rust tone, instead of a green unrelated to the mascot's own palette —
+  // ties the header to the logo instead of clashing with it
+  header: "#5E2019",
+  headerLine: "rgba(255,232,222,0.18)",
   accent: "#47936B",
   ink: "#242926",
   muted: "#6E7A6F",
@@ -1676,7 +1679,7 @@ function App() {
         <img
           src="/logo-mark.png"
           alt=""
-          style={{ width: 52, height: 52, borderRadius: "50%", flexShrink: 0 }}
+          style={{ width: 64, height: 64, borderRadius: 14, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
