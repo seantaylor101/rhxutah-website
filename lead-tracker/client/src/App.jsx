@@ -1676,7 +1676,7 @@ function App() {
         <img
           src="/logo-mark.png"
           alt=""
-          style={{ width: 64, height: 64, borderRadius: 14, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}
+          style={{ width: 52, height: 52, borderRadius: "50%", flexShrink: 0 }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
