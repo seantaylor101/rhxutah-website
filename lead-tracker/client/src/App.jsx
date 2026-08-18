@@ -1680,7 +1680,7 @@ function App() {
           <img
             src="/logo-badge.png"
             alt=""
-            style={{ width: 180, height: 180, borderRadius: "50%", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.3)" }}
+            style={{ height: 170, width: "auto", flexShrink: 0 }}
           />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
