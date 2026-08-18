@@ -78,6 +78,5 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
-  listActivityLog: () => request("/activity/log"),
-  listAccessLog: () => request("/activity/access"),
+  listActivityFeed: () => request("/activity/feed"),
 };
