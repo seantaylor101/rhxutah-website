@@ -1676,76 +1676,81 @@ function App() {
       )}
 
       <header style={header}>
-        <img
-          src="/logo-mark.png"
-          alt=""
-          style={{ width: 96, height: 96, borderRadius: "50%", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.3)" }}
-        />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
-            Lead Slayer
-          </div>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark, marginBottom: 12 }}>
-            Track every lead from first contact to paid job
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, rowGap: 10 }}>
-            {view === "board" ? (
-              editable ? (
-                <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
-                  <Plus size={16} strokeWidth={2.5} />
-                  New Lead
-                </button>
-              ) : (
-                <div style={viewBadge}>
-                  <Eye size={13} color={COLORS.mutedOnDark} />
-                  <span>View only</span>
-                </div>
-              )
-            ) : view === "warranty" ? (
-              // WarrantyView renders its own in-content title + back control
-              <div />
-            ) : (
-              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
-                {view === "dashboard"
-                  ? "Dashboard"
-                  : view === "goals"
-                  ? "Your Goals"
-                  : view === "metrics"
-                  ? "Performance Metrics"
-                  : view === "archive"
-                  ? "Archive"
-                  : ""}
-              </div>
-            )}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {view !== "dashboard" && (
-                <button onClick={() => setView("dashboard")} style={headerIconBtn} aria-label="Dashboard">
-                  <Home size={20} color={COLORS.surface} strokeWidth={2} />
-                </button>
-              )}
-              {(view === "board" || view === "archive") && (
-                <button
-                  onClick={() => setView(view === "board" ? "archive" : "board")}
-                  style={headerIconBtn}
-                  aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-                >
-                  {view === "board" ? (
-                    <History size={21} color={COLORS.surface} strokeWidth={2} />
-                  ) : (
-                    <Grid size={20} color={COLORS.surface} strokeWidth={2} />
-                  )}
-                </button>
-              )}
-              <NotificationBell onOpenLead={navigateToLead} />
-              {editable && (
-                <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
-                  <Gear size={20} color={COLORS.surface} strokeWidth={2} />
-                </button>
-              )}
-              <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
-                <User size={21} color={COLORS.surface} strokeWidth={2} />
-              </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <img
+            src="/logo-badge.png"
+            alt=""
+            style={{ width: 180, height: 180, borderRadius: "50%", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.3)" }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
+              Lead Slayer
             </div>
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark }}>
+              Track every lead from first contact to paid job
+            </div>
+          </div>
+        </div>
+        {/* toolbar row lives on its own full-width line rather than squeezed
+            beside the logo, so it keeps the whole header width to itself
+            regardless of how big the logo is */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, rowGap: 10 }}>
+          {view === "board" ? (
+            editable ? (
+              <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
+                <Plus size={16} strokeWidth={2.5} />
+                New Lead
+              </button>
+            ) : (
+              <div style={viewBadge}>
+                <Eye size={13} color={COLORS.mutedOnDark} />
+                <span>View only</span>
+              </div>
+            )
+          ) : view === "warranty" ? (
+            // WarrantyView renders its own in-content title + back control
+            <div />
+          ) : (
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
+              {view === "dashboard"
+                ? "Dashboard"
+                : view === "goals"
+                ? "Your Goals"
+                : view === "metrics"
+                ? "Performance Metrics"
+                : view === "archive"
+                ? "Archive"
+                : ""}
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {view !== "dashboard" && (
+              <button onClick={() => setView("dashboard")} style={headerIconBtn} aria-label="Dashboard">
+                <Home size={20} color={COLORS.surface} strokeWidth={2} />
+              </button>
+            )}
+            {(view === "board" || view === "archive") && (
+              <button
+                onClick={() => setView(view === "board" ? "archive" : "board")}
+                style={headerIconBtn}
+                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+              >
+                {view === "board" ? (
+                  <History size={21} color={COLORS.surface} strokeWidth={2} />
+                ) : (
+                  <Grid size={20} color={COLORS.surface} strokeWidth={2} />
+                )}
+              </button>
+            )}
+            <NotificationBell onOpenLead={navigateToLead} />
+            {editable && (
+              <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
+                <Gear size={20} color={COLORS.surface} strokeWidth={2} />
+              </button>
+            )}
+            <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
+              <User size={21} color={COLORS.surface} strokeWidth={2} />
+            </button>
           </div>
         </div>
       </header>
@@ -6513,7 +6518,7 @@ const shell = {
 
 const header = {
   display: "flex",
-  alignItems: "center",
+  flexDirection: "column",
   gap: 14,
   padding: "18px 20px",
   background: COLORS.header,
