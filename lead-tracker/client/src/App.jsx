@@ -124,6 +124,13 @@ const Home = (p) => (
     <path d="M5.5 9.5V21h13V9.5" />
   </Icon>
 );
+const Menu = (p) => (
+  <Icon {...p}>
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </Icon>
+);
 const Wrench = (p) => (
   <Icon {...p}>
     <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -915,6 +922,48 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// header hamburger menu — houses Settings (owner-only) and Account, so the
+// primary header actions (Home/History/notifications) can stay prominent
+// without crowding in two more icon buttons
+function HeaderMenu({ editable, onOpenSettings, onOpenAccount }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} style={headerIconBtn} aria-label="Menu">
+        <Menu size={20} color={COLORS.surface} strokeWidth={2} />
+      </button>
+      {open && (
+        <>
+          <div style={moreMenuScrim} onClick={() => setOpen(false)} />
+          <div style={moreMenuPopover}>
+            {editable && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenSettings();
+                }}
+                style={moreMenuItem}
+              >
+                Settings
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setOpen(false);
+                onOpenAccount();
+              }}
+              style={moreMenuItem}
+            >
+              Account
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [role, setRole] = useState(null); // null = not signed in on this device
@@ -1676,15 +1725,41 @@ function App() {
       )}
 
       <header style={header}>
-        {/* the logo itself carries the app name now, so it gets the whole
-            row to grow into instead of sharing space with a title/tagline */}
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 220, width: "auto" }} />
+        {/* logo on the left, primary actions (Home/History/notifications)
+            prominent on the right, hamburger tucked in for the
+            less-frequent Settings/Account */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 130, width: "auto", flexShrink: 0 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {view !== "dashboard" && (
+              <button onClick={() => setView("dashboard")} style={prominentHeaderIconBtn} aria-label="Dashboard">
+                <Home size={24} color={COLORS.surface} strokeWidth={2} />
+              </button>
+            )}
+            {(view === "board" || view === "archive") && (
+              <button
+                onClick={() => setView(view === "board" ? "archive" : "board")}
+                style={prominentHeaderIconBtn}
+                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
+              >
+                {view === "board" ? (
+                  <History size={25} color={COLORS.surface} strokeWidth={2} />
+                ) : (
+                  <Grid size={24} color={COLORS.surface} strokeWidth={2} />
+                )}
+              </button>
+            )}
+            <NotificationBell onOpenLead={navigateToLead} btnStyle={prominentHeaderIconBtn} iconSize={25} />
+            <HeaderMenu
+              editable={editable}
+              onOpenSettings={() => setShowSettingsModal(true)}
+              onOpenAccount={() => setShowAccountModal(true)}
+            />
+          </div>
         </div>
-        {/* toolbar row lives on its own full-width line rather than squeezed
-            beside the logo, so it keeps the whole header width to itself
-            regardless of how big the logo is */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, rowGap: 10 }}>
+        {/* New Lead / view title lives on its own full-width line below,
+            now that the icon row moved up next to the logo */}
+        <div style={{ display: "flex", alignItems: "center" }}>
           {view === "board" ? (
             editable ? (
               <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
@@ -1713,35 +1788,6 @@ function App() {
                 : ""}
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {view !== "dashboard" && (
-              <button onClick={() => setView("dashboard")} style={headerIconBtn} aria-label="Dashboard">
-                <Home size={20} color={COLORS.surface} strokeWidth={2} />
-              </button>
-            )}
-            {(view === "board" || view === "archive") && (
-              <button
-                onClick={() => setView(view === "board" ? "archive" : "board")}
-                style={headerIconBtn}
-                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-              >
-                {view === "board" ? (
-                  <History size={21} color={COLORS.surface} strokeWidth={2} />
-                ) : (
-                  <Grid size={20} color={COLORS.surface} strokeWidth={2} />
-                )}
-              </button>
-            )}
-            <NotificationBell onOpenLead={navigateToLead} />
-            {editable && (
-              <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
-                <Gear size={20} color={COLORS.surface} strokeWidth={2} />
-              </button>
-            )}
-            <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
-              <User size={21} color={COLORS.surface} strokeWidth={2} />
-            </button>
-          </div>
         </div>
       </header>
 
@@ -2212,7 +2258,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function NotificationBell({ onOpenLead }) {
+function NotificationBell({ onOpenLead, btnStyle = headerIconBtn, iconSize = 21 }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -2254,8 +2300,8 @@ function NotificationBell({ onOpenLead }) {
 
   return (
     <div style={{ position: "relative" }}>
-      <button onClick={() => setOpen((v) => !v)} style={headerIconBtn} aria-label="Notifications">
-        <Bell size={21} color={COLORS.surface} strokeWidth={2} />
+      <button onClick={() => setOpen((v) => !v)} style={btnStyle} aria-label="Notifications">
+        <Bell size={iconSize} color={COLORS.surface} strokeWidth={2} />
         {unread > 0 && <span style={notifBadge}>{unread > 9 ? "9+" : unread}</span>}
       </button>
       {open && (
@@ -6667,6 +6713,16 @@ const headerIconBtn = {
   alignItems: "center",
   justifyContent: "center",
   cursor: "pointer",
+};
+
+// Home / History / notifications sit right next to the logo now and are
+// meant to read as the primary header actions, so they get a bigger
+// treatment than the hamburger menu next to them
+const prominentHeaderIconBtn = {
+  ...headerIconBtn,
+  width: 50,
+  height: 50,
+  borderRadius: 13,
 };
 
 const notifBadge = {
