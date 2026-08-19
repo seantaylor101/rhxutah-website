@@ -1734,7 +1734,7 @@ function App() {
         {/* logo + wordmark — the logo's own baked-in text plus a large
             standalone wordmark, per the reference design */}
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 92, width: "auto", flexShrink: 0 }} />
+          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 220, width: "auto", flexShrink: 0 }} />
           <div style={{ minWidth: 0 }}>
             <div
               style={{
