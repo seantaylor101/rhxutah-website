@@ -1732,6 +1732,16 @@ function App() {
       )}
 
       <header style={header}>
+        {/* hamburger pinned to the top-right corner, out of the tile row —
+            keeps Dashboard/Activity/Alerts to 3 tiles that fit one row
+            instead of wrapping, and matches the usual top-right menu spot */}
+        <div style={{ position: "absolute", top: 14, right: 16 }}>
+          <HeaderMenu
+            editable={editable}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenAccount={() => setShowAccountModal(true)}
+          />
+        </div>
         {/* logo as its own left column, spanning the full height of
             everything else stacked to its right — matches the reference
             design's layout instead of stacking the logo in its own row */}
@@ -1776,7 +1786,7 @@ function App() {
 
             {/* primary nav — always visible, icon-over-label tiles; wraps to
                 a 2nd row on narrow phones rather than shrinking illegibly */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
                 <Home size={20} color={COLORS.heroRed} strokeWidth={2} />
                 <span style={headerTileLabel}>Dashboard</span>
@@ -1795,15 +1805,6 @@ function App() {
                 iconSize={20}
                 iconColor={COLORS.heroRed}
                 label="Alerts"
-              />
-              <HeaderMenu
-                editable={editable}
-                onOpenSettings={() => setShowSettingsModal(true)}
-                onOpenAccount={() => setShowAccountModal(true)}
-                btnStyle={headerTile}
-                iconSize={20}
-                iconColor={COLORS.heroRed}
-                label="Menu"
               />
             </div>
 
@@ -6604,6 +6605,7 @@ const shell = {
 };
 
 const header = {
+  position: "relative",
   display: "flex",
   flexDirection: "column",
   gap: 14,
@@ -6784,8 +6786,8 @@ const headerTile = {
   alignItems: "center",
   justifyContent: "center",
   gap: 6,
-  flex: "1 1 68px",
-  padding: "8px 4px",
+  flex: "1 1 56px",
+  padding: "8px 2px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(0,0,0,0.35)",
