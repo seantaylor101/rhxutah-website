@@ -1365,6 +1365,7 @@ function App() {
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
       setActiveStage("new");
+      setView("board");
       setError("");
     } catch {
       setError("Couldn't add that lead — try again.");
@@ -1731,6 +1732,20 @@ function App() {
       )}
 
       <header style={header}>
+        {/* hamburger pinned to the top-right corner, out of the tile row —
+            keeps Dashboard/Activity/Alerts to 3 tiles that fit one row
+            instead of wrapping, and matches the usual top-right menu spot.
+            Styled the same dark-card/red-icon way as the tiles so it still
+            reads as part of the same button family. */}
+        <div style={{ position: "absolute", top: 18, right: 20 }}>
+          <HeaderMenu
+            editable={editable}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenAccount={() => setShowAccountModal(true)}
+            btnStyle={headerCornerBtn}
+            iconColor={COLORS.heroRed}
+          />
+        </div>
         {/* logo as its own left column, spanning the full height of
             everything else stacked to its right — matches the reference
             design's layout instead of stacking the logo in its own row */}
@@ -1741,7 +1756,9 @@ function App() {
             style={{ width: 118, height: "auto", flexShrink: 0, alignSelf: "flex-start" }}
           />
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
+            {/* paddingRight keeps this clear of the absolutely-positioned
+                corner hamburger, which floats over this top area */}
+            <div style={{ paddingRight: 56 }}>
               <div
                 style={{
                   fontFamily: FONT_DISPLAY,
@@ -1775,7 +1792,7 @@ function App() {
 
             {/* primary nav — always visible, icon-over-label tiles; wraps to
                 a 2nd row on narrow phones rather than shrinking illegibly */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
                 <Home size={20} color={COLORS.heroRed} strokeWidth={2} />
                 <span style={headerTileLabel}>Dashboard</span>
@@ -1795,34 +1812,24 @@ function App() {
                 iconColor={COLORS.heroRed}
                 label="Alerts"
               />
-              <HeaderMenu
-                editable={editable}
-                onOpenSettings={() => setShowSettingsModal(true)}
-                onOpenAccount={() => setShowAccountModal(true)}
-                btnStyle={headerTile}
-                iconSize={20}
-                iconColor={COLORS.heroRed}
-                label="Menu"
-              />
             </div>
 
-            {/* New Lead / view title */}
+            {/* New Lead is always available (not just on the board view) —
+                it's the header's main CTA now, not a board-only control */}
             <div style={{ display: "flex", alignItems: "center" }}>
-              {view === "board" ? (
-                editable ? (
-                  <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
-                    <Plus size={18} strokeWidth={2.5} />
-                    New Lead
-                  </button>
-                ) : (
-                  <div style={viewBadge}>
-                    <Eye size={13} color={COLORS.mutedOnDark} />
-                    <span>View only</span>
-                  </div>
-                )
-              ) : view === "warranty" ? (
+              {view === "warranty" ? (
                 // WarrantyView renders its own in-content title + back control
                 <div />
+              ) : editable ? (
+                <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
+                  <Plus size={18} strokeWidth={2.5} />
+                  New Lead
+                </button>
+              ) : view === "board" ? (
+                <div style={viewBadge}>
+                  <Eye size={13} color={COLORS.mutedOnDark} />
+                  <span>View only</span>
+                </div>
               ) : (
                 <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
                   {view === "dashboard"
@@ -6604,6 +6611,7 @@ const shell = {
 };
 
 const header = {
+  position: "relative",
   display: "flex",
   flexDirection: "column",
   gap: 14,
@@ -6784,11 +6792,26 @@ const headerTile = {
   alignItems: "center",
   justifyContent: "center",
   gap: 6,
-  flex: "1 1 68px",
-  padding: "8px 4px",
+  flex: "1 1 56px",
+  padding: "8px 2px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(0,0,0,0.35)",
+  cursor: "pointer",
+};
+
+// same dark-card look as headerTile, but fixed-size and icon-only — for the
+// corner hamburger, which sits outside the tile row but should still read
+// as part of the same button family
+const headerCornerBtn = {
+  width: 38,
+  height: 38,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(0,0,0,0.35)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   cursor: "pointer",
 };
 
