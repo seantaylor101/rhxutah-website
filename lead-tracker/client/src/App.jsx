@@ -1731,106 +1731,113 @@ function App() {
       )}
 
       <header style={header}>
-        {/* logo + wordmark — the logo's own baked-in text plus a large
-            standalone wordmark, per the reference design */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 220, width: "auto", flexShrink: 0 }} />
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontFamily: FONT_DISPLAY,
-                fontWeight: 800,
-                fontStyle: "italic",
-                fontSize: 23,
-                lineHeight: 1.05,
-                color: "#fff",
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-              }}
-            >
-              Lead Hammer
+        {/* logo as its own left column, spanning the full height of
+            everything else stacked to its right — matches the reference
+            design's layout instead of stacking the logo in its own row */}
+        <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+          <img
+            src="/logo-badge.png"
+            alt="Lead Hammer"
+            style={{ width: 118, height: "auto", flexShrink: 0, alignSelf: "flex-start" }}
+          />
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <div
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontWeight: 800,
+                  fontStyle: "italic",
+                  fontSize: 21,
+                  lineHeight: 1.05,
+                  color: "#fff",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                Lead Hammer
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT_UTIL,
+                  fontWeight: 700,
+                  fontSize: 10.5,
+                  letterSpacing: 1,
+                  color: "rgba(255,255,255,0.55)",
+                  textTransform: "uppercase",
+                  marginTop: 4,
+                }}
+              >
+                Build<span style={{ color: COLORS.heroRed }}>.</span> Track
+                <span style={{ color: COLORS.heroRed }}>.</span> Close
+                <span style={{ color: COLORS.heroRed }}>.</span>
+              </div>
             </div>
-            <div
-              style={{
-                fontFamily: FONT_UTIL,
-                fontWeight: 700,
-                fontSize: 11,
-                letterSpacing: 1,
-                color: "rgba(255,255,255,0.55)",
-                textTransform: "uppercase",
-                marginTop: 4,
-              }}
-            >
-              Build<span style={{ color: COLORS.heroRed }}>.</span> Track
-              <span style={{ color: COLORS.heroRed }}>.</span> Close
-              <span style={{ color: COLORS.heroRed }}>.</span>
+
+            {/* primary nav — always visible, icon-over-label tiles; wraps to
+                a 2nd row on narrow phones rather than shrinking illegibly */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
+                <Home size={20} color={COLORS.heroRed} strokeWidth={2} />
+                <span style={headerTileLabel}>Dashboard</span>
+              </button>
+              <button
+                onClick={() => setView(view === "board" ? "archive" : "board")}
+                style={headerTile}
+                aria-label="Activity"
+              >
+                <History size={20} color={COLORS.heroRed} strokeWidth={2} />
+                <span style={headerTileLabel}>Activity</span>
+              </button>
+              <NotificationBell
+                onOpenLead={navigateToLead}
+                btnStyle={headerTile}
+                iconSize={20}
+                iconColor={COLORS.heroRed}
+                label="Alerts"
+              />
+              <HeaderMenu
+                editable={editable}
+                onOpenSettings={() => setShowSettingsModal(true)}
+                onOpenAccount={() => setShowAccountModal(true)}
+                btnStyle={headerTile}
+                iconSize={20}
+                iconColor={COLORS.heroRed}
+                label="Menu"
+              />
+            </div>
+
+            {/* New Lead / view title */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              {view === "board" ? (
+                editable ? (
+                  <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
+                    <Plus size={18} strokeWidth={2.5} />
+                    New Lead
+                  </button>
+                ) : (
+                  <div style={viewBadge}>
+                    <Eye size={13} color={COLORS.mutedOnDark} />
+                    <span>View only</span>
+                  </div>
+                )
+              ) : view === "warranty" ? (
+                // WarrantyView renders its own in-content title + back control
+                <div />
+              ) : (
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
+                  {view === "dashboard"
+                    ? "Dashboard"
+                    : view === "goals"
+                    ? "Your Goals"
+                    : view === "metrics"
+                    ? "Performance Metrics"
+                    : view === "archive"
+                    ? "Archive"
+                    : ""}
+                </div>
+              )}
             </div>
           </div>
-        </div>
-
-        {/* primary nav — always visible, icon-over-label tiles instead of
-            plain icon buttons */}
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
-            <Home size={22} color={COLORS.heroRed} strokeWidth={2} />
-            <span style={headerTileLabel}>Dashboard</span>
-          </button>
-          <button
-            onClick={() => setView(view === "board" ? "archive" : "board")}
-            style={headerTile}
-            aria-label="Activity"
-          >
-            <History size={22} color={COLORS.heroRed} strokeWidth={2} />
-            <span style={headerTileLabel}>Activity</span>
-          </button>
-          <NotificationBell
-            onOpenLead={navigateToLead}
-            btnStyle={headerTile}
-            iconSize={22}
-            iconColor={COLORS.heroRed}
-            label="Alerts"
-          />
-          <HeaderMenu
-            editable={editable}
-            onOpenSettings={() => setShowSettingsModal(true)}
-            onOpenAccount={() => setShowAccountModal(true)}
-            btnStyle={headerTile}
-            iconSize={22}
-            iconColor={COLORS.heroRed}
-            label="Menu"
-          />
-        </div>
-
-        {/* New Lead / view title lives on its own full-width line below */}
-        <div style={{ display: "flex", alignItems: "center" }}>
-          {view === "board" ? (
-            editable ? (
-              <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
-                <Plus size={18} strokeWidth={2.5} />
-                New Lead
-              </button>
-            ) : (
-              <div style={viewBadge}>
-                <Eye size={13} color={COLORS.mutedOnDark} />
-                <span>View only</span>
-              </div>
-            )
-          ) : view === "warranty" ? (
-            // WarrantyView renders its own in-content title + back control
-            <div />
-          ) : (
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
-              {view === "dashboard"
-                ? "Dashboard"
-                : view === "goals"
-                ? "Your Goals"
-                : view === "metrics"
-                ? "Performance Metrics"
-                : view === "archive"
-                ? "Archive"
-                : ""}
-            </div>
-          )}
         </div>
       </header>
 
@@ -6777,10 +6784,9 @@ const headerTile = {
   alignItems: "center",
   justifyContent: "center",
   gap: 6,
-  flex: 1,
-  minWidth: 0,
-  padding: "10px 4px",
-  borderRadius: 14,
+  flex: "1 1 68px",
+  padding: "8px 4px",
+  borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(0,0,0,0.35)",
   cursor: "pointer",
