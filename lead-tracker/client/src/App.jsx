@@ -1734,12 +1734,16 @@ function App() {
       <header style={header}>
         {/* hamburger pinned to the top-right corner, out of the tile row —
             keeps Dashboard/Activity/Alerts to 3 tiles that fit one row
-            instead of wrapping, and matches the usual top-right menu spot */}
-        <div style={{ position: "absolute", top: 14, right: 16 }}>
+            instead of wrapping, and matches the usual top-right menu spot.
+            Styled the same dark-card/red-icon way as the tiles so it still
+            reads as part of the same button family. */}
+        <div style={{ position: "absolute", top: 18, right: 20 }}>
           <HeaderMenu
             editable={editable}
             onOpenSettings={() => setShowSettingsModal(true)}
             onOpenAccount={() => setShowAccountModal(true)}
+            btnStyle={headerCornerBtn}
+            iconColor={COLORS.heroRed}
           />
         </div>
         {/* logo as its own left column, spanning the full height of
@@ -1752,7 +1756,9 @@ function App() {
             style={{ width: 118, height: "auto", flexShrink: 0, alignSelf: "flex-start" }}
           />
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
+            {/* paddingRight keeps this clear of the absolutely-positioned
+                corner hamburger, which floats over this top area */}
+            <div style={{ paddingRight: 56 }}>
               <div
                 style={{
                   fontFamily: FONT_DISPLAY,
@@ -6791,6 +6797,21 @@ const headerTile = {
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.08)",
   background: "rgba(0,0,0,0.35)",
+  cursor: "pointer",
+};
+
+// same dark-card look as headerTile, but fixed-size and icon-only — for the
+// corner hamburger, which sits outside the tile row but should still read
+// as part of the same button family
+const headerCornerBtn = {
+  width: 38,
+  height: 38,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(0,0,0,0.35)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   cursor: "pointer",
 };
 
