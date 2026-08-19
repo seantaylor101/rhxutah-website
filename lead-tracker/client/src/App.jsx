@@ -1365,6 +1365,7 @@ function App() {
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
       setActiveStage("new");
+      setView("board");
       setError("");
     } catch {
       setError("Couldn't add that lead — try again.");
@@ -1806,23 +1807,22 @@ function App() {
               />
             </div>
 
-            {/* New Lead / view title */}
+            {/* New Lead is always available (not just on the board view) —
+                it's the header's main CTA now, not a board-only control */}
             <div style={{ display: "flex", alignItems: "center" }}>
-              {view === "board" ? (
-                editable ? (
-                  <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
-                    <Plus size={18} strokeWidth={2.5} />
-                    New Lead
-                  </button>
-                ) : (
-                  <div style={viewBadge}>
-                    <Eye size={13} color={COLORS.mutedOnDark} />
-                    <span>View only</span>
-                  </div>
-                )
-              ) : view === "warranty" ? (
+              {view === "warranty" ? (
                 // WarrantyView renders its own in-content title + back control
                 <div />
+              ) : editable ? (
+                <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
+                  <Plus size={18} strokeWidth={2.5} />
+                  New Lead
+                </button>
+              ) : view === "board" ? (
+                <div style={viewBadge}>
+                  <Eye size={13} color={COLORS.mutedOnDark} />
+                  <span>View only</span>
+                </div>
               ) : (
                 <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
                   {view === "dashboard"
