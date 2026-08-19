@@ -207,11 +207,11 @@ const COLORS = {
   bg: "#F7F7F5",
   surface: "#FFFFFF",
   surfaceMuted: "#EEF1EC",
-  // deep brick-maroon pulled from the logo's ray background and darkened
-  // rust tone, instead of a green unrelated to the mascot's own palette —
-  // ties the header to the logo instead of clashing with it
-  header: "#5E2019",
-  headerLine: "rgba(255,232,222,0.18)",
+  // near-black maroon (solid fallback — the header itself uses a gradient
+  // built from this plus headerGlow, sampled from the reference mockup)
+  header: "#1E1010",
+  headerGlow: "rgba(200,60,40,0.35)",
+  headerLine: "rgba(255,232,222,0.1)",
   accent: "#47936B",
   ink: "#242926",
   muted: "#6E7A6F",
@@ -222,6 +222,11 @@ const COLORS = {
   lost: "#9B9686",
   progress: "#BD7238",
   info: "#6E8CA0",
+  // vivid red/orange used for the header's icon tiles and hero CTA —
+  // sampled from the reference mockup, distinct from the app-wide rust/
+  // accent colors used everywhere else
+  heroRed: "#EC4139",
+  heroRedDeep: "#D1352A",
 };
 
 const STAGES = [
@@ -925,13 +930,14 @@ class ErrorBoundary extends React.Component {
 // header hamburger menu — houses Settings (owner-only) and Account, so the
 // primary header actions (Home/History/notifications) can stay prominent
 // without crowding in two more icon buttons
-function HeaderMenu({ editable, onOpenSettings, onOpenAccount }) {
+function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
 
   return (
     <div style={{ position: "relative" }}>
-      <button onClick={() => setOpen((v) => !v)} style={headerIconBtn} aria-label="Menu">
-        <Menu size={20} color={COLORS.surface} strokeWidth={2} />
+      <button onClick={() => setOpen((v) => !v)} style={btnStyle} aria-label="Menu">
+        <Menu size={iconSize} color={iconColor} strokeWidth={2} />
+        {label && <span style={headerTileLabel}>{label}</span>}
       </button>
       {open && (
         <>
@@ -1725,45 +1731,82 @@ function App() {
       )}
 
       <header style={header}>
-        {/* logo on the left, primary actions (Home/History/notifications)
-            prominent on the right, hamburger tucked in for the
-            less-frequent Settings/Account */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 130, width: "auto", flexShrink: 0 }} />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            {view !== "dashboard" && (
-              <button onClick={() => setView("dashboard")} style={prominentHeaderIconBtn} aria-label="Dashboard">
-                <Home size={24} color={COLORS.surface} strokeWidth={2} />
-              </button>
-            )}
-            {(view === "board" || view === "archive") && (
-              <button
-                onClick={() => setView(view === "board" ? "archive" : "board")}
-                style={prominentHeaderIconBtn}
-                aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-              >
-                {view === "board" ? (
-                  <History size={25} color={COLORS.surface} strokeWidth={2} />
-                ) : (
-                  <Grid size={24} color={COLORS.surface} strokeWidth={2} />
-                )}
-              </button>
-            )}
-            <NotificationBell onOpenLead={navigateToLead} btnStyle={prominentHeaderIconBtn} iconSize={25} />
-            <HeaderMenu
-              editable={editable}
-              onOpenSettings={() => setShowSettingsModal(true)}
-              onOpenAccount={() => setShowAccountModal(true)}
-            />
+        {/* logo + wordmark — the logo's own baked-in text plus a large
+            standalone wordmark, per the reference design */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <img src="/logo-badge.png" alt="Lead Hammer" style={{ height: 92, width: "auto", flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 800,
+                fontStyle: "italic",
+                fontSize: 23,
+                lineHeight: 1.05,
+                color: "#fff",
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+              }}
+            >
+              Lead Hammer
+            </div>
+            <div
+              style={{
+                fontFamily: FONT_UTIL,
+                fontWeight: 700,
+                fontSize: 11,
+                letterSpacing: 1,
+                color: "rgba(255,255,255,0.55)",
+                textTransform: "uppercase",
+                marginTop: 4,
+              }}
+            >
+              Build<span style={{ color: COLORS.heroRed }}>.</span> Track
+              <span style={{ color: COLORS.heroRed }}>.</span> Close
+              <span style={{ color: COLORS.heroRed }}>.</span>
+            </div>
           </div>
         </div>
-        {/* New Lead / view title lives on its own full-width line below,
-            now that the icon row moved up next to the logo */}
+
+        {/* primary nav — always visible, icon-over-label tiles instead of
+            plain icon buttons */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
+            <Home size={22} color={COLORS.heroRed} strokeWidth={2} />
+            <span style={headerTileLabel}>Dashboard</span>
+          </button>
+          <button
+            onClick={() => setView(view === "board" ? "archive" : "board")}
+            style={headerTile}
+            aria-label="Activity"
+          >
+            <History size={22} color={COLORS.heroRed} strokeWidth={2} />
+            <span style={headerTileLabel}>Activity</span>
+          </button>
+          <NotificationBell
+            onOpenLead={navigateToLead}
+            btnStyle={headerTile}
+            iconSize={22}
+            iconColor={COLORS.heroRed}
+            label="Alerts"
+          />
+          <HeaderMenu
+            editable={editable}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenAccount={() => setShowAccountModal(true)}
+            btnStyle={headerTile}
+            iconSize={22}
+            iconColor={COLORS.heroRed}
+            label="Menu"
+          />
+        </div>
+
+        {/* New Lead / view title lives on its own full-width line below */}
         <div style={{ display: "flex", alignItems: "center" }}>
           {view === "board" ? (
             editable ? (
-              <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
-                <Plus size={16} strokeWidth={2.5} />
+              <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
+                <Plus size={18} strokeWidth={2.5} />
                 New Lead
               </button>
             ) : (
@@ -2258,7 +2301,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function NotificationBell({ onOpenLead, btnStyle = headerIconBtn, iconSize = 21 }) {
+function NotificationBell({ onOpenLead, btnStyle = headerIconBtn, iconSize = 21, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -2300,8 +2343,9 @@ function NotificationBell({ onOpenLead, btnStyle = headerIconBtn, iconSize = 21 
 
   return (
     <div style={{ position: "relative" }}>
-      <button onClick={() => setOpen((v) => !v)} style={btnStyle} aria-label="Notifications">
-        <Bell size={iconSize} color={COLORS.surface} strokeWidth={2} />
+      <button onClick={() => setOpen((v) => !v)} style={{ ...btnStyle, position: "relative" }} aria-label="Notifications">
+        <Bell size={iconSize} color={iconColor} strokeWidth={2} />
+        {label && <span style={headerTileLabel}>{label}</span>}
         {unread > 0 && <span style={notifBadge}>{unread > 9 ? "9+" : unread}</span>}
       </button>
       {open && (
@@ -6557,7 +6601,7 @@ const header = {
   flexDirection: "column",
   gap: 14,
   padding: "18px 20px",
-  background: COLORS.header,
+  background: `radial-gradient(ellipse 420px 320px at 10% 35%, ${COLORS.headerGlow}, transparent 65%), linear-gradient(135deg, #170a08 0%, #241009 45%, #150a08 100%)`,
   borderBottom: `1px solid ${COLORS.headerLine}`,
 };
 
@@ -6723,6 +6767,54 @@ const prominentHeaderIconBtn = {
   width: 50,
   height: 50,
   borderRadius: 13,
+};
+
+// icon-over-label tile used for the header's primary nav row (Dashboard /
+// Activity / Alerts / Menu) — dark card, vivid red icon, white label
+const headerTile = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  flex: 1,
+  minWidth: 0,
+  padding: "10px 4px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(0,0,0,0.35)",
+  cursor: "pointer",
+};
+
+const headerTileLabel = {
+  fontFamily: FONT_BODY,
+  fontWeight: 700,
+  fontSize: 11.5,
+  color: "#fff",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "100%",
+};
+
+// big red CTA for the header only — the app-wide addBtn (green) elsewhere
+// is untouched, this is scoped to match the reference mockup's hero button
+const heroNewLeadBtn = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  width: "100%",
+  background: `linear-gradient(135deg, ${COLORS.heroRed}, ${COLORS.heroRedDeep})`,
+  color: "#fff",
+  border: "none",
+  borderRadius: 999,
+  padding: "14px 20px",
+  fontSize: 16,
+  fontWeight: 700,
+  fontFamily: FONT_BODY,
+  cursor: "pointer",
+  boxShadow: "0 4px 14px rgba(209,53,42,0.4)",
 };
 
 const notifBadge = {
