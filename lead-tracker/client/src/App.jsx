@@ -124,6 +124,13 @@ const Home = (p) => (
     <path d="M5.5 9.5V21h13V9.5" />
   </Icon>
 );
+const Menu = (p) => (
+  <Icon {...p}>
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </Icon>
+);
 const Wrench = (p) => (
   <Icon {...p}>
     <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -200,8 +207,11 @@ const COLORS = {
   bg: "#F7F7F5",
   surface: "#FFFFFF",
   surfaceMuted: "#EEF1EC",
-  header: "#32473D",
-  headerLine: "rgba(255,255,255,0.16)",
+  // near-black maroon (solid fallback — the header itself uses a gradient
+  // built from this plus headerGlow, sampled from the reference mockup)
+  header: "#1E1010",
+  headerGlow: "rgba(200,60,40,0.35)",
+  headerLine: "rgba(255,232,222,0.1)",
   accent: "#47936B",
   ink: "#242926",
   muted: "#6E7A6F",
@@ -212,6 +222,11 @@ const COLORS = {
   lost: "#9B9686",
   progress: "#BD7238",
   info: "#6E8CA0",
+  // vivid red/orange used for the header's icon tiles and hero CTA —
+  // sampled from the reference mockup, distinct from the app-wide rust/
+  // accent colors used everywhere else
+  heroRed: "#EC4139",
+  heroRedDeep: "#D1352A",
 };
 
 const STAGES = [
@@ -912,6 +927,49 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// header hamburger menu — houses Settings (owner-only) and Account, so the
+// primary header actions (Home/History/notifications) can stay prominent
+// without crowding in two more icon buttons
+function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} style={btnStyle} aria-label="Menu">
+        <Menu size={iconSize} color={iconColor} strokeWidth={2} />
+        {label && <span style={headerTileLabel}>{label}</span>}
+      </button>
+      {open && (
+        <>
+          <div style={moreMenuScrim} onClick={() => setOpen(false)} />
+          <div style={moreMenuPopover}>
+            {editable && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenSettings();
+                }}
+                style={moreMenuItem}
+              >
+                Settings
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setOpen(false);
+                onOpenAccount();
+              }}
+              style={moreMenuItem}
+            >
+              Account
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [role, setRole] = useState(null); // null = not signed in on this device
@@ -1299,10 +1357,10 @@ function App() {
     setShowPushPrompt(false);
   };
 
-  const addLead = async (name, job, source, sourceOther) => {
+  const addLead = async (name, job, phone, email, source, sourceOther) => {
     if (!name.trim() || !source) return;
     try {
-      const lead = await api.addLead({ name, job, source, sourceOther });
+      const lead = await api.addLead({ name, job, phone, email, source, sourceOther });
       leadsVersionRef.current++;
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
@@ -1672,101 +1730,112 @@ function App() {
         </button>
       )}
 
-      {view !== "warranty" && openWarrantyCount > 0 && (
-        <button
-          onClick={() => setView("warranty")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            width: "100%",
-            padding: "10px 16px",
-            background: COLORS.rust,
-            border: "none",
-            cursor: "pointer",
-            fontFamily: FONT_BODY,
-            fontWeight: 600,
-            fontSize: 13,
-            color: "#fff",
-          }}
-        >
-          <Wrench size={15} color="#fff" strokeWidth={2.2} />
-          {openWarrantyCount} warranty request{openWarrantyCount === 1 ? "" : "s"}{" "}
-          {openWarrantyCount === 1 ? "needs" : "need"} attention — tap to view
-        </button>
-      )}
-
       <header style={header}>
-        <img
-          src="/logo-mark.png"
-          alt=""
-          style={{ width: 64, height: 64, borderRadius: 14, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}
-        />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 21, color: COLORS.surface }}>
-            Lead Slayer
-          </div>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.mutedOnDark, marginBottom: 12 }}>
-            Track every lead from first contact to paid job
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            {view === "board" ? (
-              editable ? (
-                <button onClick={() => setShowAdd(true)} style={addBtn} aria-label="Add new lead">
-                  <Plus size={16} strokeWidth={2.5} />
-                  New Lead
-                </button>
-              ) : (
-                <div style={viewBadge}>
-                  <Eye size={13} color={COLORS.mutedOnDark} />
-                  <span>View only</span>
-                </div>
-              )
-            ) : view === "warranty" ? (
-              // WarrantyView renders its own in-content title + back control
-              <div />
-            ) : (
-              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
-                {view === "dashboard"
-                  ? "Dashboard"
-                  : view === "goals"
-                  ? "Your Goals"
-                  : view === "metrics"
-                  ? "Performance Metrics"
-                  : view === "archive"
-                  ? "Archive"
-                  : ""}
+        {/* logo as its own left column, spanning the full height of
+            everything else stacked to its right — matches the reference
+            design's layout instead of stacking the logo in its own row */}
+        <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+          <img
+            src="/logo-badge.png"
+            alt="Lead Hammer"
+            style={{ width: 118, height: "auto", flexShrink: 0, alignSelf: "flex-start" }}
+          />
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <div
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontWeight: 800,
+                  fontStyle: "italic",
+                  fontSize: 21,
+                  lineHeight: 1.05,
+                  color: "#fff",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                Lead Hammer
               </div>
-            )}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {view !== "dashboard" && (
-                <button onClick={() => setView("dashboard")} style={headerIconBtn} aria-label="Dashboard">
-                  <Home size={20} color={COLORS.surface} strokeWidth={2} />
-                </button>
-              )}
-              {(view === "board" || view === "archive") && (
-                <button
-                  onClick={() => setView(view === "board" ? "archive" : "board")}
-                  style={headerIconBtn}
-                  aria-label={view === "board" ? "View past paid jobs" : "Back to board"}
-                >
-                  {view === "board" ? (
-                    <History size={21} color={COLORS.surface} strokeWidth={2} />
-                  ) : (
-                    <Grid size={20} color={COLORS.surface} strokeWidth={2} />
-                  )}
-                </button>
-              )}
-              <NotificationBell onOpenLead={navigateToLead} />
-              {editable && (
-                <button onClick={() => setShowSettingsModal(true)} style={headerIconBtn} aria-label="Settings">
-                  <Gear size={20} color={COLORS.surface} strokeWidth={2} />
-                </button>
-              )}
-              <button onClick={() => setShowAccountModal(true)} style={headerIconBtn} aria-label="Account">
-                <User size={21} color={COLORS.surface} strokeWidth={2} />
+              <div
+                style={{
+                  fontFamily: FONT_UTIL,
+                  fontWeight: 700,
+                  fontSize: 10.5,
+                  letterSpacing: 1,
+                  color: "rgba(255,255,255,0.55)",
+                  textTransform: "uppercase",
+                  marginTop: 4,
+                }}
+              >
+                Build<span style={{ color: COLORS.heroRed }}>.</span> Track
+                <span style={{ color: COLORS.heroRed }}>.</span> Close
+                <span style={{ color: COLORS.heroRed }}>.</span>
+              </div>
+            </div>
+
+            {/* primary nav — always visible, icon-over-label tiles; wraps to
+                a 2nd row on narrow phones rather than shrinking illegibly */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <button onClick={() => setView("dashboard")} style={headerTile} aria-label="Dashboard">
+                <Home size={20} color={COLORS.heroRed} strokeWidth={2} />
+                <span style={headerTileLabel}>Dashboard</span>
               </button>
+              <button
+                onClick={() => setView(view === "board" ? "archive" : "board")}
+                style={headerTile}
+                aria-label="Activity"
+              >
+                <History size={20} color={COLORS.heroRed} strokeWidth={2} />
+                <span style={headerTileLabel}>Activity</span>
+              </button>
+              <NotificationBell
+                onOpenLead={navigateToLead}
+                btnStyle={headerTile}
+                iconSize={20}
+                iconColor={COLORS.heroRed}
+                label="Alerts"
+              />
+              <HeaderMenu
+                editable={editable}
+                onOpenSettings={() => setShowSettingsModal(true)}
+                onOpenAccount={() => setShowAccountModal(true)}
+                btnStyle={headerTile}
+                iconSize={20}
+                iconColor={COLORS.heroRed}
+                label="Menu"
+              />
+            </div>
+
+            {/* New Lead / view title */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              {view === "board" ? (
+                editable ? (
+                  <button onClick={() => setShowAdd(true)} style={heroNewLeadBtn} aria-label="Add new lead">
+                    <Plus size={18} strokeWidth={2.5} />
+                    New Lead
+                  </button>
+                ) : (
+                  <div style={viewBadge}>
+                    <Eye size={13} color={COLORS.mutedOnDark} />
+                    <span>View only</span>
+                  </div>
+                )
+              ) : view === "warranty" ? (
+                // WarrantyView renders its own in-content title + back control
+                <div />
+              ) : (
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.surface }}>
+                  {view === "dashboard"
+                    ? "Dashboard"
+                    : view === "goals"
+                    ? "Your Goals"
+                    : view === "metrics"
+                    ? "Performance Metrics"
+                    : view === "archive"
+                    ? "Archive"
+                    : ""}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2239,7 +2308,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function NotificationBell({ onOpenLead }) {
+function NotificationBell({ onOpenLead, btnStyle = headerIconBtn, iconSize = 21, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -2281,8 +2350,9 @@ function NotificationBell({ onOpenLead }) {
 
   return (
     <div style={{ position: "relative" }}>
-      <button onClick={() => setOpen((v) => !v)} style={headerIconBtn} aria-label="Notifications">
-        <Bell size={21} color={COLORS.surface} strokeWidth={2} />
+      <button onClick={() => setOpen((v) => !v)} style={{ ...btnStyle, position: "relative" }} aria-label="Notifications">
+        <Bell size={iconSize} color={iconColor} strokeWidth={2} />
+        {label && <span style={headerTileLabel}>{label}</span>}
         {unread > 0 && <span style={notifBadge}>{unread > 9 ? "9+" : unread}</span>}
       </button>
       {open && (
@@ -6379,18 +6449,46 @@ function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
   );
 }
 
+// the Contact Picker API is a per-pick, no-standing-permission design (no
+// "Allow access to your contacts" dialog — each tap opens the device's own
+// contact list and only the one contact you tap is ever shared). Supported
+// on Chrome/Edge for Android; not implemented in Safari, so it's undefined
+// on iPhone/iPad/Mac and every desktop browser — feature-detected below so
+// the button simply doesn't appear where it can't work
+function contactPickerSupported() {
+  return typeof navigator !== "undefined" && "contacts" in navigator && "ContactsManager" in window;
+}
+
 function AddLeadModal({ onAdd, onClose }) {
   useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
+  const [contactErr, setContactErr] = useState("");
 
   const canSubmit = name.trim() && source && (source !== "other" || sourceOther.trim());
 
   const submit = () => {
     if (!canSubmit) return;
-    onAdd(name, job, source, sourceOther);
+    onAdd(name, job, phone, email, source, sourceOther);
+  };
+
+  const importFromContacts = async () => {
+    setContactErr("");
+    try {
+      const picked = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
+      const c = picked && picked[0];
+      if (!c) return;
+      if (c.name && c.name[0]) setName(c.name[0]);
+      if (c.tel && c.tel[0]) setPhone(c.tel[0]);
+      if (c.email && c.email[0]) setEmail(c.email[0]);
+    } catch (e) {
+      // AbortError just means the picker was cancelled — not an error worth surfacing
+      if (e && e.name !== "AbortError") setContactErr("Couldn't open contacts — try again.");
+    }
   };
 
   return (
@@ -6404,6 +6502,24 @@ function AddLeadModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
+
+        {contactPickerSupported() && (
+          <>
+            <button
+              onClick={importFromContacts}
+              style={{ ...roleOption, cursor: "pointer", marginBottom: 4, justifyContent: "center" }}
+            >
+              <User size={16} color={COLORS.ink} />
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                Import from Contacts
+              </span>
+            </button>
+            {contactErr && (
+              <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
+            )}
+          </>
+        )}
+
         <label style={modalLabel}>Name</label>
         <input
           autoFocus
@@ -6418,6 +6534,24 @@ function AddLeadModal({ onAdd, onClose }) {
           value={job}
           onChange={(e) => setJob(e.target.value)}
           placeholder="e.g. Gutters, Lehi"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Phone (optional)</label>
+        <input
+          type="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="e.g. (801) 555-0123"
+          style={modalInput}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+        />
+        <label style={modalLabel}>Email (optional)</label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="e.g. name@example.com"
           style={modalInput}
           onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
         />
@@ -6471,10 +6605,10 @@ const shell = {
 
 const header = {
   display: "flex",
-  alignItems: "center",
+  flexDirection: "column",
   gap: 14,
   padding: "18px 20px",
-  background: COLORS.header,
+  background: `radial-gradient(ellipse 420px 320px at 10% 35%, ${COLORS.headerGlow}, transparent 65%), linear-gradient(135deg, #170a08 0%, #241009 45%, #150a08 100%)`,
   borderBottom: `1px solid ${COLORS.headerLine}`,
 };
 
@@ -6630,6 +6764,63 @@ const headerIconBtn = {
   alignItems: "center",
   justifyContent: "center",
   cursor: "pointer",
+};
+
+// Home / History / notifications sit right next to the logo now and are
+// meant to read as the primary header actions, so they get a bigger
+// treatment than the hamburger menu next to them
+const prominentHeaderIconBtn = {
+  ...headerIconBtn,
+  width: 50,
+  height: 50,
+  borderRadius: 13,
+};
+
+// icon-over-label tile used for the header's primary nav row (Dashboard /
+// Activity / Alerts / Menu) — dark card, vivid red icon, white label
+const headerTile = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  flex: "1 1 68px",
+  padding: "8px 4px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(0,0,0,0.35)",
+  cursor: "pointer",
+};
+
+const headerTileLabel = {
+  fontFamily: FONT_BODY,
+  fontWeight: 700,
+  fontSize: 11.5,
+  color: "#fff",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "100%",
+};
+
+// big red CTA for the header only — the app-wide addBtn (green) elsewhere
+// is untouched, this is scoped to match the reference mockup's hero button
+const heroNewLeadBtn = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  width: "100%",
+  background: `linear-gradient(135deg, ${COLORS.heroRed}, ${COLORS.heroRedDeep})`,
+  color: "#fff",
+  border: "none",
+  borderRadius: 999,
+  padding: "14px 20px",
+  fontSize: 16,
+  fontWeight: 700,
+  fontFamily: FONT_BODY,
+  cursor: "pointer",
+  boxShadow: "0 4px 14px rgba(209,53,42,0.4)",
 };
 
 const notifBadge = {
