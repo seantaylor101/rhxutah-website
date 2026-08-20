@@ -793,6 +793,35 @@ function startOfWeek(d) {
   return x;
 }
 
+// buckets a timestamp into the week/month/year it falls in, for the History
+// view's per-period breakdown — shared so every event type (new lead, bid
+// sent, lost, won, completed, paid) lands in the period it actually
+// happened in, not whatever period the lead as a whole gets filed under
+function periodInfo(dateStr, granularity) {
+  const d = new Date(dateStr);
+  if (granularity === "week") {
+    const ws = startOfWeek(d);
+    const we = new Date(ws);
+    we.setDate(we.getDate() + 6);
+    return {
+      key: ws.toISOString().slice(0, 10),
+      label: `${ws.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${we.toLocaleDateString(
+        undefined,
+        { month: "short", day: "numeric", year: "numeric" }
+      )}`,
+      sortDate: ws,
+    };
+  }
+  if (granularity === "year") {
+    return { key: `${d.getFullYear()}`, label: `${d.getFullYear()}`, sortDate: new Date(d.getFullYear(), 0, 1) };
+  }
+  return {
+    key: `${d.getFullYear()}-${d.getMonth()}`,
+    label: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    sortDate: new Date(d.getFullYear(), d.getMonth(), 1),
+  };
+}
+
 function startOfMonth(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -4843,35 +4872,38 @@ function ArchiveView({ leads, editable, onOpenReport }) {
     [paidLeads]
   );
 
+  // each stage transition is bucketed into whichever period it actually
+  // happened in — a lead created in June and won in August shows up as a
+  // "new lead" in June's period and a "won" in August's, not lumped into
+  // one or the other
   const periods = useMemo(() => {
     const map = new Map();
-    paidLeads.forEach((l) => {
-      const d = new Date(l.paidAt);
-      let key, label, sortDate;
-      if (granularity === "week") {
-        const ws = startOfWeek(d);
-        const we = new Date(ws);
-        we.setDate(we.getDate() + 6);
-        key = ws.toISOString().slice(0, 10);
-        label = `${ws.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${we.toLocaleDateString(
-          undefined,
-          { month: "short", day: "numeric", year: "numeric" }
-        )}`;
-        sortDate = ws;
-      } else if (granularity === "year") {
-        key = `${d.getFullYear()}`;
-        label = key;
-        sortDate = new Date(d.getFullYear(), 0, 1);
-      } else {
-        key = `${d.getFullYear()}-${d.getMonth()}`;
-        label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-        sortDate = new Date(d.getFullYear(), d.getMonth(), 1);
+    const bucket = (dateStr, field, lead) => {
+      if (!dateStr) return;
+      const info = periodInfo(dateStr, granularity);
+      if (!map.has(info.key)) {
+        map.set(info.key, {
+          ...info,
+          newLeads: [],
+          bidsSent: [],
+          lost: [],
+          won: [],
+          completed: [],
+          paid: [],
+        });
       }
-      if (!map.has(key)) map.set(key, { key, label, sortDate, leads: [] });
-      map.get(key).leads.push(l);
+      map.get(info.key)[field].push(lead);
+    };
+    (leads || []).forEach((l) => {
+      bucket(l.createdAt, "newLeads", l);
+      bucket(l.bidSentAt, "bidsSent", l);
+      bucket(l.lostAt, "lost", l);
+      bucket(l.wonAt, "won", l);
+      bucket(l.completedAt, "completed", l);
+      bucket(l.paidAt, "paid", l);
     });
     return Array.from(map.values()).sort((a, b) => b.sortDate - a.sortDate);
-  }, [paidLeads, granularity]);
+  }, [leads, granularity]);
 
   return (
     <main style={cardsWrap}>
@@ -4921,16 +4953,19 @@ function ArchiveView({ leads, editable, onOpenReport }) {
               <div
                 style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
               >
-                Nothing archived yet
+                Nothing here yet
               </div>
               <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-                Paid jobs land here so you can look back by week, month, or year.
+                Every new lead, bid, win, loss, completion, and payment lands here so you can look back by week,
+                month, or year.
               </div>
             </div>
           )}
 
           {periods.map((p) => {
-            const revenue = p.leads.reduce((s, l) => s + (l.revenue || 0), 0);
+            const paidRevenue = p.paid.reduce((s, l) => s + (l.revenue || 0), 0);
+            const wonRevenue = p.won.reduce((s, l) => s + (l.revenue || 0), 0);
+            const completedRevenue = p.completed.reduce((s, l) => s + (l.revenue || 0), 0);
             const open = openKey === p.key;
             return (
               <div key={p.key} style={{ ...ticket, flexDirection: "column", padding: 0 }}>
@@ -4953,14 +4988,47 @@ function ArchiveView({ leads, editable, onOpenReport }) {
                       {p.label}
                     </div>
                     <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
-                      {p.leads.length} paid · {fmtCurrency(revenue)}
+                      {p.newLeads.length} new · {p.won.length} won · {p.paid.length} paid · {fmtCurrency(paidRevenue)}
                     </div>
                   </div>
                   {open ? <ChevronUp size={16} color="#9A9184" /> : <ChevronDown size={16} color="#9A9184" />}
                 </button>
                 {open && (
+                  <div style={{ borderTop: "1px solid #E4DFD1", padding: "12px 14px" }}>
+                    <div style={metricsGrid}>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>New leads</div>
+                        <div style={metricValue}>{p.newLeads.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Bids sent</div>
+                        <div style={metricValue}>{p.bidsSent.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Lost</div>
+                        <div style={metricValue}>{p.lost.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Won</div>
+                        <div style={metricValue}>{p.won.length}</div>
+                        <div style={metricSub}>{fmtCurrency(wonRevenue)}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Completed</div>
+                        <div style={metricValue}>{p.completed.length}</div>
+                        <div style={metricSub}>{fmtCurrency(completedRevenue)}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Paid</div>
+                        <div style={metricValue}>{p.paid.length}</div>
+                        <div style={metricSub}>{fmtCurrency(paidRevenue)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {open && p.paid.length > 0 && (
                   <div style={{ borderTop: "1px solid #E4DFD1" }}>
-                    {p.leads
+                    {p.paid
                       .sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))
                       .map((l) => (
                         <ArchiveLeadRow key={l.id} lead={l} editable={editable} onOpenReport={onOpenReport} />

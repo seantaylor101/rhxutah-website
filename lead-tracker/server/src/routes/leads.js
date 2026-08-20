@@ -161,6 +161,9 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   }
 
   const patch = { stage };
+  // lostAt only ever applies to the "lost" stage itself — any move to
+  // anything else (including a revert) means the lead isn't lost anymore
+  if (stage !== "lost") patch.lostAt = null;
   if (revert) {
     // moving a lead backward: never stamp a fresh date, only clear ones that
     // no longer apply so stats don't stay wrong after the revert
@@ -203,6 +206,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     patch.paidAt = null;
     patch.completedAt = null;
     patch.actualWorkDays = null;
+    patch.lostAt = ts;
   } else {
     // new (reopen)
     patch.wonAt = null;
