@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
+import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole } from "./push.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -1294,6 +1294,12 @@ function App() {
   useEffect(() => {
     showPushPromptRef.current = showPushPrompt;
   }, [showPushPrompt]);
+
+  // keeps an already-subscribed device's role current on the server every
+  // time the app opens — see syncPushSubscriptionRole for why this matters
+  useEffect(() => {
+    if (role) syncPushSubscriptionRole();
+  }, [role]);
 
   // owner-only monthly ritual: every time the app opens (not just once) in
   // a calendar month whose goal hasn't been confirmed yet, prompt for that

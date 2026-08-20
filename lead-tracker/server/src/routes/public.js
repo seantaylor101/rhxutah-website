@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../db.js";
 import { insertLead } from "./leads.js";
-import { sendPushToAll } from "../pushService.js";
+import { sendPushToRole } from "../pushService.js";
 import { sendBackupEmail } from "../notifyEmail.js";
 import { createNotification } from "../notifications.js";
 
@@ -73,8 +73,9 @@ router.post("/leads", (req, res) => {
   }
 
   // best-effort — the lead is already saved, don't let a push/email hiccup
-  // affect the response the website form sees
-  sendPushToAll({ title, body, leadId: lead.id }).catch((err) => console.error("push notify failed:", err.message));
+  // affect the response the website form sees. Owner-only: a fresh,
+  // unqualified lead isn't something for the project manager to act on yet
+  sendPushToRole("owner", { title, body, leadId: lead.id }).catch((err) => console.error("push notify failed:", err.message));
 
   sendBackupEmail(lead).catch((err) => console.error("backup email failed:", err.message));
 });
