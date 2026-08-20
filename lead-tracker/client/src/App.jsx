@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
+import { wasSharedContactLaunch, clearSharedContactParam, readSharedContact } from "./shareTarget.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -976,6 +977,8 @@ function App() {
   const [leads, setLeads] = useState(null); // null = loading
   const [activeStage, setActiveStage] = useState("new");
   const [showAdd, setShowAdd] = useState(false);
+  const [sharedContact, setSharedContact] = useState(null); // { name, phone, email } | null, from an iOS share-sheet contact
+  const [sharedContactMode, setSharedContactMode] = useState(null); // null | 'choosing' | 'lead' | 'warranty'
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty'
@@ -1025,7 +1028,25 @@ function App() {
   const warrantyAlertShownRef = useRef(false);
   const missingInfoAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
+  const sharedContactHandledRef = useRef(false);
   const editable = role === "owner";
+
+  // picks up a contact shared in from the iOS Contacts app (see
+  // shareTarget.js) once sign-in has resolved, so the "add as lead or
+  // warranty request" chooser only appears for an owner who's actually
+  // signed in
+  useEffect(() => {
+    if (!role || sharedContactHandledRef.current || !wasSharedContactLaunch()) return;
+    sharedContactHandledRef.current = true;
+    clearSharedContactParam();
+    if (!editable) return;
+    readSharedContact().then((contact) => {
+      if (contact) {
+        setSharedContact(contact);
+        setSharedContactMode("choosing");
+      }
+    });
+  }, [role, editable]);
 
   // installed PWAs get suspended in the background instead of reloading, so
   // a device can sit on a build from days ago until it's force-quit — check
@@ -1885,6 +1906,11 @@ function App() {
           onUploadPhotos={uploadWarrantyPhotos}
           onDeletePhoto={deleteWarrantyPhoto}
           onBack={() => setView("dashboard")}
+          autoOpenContact={sharedContactMode === "warranty" ? sharedContact : null}
+          onConsumedAutoOpenContact={() => {
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
         />
       ) : (
         <>
@@ -2162,7 +2188,17 @@ function App() {
         </>
       )}
 
-      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
+      {showAdd && (
+        <AddLeadModal
+          onAdd={addLead}
+          initial={sharedContactMode === "lead" ? sharedContact : null}
+          onClose={() => {
+            setShowAdd(false);
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
+        />
+      )}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
       )}
@@ -2192,6 +2228,23 @@ function App() {
         <MissingInfoAlertModal
           leads={leads}
           onClose={() => setShowMissingInfoAlert(false)}
+        />
+      )}
+      {sharedContactMode === "choosing" && sharedContact && (
+        <SharedContactModal
+          contact={sharedContact}
+          onChooseLead={() => {
+            setSharedContactMode("lead");
+            setShowAdd(true);
+          }}
+          onChooseWarranty={() => {
+            setSharedContactMode("warranty");
+            setView("warranty");
+          }}
+          onCancel={() => {
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
         />
       )}
       {scopeOfWorkLead && (
@@ -3987,9 +4040,19 @@ function WarrantyView({
   onUploadPhotos,
   onDeletePhoto,
   onBack,
+  autoOpenContact,
+  onConsumedAutoOpenContact,
 }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
+  const autoOpenHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (autoOpenContact && !autoOpenHandledRef.current) {
+      autoOpenHandledRef.current = true;
+      setShowAdd(true);
+    }
+  }, [autoOpenContact]);
 
   const counts = useMemo(() => {
     const c = { reported: 0, scheduled: 0, resolved: 0 };
@@ -4115,12 +4178,17 @@ function WarrantyView({
 
       {showAdd && (
         <AddWarrantyModal
+          initial={autoOpenContact}
           onAdd={async (payload) => {
             await onAdd(payload);
             setShowAdd(false);
             setActiveStage("reported");
+            if (autoOpenContact) onConsumedAutoOpenContact && onConsumedAutoOpenContact();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => {
+            setShowAdd(false);
+            if (autoOpenContact) onConsumedAutoOpenContact && onConsumedAutoOpenContact();
+          }}
         />
       )}
     </>
@@ -4641,14 +4709,15 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
   );
 }
 
-function AddWarrantyModal({ onAdd, onClose }) {
+function AddWarrantyModal({ onAdd, onClose, initial }) {
   useModalBackClose(onClose);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState(initial?.name || "");
+  const [phone, setPhone] = useState(initial?.phone || "");
+  const [email, setEmail] = useState(initial?.email || "");
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [contactErr, setContactErr] = useState("");
 
   const canSubmit = name.trim().length > 0;
 
@@ -4664,6 +4733,20 @@ function AddWarrantyModal({ onAdd, onClose }) {
     }
   };
 
+  const importFromContacts = async () => {
+    setContactErr("");
+    try {
+      const picked = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
+      const c = picked && picked[0];
+      if (!c) return;
+      if (c.name && c.name[0]) setName(c.name[0]);
+      if (c.tel && c.tel[0]) setPhone(c.tel[0]);
+      if (c.email && c.email[0]) setEmail(c.email[0]);
+    } catch (e) {
+      if (e && e.name !== "AbortError") setContactErr("Couldn't open contacts — try again.");
+    }
+  };
+
   return (
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -4675,6 +4758,29 @@ function AddWarrantyModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
+
+        {contactPickerSupported() && (
+          <>
+            <button
+              onClick={importFromContacts}
+              style={{ ...roleOption, cursor: "pointer", marginBottom: 4, justifyContent: "center" }}
+            >
+              <User size={16} color={COLORS.ink} />
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                Import from Contacts
+              </span>
+            </button>
+            {contactErr && (
+              <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
+            )}
+          </>
+        )}
+        {!contactPickerSupported() && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+            On iPhone: open Contacts, tap Share on someone, then choose Lead Hammer to start a request prefilled
+            with their info.
+          </div>
+        )}
         <label style={modalLabel}>Customer name</label>
         <input
           autoFocus
@@ -6491,12 +6597,54 @@ function contactPickerSupported() {
   return typeof navigator !== "undefined" && "contacts" in navigator && "ContactsManager" in window;
 }
 
-function AddLeadModal({ onAdd, onClose }) {
+// shown right after a contact comes in through the iOS share sheet (see
+// shareTarget.js) — a shared contact isn't inherently a lead or a warranty
+// request, so ask which one this one is before opening the matching form
+// prefilled with it
+function SharedContactModal({ contact, onChooseLead, onChooseWarranty, onCancel }) {
+  useModalBackClose(onCancel);
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Add from Contacts
+          </div>
+          <button onClick={onCancel} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, fontWeight: 600, color: COLORS.ink, marginBottom: 2 }}>
+          {contact.name || "Unnamed contact"}
+        </div>
+        {(contact.phone || contact.email) && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 18 }}>
+            {[contact.phone, contact.email].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        <button
+          onClick={onChooseLead}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginBottom: 8 }}
+        >
+          New lead
+        </button>
+        <button
+          onClick={onChooseWarranty}
+          style={{ ...addBtn, background: COLORS.rust, width: "100%", justifyContent: "center" }}
+        >
+          New warranty request
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddLeadModal({ onAdd, onClose, initial }) {
   useModalBackClose(onClose);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initial?.name || "");
   const [job, setJob] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState(initial?.phone || "");
+  const [email, setEmail] = useState(initial?.email || "");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
   const [contactErr, setContactErr] = useState("");
@@ -6550,6 +6698,12 @@ function AddLeadModal({ onAdd, onClose }) {
               <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
             )}
           </>
+        )}
+        {!contactPickerSupported() && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+            On iPhone: open Contacts, tap Share on someone, then choose Lead Hammer to start a lead prefilled with
+            their info.
+          </div>
         )}
 
         <label style={modalLabel}>Name</label>
