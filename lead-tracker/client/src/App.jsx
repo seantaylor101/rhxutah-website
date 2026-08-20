@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
+import { wasSharedContactLaunch, clearSharedContactParam, readSharedContact } from "./shareTarget.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -792,6 +793,35 @@ function startOfWeek(d) {
   return x;
 }
 
+// buckets a timestamp into the week/month/year it falls in, for the History
+// view's per-period breakdown — shared so every event type (new lead, bid
+// sent, lost, won, completed, paid) lands in the period it actually
+// happened in, not whatever period the lead as a whole gets filed under
+function periodInfo(dateStr, granularity) {
+  const d = new Date(dateStr);
+  if (granularity === "week") {
+    const ws = startOfWeek(d);
+    const we = new Date(ws);
+    we.setDate(we.getDate() + 6);
+    return {
+      key: ws.toISOString().slice(0, 10),
+      label: `${ws.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${we.toLocaleDateString(
+        undefined,
+        { month: "short", day: "numeric", year: "numeric" }
+      )}`,
+      sortDate: ws,
+    };
+  }
+  if (granularity === "year") {
+    return { key: `${d.getFullYear()}`, label: `${d.getFullYear()}`, sortDate: new Date(d.getFullYear(), 0, 1) };
+  }
+  return {
+    key: `${d.getFullYear()}-${d.getMonth()}`,
+    label: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    sortDate: new Date(d.getFullYear(), d.getMonth(), 1),
+  };
+}
+
 function startOfMonth(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -976,6 +1006,8 @@ function App() {
   const [leads, setLeads] = useState(null); // null = loading
   const [activeStage, setActiveStage] = useState("new");
   const [showAdd, setShowAdd] = useState(false);
+  const [sharedContact, setSharedContact] = useState(null); // { name, phone, email } | null, from an iOS share-sheet contact
+  const [sharedContactMode, setSharedContactMode] = useState(null); // null | 'choosing' | 'lead' | 'warranty'
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty'
@@ -1025,7 +1057,25 @@ function App() {
   const warrantyAlertShownRef = useRef(false);
   const missingInfoAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
+  const sharedContactHandledRef = useRef(false);
   const editable = role === "owner";
+
+  // picks up a contact shared in from the iOS Contacts app (see
+  // shareTarget.js) once sign-in has resolved, so the "add as lead or
+  // warranty request" chooser only appears for an owner who's actually
+  // signed in
+  useEffect(() => {
+    if (!role || sharedContactHandledRef.current || !wasSharedContactLaunch()) return;
+    sharedContactHandledRef.current = true;
+    clearSharedContactParam();
+    if (!editable) return;
+    readSharedContact().then((contact) => {
+      if (contact) {
+        setSharedContact(contact);
+        setSharedContactMode("choosing");
+      }
+    });
+  }, [role, editable]);
 
   // installed PWAs get suspended in the background instead of reloading, so
   // a device can sit on a build from days ago until it's force-quit — check
@@ -1885,6 +1935,11 @@ function App() {
           onUploadPhotos={uploadWarrantyPhotos}
           onDeletePhoto={deleteWarrantyPhoto}
           onBack={() => setView("dashboard")}
+          autoOpenContact={sharedContactMode === "warranty" ? sharedContact : null}
+          onConsumedAutoOpenContact={() => {
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
         />
       ) : (
         <>
@@ -2162,7 +2217,17 @@ function App() {
         </>
       )}
 
-      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
+      {showAdd && (
+        <AddLeadModal
+          onAdd={addLead}
+          initial={sharedContactMode === "lead" ? sharedContact : null}
+          onClose={() => {
+            setShowAdd(false);
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
+        />
+      )}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
       )}
@@ -2192,6 +2257,23 @@ function App() {
         <MissingInfoAlertModal
           leads={leads}
           onClose={() => setShowMissingInfoAlert(false)}
+        />
+      )}
+      {sharedContactMode === "choosing" && sharedContact && (
+        <SharedContactModal
+          contact={sharedContact}
+          onChooseLead={() => {
+            setSharedContactMode("lead");
+            setShowAdd(true);
+          }}
+          onChooseWarranty={() => {
+            setSharedContactMode("warranty");
+            setView("warranty");
+          }}
+          onCancel={() => {
+            setSharedContact(null);
+            setSharedContactMode(null);
+          }}
         />
       )}
       {scopeOfWorkLead && (
@@ -3987,9 +4069,19 @@ function WarrantyView({
   onUploadPhotos,
   onDeletePhoto,
   onBack,
+  autoOpenContact,
+  onConsumedAutoOpenContact,
 }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
+  const autoOpenHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (autoOpenContact && !autoOpenHandledRef.current) {
+      autoOpenHandledRef.current = true;
+      setShowAdd(true);
+    }
+  }, [autoOpenContact]);
 
   const counts = useMemo(() => {
     const c = { reported: 0, scheduled: 0, resolved: 0 };
@@ -4115,12 +4207,17 @@ function WarrantyView({
 
       {showAdd && (
         <AddWarrantyModal
+          initial={autoOpenContact}
           onAdd={async (payload) => {
             await onAdd(payload);
             setShowAdd(false);
             setActiveStage("reported");
+            if (autoOpenContact) onConsumedAutoOpenContact && onConsumedAutoOpenContact();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => {
+            setShowAdd(false);
+            if (autoOpenContact) onConsumedAutoOpenContact && onConsumedAutoOpenContact();
+          }}
         />
       )}
     </>
@@ -4641,14 +4738,15 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
   );
 }
 
-function AddWarrantyModal({ onAdd, onClose }) {
+function AddWarrantyModal({ onAdd, onClose, initial }) {
   useModalBackClose(onClose);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState(initial?.name || "");
+  const [phone, setPhone] = useState(initial?.phone || "");
+  const [email, setEmail] = useState(initial?.email || "");
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [contactErr, setContactErr] = useState("");
 
   const canSubmit = name.trim().length > 0;
 
@@ -4664,6 +4762,20 @@ function AddWarrantyModal({ onAdd, onClose }) {
     }
   };
 
+  const importFromContacts = async () => {
+    setContactErr("");
+    try {
+      const picked = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
+      const c = picked && picked[0];
+      if (!c) return;
+      if (c.name && c.name[0]) setName(c.name[0]);
+      if (c.tel && c.tel[0]) setPhone(c.tel[0]);
+      if (c.email && c.email[0]) setEmail(c.email[0]);
+    } catch (e) {
+      if (e && e.name !== "AbortError") setContactErr("Couldn't open contacts — try again.");
+    }
+  };
+
   return (
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -4675,6 +4787,29 @@ function AddWarrantyModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
+
+        {contactPickerSupported() && (
+          <>
+            <button
+              onClick={importFromContacts}
+              style={{ ...roleOption, cursor: "pointer", marginBottom: 4, justifyContent: "center" }}
+            >
+              <User size={16} color={COLORS.ink} />
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                Import from Contacts
+              </span>
+            </button>
+            {contactErr && (
+              <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
+            )}
+          </>
+        )}
+        {!contactPickerSupported() && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+            On iPhone: open Contacts, tap Share on someone, then choose Lead Hammer to start a request prefilled
+            with their info.
+          </div>
+        )}
         <label style={modalLabel}>Customer name</label>
         <input
           autoFocus
@@ -4737,35 +4872,38 @@ function ArchiveView({ leads, editable, onOpenReport }) {
     [paidLeads]
   );
 
+  // each stage transition is bucketed into whichever period it actually
+  // happened in — a lead created in June and won in August shows up as a
+  // "new lead" in June's period and a "won" in August's, not lumped into
+  // one or the other
   const periods = useMemo(() => {
     const map = new Map();
-    paidLeads.forEach((l) => {
-      const d = new Date(l.paidAt);
-      let key, label, sortDate;
-      if (granularity === "week") {
-        const ws = startOfWeek(d);
-        const we = new Date(ws);
-        we.setDate(we.getDate() + 6);
-        key = ws.toISOString().slice(0, 10);
-        label = `${ws.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${we.toLocaleDateString(
-          undefined,
-          { month: "short", day: "numeric", year: "numeric" }
-        )}`;
-        sortDate = ws;
-      } else if (granularity === "year") {
-        key = `${d.getFullYear()}`;
-        label = key;
-        sortDate = new Date(d.getFullYear(), 0, 1);
-      } else {
-        key = `${d.getFullYear()}-${d.getMonth()}`;
-        label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-        sortDate = new Date(d.getFullYear(), d.getMonth(), 1);
+    const bucket = (dateStr, field, lead) => {
+      if (!dateStr) return;
+      const info = periodInfo(dateStr, granularity);
+      if (!map.has(info.key)) {
+        map.set(info.key, {
+          ...info,
+          newLeads: [],
+          bidsSent: [],
+          lost: [],
+          won: [],
+          completed: [],
+          paid: [],
+        });
       }
-      if (!map.has(key)) map.set(key, { key, label, sortDate, leads: [] });
-      map.get(key).leads.push(l);
+      map.get(info.key)[field].push(lead);
+    };
+    (leads || []).forEach((l) => {
+      bucket(l.createdAt, "newLeads", l);
+      bucket(l.bidSentAt, "bidsSent", l);
+      bucket(l.lostAt, "lost", l);
+      bucket(l.wonAt, "won", l);
+      bucket(l.completedAt, "completed", l);
+      bucket(l.paidAt, "paid", l);
     });
     return Array.from(map.values()).sort((a, b) => b.sortDate - a.sortDate);
-  }, [paidLeads, granularity]);
+  }, [leads, granularity]);
 
   return (
     <main style={cardsWrap}>
@@ -4815,16 +4953,19 @@ function ArchiveView({ leads, editable, onOpenReport }) {
               <div
                 style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}
               >
-                Nothing archived yet
+                Nothing here yet
               </div>
               <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
-                Paid jobs land here so you can look back by week, month, or year.
+                Every new lead, bid, win, loss, completion, and payment lands here so you can look back by week,
+                month, or year.
               </div>
             </div>
           )}
 
           {periods.map((p) => {
-            const revenue = p.leads.reduce((s, l) => s + (l.revenue || 0), 0);
+            const paidRevenue = p.paid.reduce((s, l) => s + (l.revenue || 0), 0);
+            const wonRevenue = p.won.reduce((s, l) => s + (l.revenue || 0), 0);
+            const completedRevenue = p.completed.reduce((s, l) => s + (l.revenue || 0), 0);
             const open = openKey === p.key;
             return (
               <div key={p.key} style={{ ...ticket, flexDirection: "column", padding: 0 }}>
@@ -4847,14 +4988,47 @@ function ArchiveView({ leads, editable, onOpenReport }) {
                       {p.label}
                     </div>
                     <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#8A8478" }}>
-                      {p.leads.length} paid · {fmtCurrency(revenue)}
+                      {p.newLeads.length} new · {p.won.length} won · {p.paid.length} paid · {fmtCurrency(paidRevenue)}
                     </div>
                   </div>
                   {open ? <ChevronUp size={16} color="#9A9184" /> : <ChevronDown size={16} color="#9A9184" />}
                 </button>
                 {open && (
+                  <div style={{ borderTop: "1px solid #E4DFD1", padding: "12px 14px" }}>
+                    <div style={metricsGrid}>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>New leads</div>
+                        <div style={metricValue}>{p.newLeads.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Bids sent</div>
+                        <div style={metricValue}>{p.bidsSent.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Lost</div>
+                        <div style={metricValue}>{p.lost.length}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Won</div>
+                        <div style={metricValue}>{p.won.length}</div>
+                        <div style={metricSub}>{fmtCurrency(wonRevenue)}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Completed</div>
+                        <div style={metricValue}>{p.completed.length}</div>
+                        <div style={metricSub}>{fmtCurrency(completedRevenue)}</div>
+                      </div>
+                      <div style={metricTile}>
+                        <div style={metricLabel}>Paid</div>
+                        <div style={metricValue}>{p.paid.length}</div>
+                        <div style={metricSub}>{fmtCurrency(paidRevenue)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {open && p.paid.length > 0 && (
                   <div style={{ borderTop: "1px solid #E4DFD1" }}>
-                    {p.leads
+                    {p.paid
                       .sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))
                       .map((l) => (
                         <ArchiveLeadRow key={l.id} lead={l} editable={editable} onOpenReport={onOpenReport} />
@@ -4909,6 +5083,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   useModalBackClose(onClose);
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
+  const [commissionDraft, setCommissionDraft] = useState(lead.commission != null ? String(lead.commission) : "");
   const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
   const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
   const [busy, setBusy] = useState(false);
@@ -4916,6 +5091,16 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const [saved, setSaved] = useState(false);
   const [editingWorkDays, setEditingWorkDays] = useState(false);
   const [workDaysDraft, setWorkDaysDraft] = useState("");
+  const wentWellRef = useRef(null);
+  const wentWrongRef = useRef(null);
+
+  const autoResizeTextarea = (el) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useLayoutEffect(() => autoResizeTextarea(wentWellRef.current), [wentWellDraft]);
+  useLayoutEffect(() => autoResizeTextarea(wentWrongRef.current), [wentWrongDraft]);
 
   useEffect(() => {
     if (!saved) return;
@@ -4932,16 +5117,19 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
 
   const materialCostLive = materialDraft === "" ? 0 : parseFloat(materialDraft) || 0;
   const laborCostLive = laborDraft === "" ? 0 : parseFloat(laborDraft) || 0;
-  const totalCost = materialCostLive + laborCostLive + (overheadCost || 0);
+  const commissionLive = commissionDraft === "" ? 0 : parseFloat(commissionDraft) || 0;
+  const totalCost = materialCostLive + laborCostLive + commissionLive + (overheadCost || 0);
   const profit = revenue - totalCost;
   const profitMargin = revenue > 0 ? (profit / revenue) * 100 : null;
 
   const draftPatch = () => {
     const material = materialDraft === "" ? null : parseFloat(materialDraft);
     const labor = laborDraft === "" ? null : parseFloat(laborDraft);
+    const commission = commissionDraft === "" ? null : parseFloat(commissionDraft);
     return {
       materialCost: material == null || isNaN(material) ? null : material,
       laborCost: labor == null || isNaN(labor) ? null : labor,
+      commission: commission == null || isNaN(commission) ? null : commission,
       wentWell: wentWellDraft,
       wentWrong: wentWrongDraft,
     };
@@ -5109,6 +5297,15 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
               placeholder="0"
               style={modalInput}
             />
+            <label style={modalLabel}>Commission</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={commissionDraft}
+              onChange={(e) => setCommissionDraft(e.target.value)}
+              placeholder="0"
+              style={modalInput}
+            />
 
             <div style={{ ...reportRow, marginTop: 10 }}>
               <span style={reportRowLabel}>Overhead ({settings.overheadPercent}% of {fmtCurrency(revenue)})</span>
@@ -5134,17 +5331,19 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
           <>
             <label style={modalLabel}>What went well?</label>
             <textarea
+              ref={wentWellRef}
               value={wentWellDraft}
               onChange={(e) => setWentWellDraft(e.target.value)}
               placeholder="e.g. Crew finished ahead of schedule, client was easy to reach"
-              style={modalTextarea}
+              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
             />
             <label style={modalLabel}>What went wrong?</label>
             <textarea
+              ref={wentWrongRef}
               value={wentWrongDraft}
               onChange={(e) => setWentWrongDraft(e.target.value)}
               placeholder="e.g. Material delivery was late, underbid the labor"
-              style={modalTextarea}
+              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
             />
             <button
               onClick={saveReport}
@@ -6466,12 +6665,54 @@ function contactPickerSupported() {
   return typeof navigator !== "undefined" && "contacts" in navigator && "ContactsManager" in window;
 }
 
-function AddLeadModal({ onAdd, onClose }) {
+// shown right after a contact comes in through the iOS share sheet (see
+// shareTarget.js) — a shared contact isn't inherently a lead or a warranty
+// request, so ask which one this one is before opening the matching form
+// prefilled with it
+function SharedContactModal({ contact, onChooseLead, onChooseWarranty, onCancel }) {
+  useModalBackClose(onCancel);
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Add from Contacts
+          </div>
+          <button onClick={onCancel} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, fontWeight: 600, color: COLORS.ink, marginBottom: 2 }}>
+          {contact.name || "Unnamed contact"}
+        </div>
+        {(contact.phone || contact.email) && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 18 }}>
+            {[contact.phone, contact.email].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        <button
+          onClick={onChooseLead}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginBottom: 8 }}
+        >
+          New lead
+        </button>
+        <button
+          onClick={onChooseWarranty}
+          style={{ ...addBtn, background: COLORS.rust, width: "100%", justifyContent: "center" }}
+        >
+          New warranty request
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddLeadModal({ onAdd, onClose, initial }) {
   useModalBackClose(onClose);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initial?.name || "");
   const [job, setJob] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState(initial?.phone || "");
+  const [email, setEmail] = useState(initial?.email || "");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
   const [contactErr, setContactErr] = useState("");
@@ -6525,6 +6766,12 @@ function AddLeadModal({ onAdd, onClose }) {
               <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 4 }}>{contactErr}</div>
             )}
           </>
+        )}
+        {!contactPickerSupported() && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+            On iPhone: open Contacts, tap Share on someone, then choose Lead Hammer to start a lead prefilled with
+            their info.
+          </div>
         )}
 
         <label style={modalLabel}>Name</label>

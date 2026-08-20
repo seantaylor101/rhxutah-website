@@ -48,6 +48,9 @@ if (!existingColumns.has("materialCost")) {
 if (!existingColumns.has("laborCost")) {
   db.exec(`ALTER TABLE leads ADD COLUMN laborCost REAL`);
 }
+if (!existingColumns.has("commission")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN commission REAL`);
+}
 if (!existingColumns.has("reportCompletedAt")) {
   db.exec(`ALTER TABLE leads ADD COLUMN reportCompletedAt TEXT`);
 }
@@ -71,6 +74,12 @@ if (!existingColumns.has("appointmentReminderSentAt")) {
 }
 if (!existingColumns.has("address")) {
   db.exec(`ALTER TABLE leads ADD COLUMN address TEXT DEFAULT ''`);
+}
+if (!existingColumns.has("lostAt")) {
+  // when a lead was actually marked lost — previously the "lost" stage had
+  // no timestamp of its own, so a lead moved to lost couldn't be attributed
+  // to a month for reporting the way every other stage transition can
+  db.exec(`ALTER TABLE leads ADD COLUMN lostAt TEXT`);
 }
 if (!existingColumns.has("scopeOfWork")) {
   // JSON-encoded array of { id, text, done } checklist items, filled out

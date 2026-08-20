@@ -113,6 +113,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
     for (const lead of leads) {
       lead.materialCost = null;
       lead.laborCost = null;
+      lead.commission = null;
     }
   }
   res.json(leads);
@@ -160,6 +161,9 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   }
 
   const patch = { stage };
+  // lostAt only ever applies to the "lost" stage itself — any move to
+  // anything else (including a revert) means the lead isn't lost anymore
+  if (stage !== "lost") patch.lostAt = null;
   if (revert) {
     // moving a lead backward: never stamp a fresh date, only clear ones that
     // no longer apply so stats don't stay wrong after the revert
@@ -202,6 +206,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     patch.paidAt = null;
     patch.completedAt = null;
     patch.actualWorkDays = null;
+    patch.lostAt = ts;
   } else {
     // new (reopen)
     patch.wonAt = null;
@@ -286,13 +291,16 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
-  const { materialCost, laborCost, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
+  const { materialCost, laborCost, commission, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
   const patch = {};
   if (materialCost !== undefined) {
     patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
   }
   if (laborCost !== undefined) {
     patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
+  }
+  if (commission !== undefined) {
+    patch.commission = commission === null || commission === "" ? null : Number(commission);
   }
   if (actualWorkDays !== undefined) {
     patch.actualWorkDays = actualWorkDays === null || actualWorkDays === "" ? null : Number(actualWorkDays);
