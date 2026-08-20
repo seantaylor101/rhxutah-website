@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDueReportReminders } from "../reportReminders.js";
 import { sendPushToRole } from "../pushService.js";
 import { logMove } from "../activityLog.js";
+import { upsertContactFromLead, updateContact } from "../contacts.js";
 
 const router = Router();
 
@@ -67,11 +68,20 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     archived: 0,
     archivedAt: null,
     scopeOfWork: "",
+    contactId: null,
   };
 
+  // keeps the owner's contacts list current regardless of whether the lead
+  // came from the authenticated form or the public website-intake endpoint
+  lead.contactId = upsertContactFromLead(
+    db,
+    { name: lead.name, phone: lead.phone, email: lead.email, address: lead.address },
+    { isNewLead: true }
+  );
+
   db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork)
-     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork)`
+    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork, contactId)
+     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork, @contactId)`
   ).run(lead);
 
   return lead;
@@ -291,6 +301,19 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
     ...updates,
     id: row.id,
   });
+
+  if (["name", "phone", "email", "address"].some((f) => f in updates)) {
+    const merged = { ...row, ...updates };
+    const contactInfo = { name: merged.name, phone: merged.phone, email: merged.email, address: merged.address };
+    if (row.contactId) {
+      updateContact(db, row.contactId, contactInfo);
+    } else {
+      // pre-migration lead with no link yet — match-or-create once, then
+      // remember it so every future edit goes straight to updateContact
+      const contactId = upsertContactFromLead(db, contactInfo, { isNewLead: false });
+      db.prepare(`UPDATE leads SET contactId = ? WHERE id = ?`).run(contactId, row.id);
+    }
+  }
 
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });

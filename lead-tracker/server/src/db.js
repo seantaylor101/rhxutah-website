@@ -94,6 +94,14 @@ if (!existingColumns.has("followUps")) {
   // more actually correlates with winning the job
   db.exec(`ALTER TABLE leads ADD COLUMN followUps TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("contactId")) {
+  // which contacts-table row this lead is tied to, set once at creation.
+  // Later edits to name/phone/email/address update that same contact
+  // directly instead of re-matching from scratch — re-matching after an
+  // edit (e.g. the phone just changed) can no longer find the old link and
+  // would spin up a duplicate contact instead of updating the real one.
+  db.exec(`ALTER TABLE leads ADD COLUMN contactId TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -184,3 +192,22 @@ db.exec(`
   );
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_access_log_createdAt ON access_log (createdAt DESC)`);
+
+// owner-only address book, auto-populated as leads come in so a repeat
+// customer's info doesn't have to be typed in twice. Lives in this same
+// per-deployment sqlite file as everything else — there's no shared/cloud
+// store behind it, so a contact entered here can never end up in a
+// different business's copy of this app
+db.exec(`
+  CREATE TABLE IF NOT EXISTS contacts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    leadCount INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts (name COLLATE NOCASE)`);

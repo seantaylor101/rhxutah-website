@@ -1010,7 +1010,7 @@ class ErrorBoundary extends React.Component {
 // header hamburger menu — houses Settings (owner-only) and Account, so the
 // primary header actions (Home/History/notifications) can stay prominent
 // without crowding in two more icon buttons
-function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
+function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -1023,6 +1023,17 @@ function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = header
         <>
           <div style={moreMenuScrim} onClick={() => setOpen(false)} />
           <div style={moreMenuPopover}>
+            {editable && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenContacts();
+                }}
+                style={moreMenuItem}
+              >
+                Contacts
+              </button>
+            )}
             {editable && (
               <button
                 onClick={() => {
@@ -1058,8 +1069,9 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
@@ -1211,6 +1223,22 @@ function App() {
   useEffect(() => {
     if (role) loadWarrantyRequests();
   }, [role, loadWarrantyRequests]);
+
+  // owner-only address book — never fetched for a viewer session, so it
+  // never even reaches a device signed in as the project manager
+  const loadContacts = useCallback(async () => {
+    if (role !== "owner") return;
+    try {
+      const data = await api.listContacts();
+      setContacts(data);
+    } catch {
+      // keep whatever was already loaded on a transient failure
+    }
+  }, [role]);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -1462,6 +1490,7 @@ function App() {
       setActiveStage("new");
       setView("board");
       setError("");
+      loadContacts();
     } catch {
       setError("Couldn't add that lead — try again.");
     }
@@ -1502,6 +1531,16 @@ function App() {
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     } catch {
       loadLeads();
+    }
+  };
+
+  const deleteContact = async (id) => {
+    const prevContacts = contacts;
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+    try {
+      await api.deleteContact(id);
+    } catch {
+      setContacts(prevContacts);
     }
   };
 
@@ -1860,6 +1899,7 @@ function App() {
           <HeaderMenu
             editable={editable}
             onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenContacts={() => setView("contacts")}
             onOpenAccount={() => setShowAccountModal(true)}
             btnStyle={headerCornerBtn}
             iconColor={COLORS.heroRed}
@@ -1988,6 +2028,8 @@ function App() {
         />
       ) : view === "metrics" ? (
         <MetricsView leads={leads} overheadPercent={settings.overheadPercent} />
+      ) : view === "contacts" && editable ? (
+        <ContactsView contacts={contacts} onDelete={deleteContact} />
       ) : view === "warranty" ? (
         <WarrantyView
           requests={warrantyRequests}
@@ -2279,7 +2321,7 @@ function App() {
         </>
       )}
 
-      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
+      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} contacts={contacts} />}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
       )}
@@ -4840,6 +4882,88 @@ function AddWarrantyModal({ onAdd, onClose }) {
   );
 }
 
+// owner-only address book — auto-populated as leads come in (see
+// contacts.js on the server), so a repeat customer's info is one tap away
+// on the next lead instead of retyped from scratch
+function ContactsView({ contacts, onDelete }) {
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone && c.phone.toLowerCase().includes(q)) ||
+        (c.email && c.email.toLowerCase().includes(q))
+    );
+  }, [contacts, query]);
+
+  return (
+    <main style={cardsWrap}>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search contacts…"
+        style={modalInput}
+      />
+      {contacts.length === 0 && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}>
+            No contacts yet
+          </div>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+            Every lead you add saves its contact info here, so a repeat customer autofills next time.
+          </div>
+        </div>
+      )}
+      {contacts.length > 0 && filtered.length === 0 && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>No contacts match "{query}".</div>
+        </div>
+      )}
+      {filtered.map((c) => (
+        <ContactRow key={c.id} contact={c} onDelete={onDelete} />
+      ))}
+    </main>
+  );
+}
+
+function ContactRow({ contact: c, onDelete }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  return (
+    <div style={{ ...ticket, flexDirection: "column", padding: "12px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{c.name}</div>
+          {c.leadCount > 0 && (
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.accent, marginTop: 2 }}>
+              {c.leadCount} lead{c.leadCount === 1 ? "" : "s"}
+            </div>
+          )}
+        </div>
+        {!confirmDel ? (
+          <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete contact">
+            <Trash2 size={16} color="#9A9184" />
+          </button>
+        ) : (
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => onDelete(c.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete contact">
+              <Check size={16} color="#fff" />
+            </button>
+            <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete contact">
+              <X size={16} color="#fff" />
+            </button>
+          </div>
+        )}
+      </div>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 4 }}>
+        {[c.phone, c.email, c.address].filter(Boolean).join(" · ") || "No contact details on file"}
+      </div>
+    </div>
+  );
+}
+
 function ArchiveView({ leads, editable, onOpenReport }) {
   const [granularity, setGranularity] = useState("month"); // 'week' | 'month' | 'year' | 'all'
   const [openKey, setOpenKey] = useState(null);
@@ -6721,7 +6845,7 @@ function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
   );
 }
 
-function AddLeadModal({ onAdd, onClose }) {
+function AddLeadModal({ onAdd, onClose, contacts }) {
   useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
@@ -6729,12 +6853,28 @@ function AddLeadModal({ onAdd, onClose }) {
   const [email, setEmail] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const canSubmit = name.trim() && source && (source !== "other" || sourceOther.trim());
 
   const submit = () => {
     if (!canSubmit) return;
     onAdd(name, job, phone, email, source, sourceOther);
+  };
+
+  // repeat-customer autofill — matched against the owner's auto-saved
+  // contacts list once at least a couple characters are typed
+  const nameMatches = useMemo(() => {
+    const q = name.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return (contacts || []).filter((c) => c.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [name, contacts]);
+
+  const pickContact = (c) => {
+    setName(c.name);
+    if (c.phone) setPhone(c.phone);
+    if (c.email) setEmail(c.email);
+    setShowSuggestions(false);
   };
 
   return (
@@ -6750,14 +6890,65 @@ function AddLeadModal({ onAdd, onClose }) {
         </div>
 
         <label style={modalLabel}>Name</label>
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Nguyen"
-          style={modalInput}
-          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
-        />
+        <div style={{ position: "relative" }}>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setShowSuggestions(true);
+            }}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            placeholder="e.g. Nguyen"
+            style={modalInput}
+            onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+          />
+          {showSuggestions && nameMatches.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                right: 0,
+                zIndex: 5,
+                background: COLORS.surface,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 8,
+                marginTop: 2,
+                boxShadow: "0 4px 12px rgba(36,41,38,0.12)",
+                overflow: "hidden",
+              }}
+            >
+              {nameMatches.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onMouseDown={() => pickContact(c)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: `1px solid ${COLORS.border}`,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>
+                    {c.name}
+                  </div>
+                  {(c.phone || c.email) && (
+                    <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 1 }}>
+                      {[c.phone, c.email].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <label style={modalLabel}>Job</label>
         <input
           value={job}

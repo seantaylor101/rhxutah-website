@@ -81,4 +81,6 @@ export const api = {
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
   listActivityFeed: () => request("/activity/feed"),
+  listContacts: () => request("/contacts"),
+  deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),
 };
