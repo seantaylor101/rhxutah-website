@@ -1049,6 +1049,8 @@ function App() {
   // with pre-edit data
   const leadsVersionRef = useRef(0);
   const warrantyVersionRef = useRef(0);
+  const lastLeadsJsonRef = useRef("");
+  const lastWarrantyJsonRef = useRef("");
   const pushPromptCheckedRef = useRef(false);
   const goalPromptCheckedRef = useRef(false);
   const warrantyAlertShownRef = useRef(false);
@@ -1111,7 +1113,16 @@ function App() {
     try {
       const data = await api.listLeads();
       if (leadsVersionRef.current !== version) return; // an edit/move/etc. raced ahead of this fetch — don't clobber it
-      setLeads(data);
+      // the 30s background poll (below) re-fetches even when nothing
+      // changed — skip the state update in that case so it doesn't hand
+      // every list/card a fresh array/object identity and force a
+      // needless re-render (which is what was making the app visibly
+      // "jerk" every 30s while someone was mid-scroll or mid-edit)
+      const json = JSON.stringify(data);
+      if (json !== lastLeadsJsonRef.current) {
+        lastLeadsJsonRef.current = json;
+        setLeads(data);
+      }
       setError("");
     } catch {
       if (leadsVersionRef.current !== version) return;
@@ -1133,7 +1144,11 @@ function App() {
     try {
       const data = await api.listWarrantyRequests();
       if (warrantyVersionRef.current !== version) return;
-      setWarrantyRequests(data);
+      const json = JSON.stringify(data);
+      if (json !== lastWarrantyJsonRef.current) {
+        lastWarrantyJsonRef.current = json;
+        setWarrantyRequests(data);
+      }
     } catch {
       // keep whatever was already loaded rather than blanking the badge/list
       // on a transient failure
@@ -1826,11 +1841,7 @@ function App() {
                 <Home size={20} color={COLORS.heroRed} strokeWidth={2} />
                 <span style={headerTileLabel}>Dashboard</span>
               </button>
-              <button
-                onClick={() => setView(view === "board" ? "archive" : "board")}
-                style={headerTile}
-                aria-label="Activity"
-              >
+              <button onClick={() => setView("archive")} style={headerTile} aria-label="Activity">
                 <History size={20} color={COLORS.heroRed} strokeWidth={2} />
                 <span style={headerTileLabel}>Activity</span>
               </button>
