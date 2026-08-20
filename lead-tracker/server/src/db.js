@@ -48,6 +48,9 @@ if (!existingColumns.has("materialCost")) {
 if (!existingColumns.has("laborCost")) {
   db.exec(`ALTER TABLE leads ADD COLUMN laborCost REAL`);
 }
+if (!existingColumns.has("commission")) {
+  db.exec(`ALTER TABLE leads ADD COLUMN commission REAL`);
+}
 if (!existingColumns.has("reportCompletedAt")) {
   db.exec(`ALTER TABLE leads ADD COLUMN reportCompletedAt TEXT`);
 }

@@ -113,6 +113,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
     for (const lead of leads) {
       lead.materialCost = null;
       lead.laborCost = null;
+      lead.commission = null;
     }
   }
   res.json(leads);
@@ -286,13 +287,16 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
-  const { materialCost, laborCost, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
+  const { materialCost, laborCost, commission, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
   const patch = {};
   if (materialCost !== undefined) {
     patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
   }
   if (laborCost !== undefined) {
     patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
+  }
+  if (commission !== undefined) {
+    patch.commission = commission === null || commission === "" ? null : Number(commission);
   }
   if (actualWorkDays !== undefined) {
     patch.actualWorkDays = actualWorkDays === null || actualWorkDays === "" ? null : Number(actualWorkDays);

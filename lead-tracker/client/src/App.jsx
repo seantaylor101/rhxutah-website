@@ -4909,6 +4909,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   useModalBackClose(onClose);
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
+  const [commissionDraft, setCommissionDraft] = useState(lead.commission != null ? String(lead.commission) : "");
   const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
   const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
   const [busy, setBusy] = useState(false);
@@ -4916,6 +4917,16 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   const [saved, setSaved] = useState(false);
   const [editingWorkDays, setEditingWorkDays] = useState(false);
   const [workDaysDraft, setWorkDaysDraft] = useState("");
+  const wentWellRef = useRef(null);
+  const wentWrongRef = useRef(null);
+
+  const autoResizeTextarea = (el) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useLayoutEffect(() => autoResizeTextarea(wentWellRef.current), [wentWellDraft]);
+  useLayoutEffect(() => autoResizeTextarea(wentWrongRef.current), [wentWrongDraft]);
 
   useEffect(() => {
     if (!saved) return;
@@ -4932,16 +4943,19 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
 
   const materialCostLive = materialDraft === "" ? 0 : parseFloat(materialDraft) || 0;
   const laborCostLive = laborDraft === "" ? 0 : parseFloat(laborDraft) || 0;
-  const totalCost = materialCostLive + laborCostLive + (overheadCost || 0);
+  const commissionLive = commissionDraft === "" ? 0 : parseFloat(commissionDraft) || 0;
+  const totalCost = materialCostLive + laborCostLive + commissionLive + (overheadCost || 0);
   const profit = revenue - totalCost;
   const profitMargin = revenue > 0 ? (profit / revenue) * 100 : null;
 
   const draftPatch = () => {
     const material = materialDraft === "" ? null : parseFloat(materialDraft);
     const labor = laborDraft === "" ? null : parseFloat(laborDraft);
+    const commission = commissionDraft === "" ? null : parseFloat(commissionDraft);
     return {
       materialCost: material == null || isNaN(material) ? null : material,
       laborCost: labor == null || isNaN(labor) ? null : labor,
+      commission: commission == null || isNaN(commission) ? null : commission,
       wentWell: wentWellDraft,
       wentWrong: wentWrongDraft,
     };
@@ -5109,6 +5123,15 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
               placeholder="0"
               style={modalInput}
             />
+            <label style={modalLabel}>Commission</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={commissionDraft}
+              onChange={(e) => setCommissionDraft(e.target.value)}
+              placeholder="0"
+              style={modalInput}
+            />
 
             <div style={{ ...reportRow, marginTop: 10 }}>
               <span style={reportRowLabel}>Overhead ({settings.overheadPercent}% of {fmtCurrency(revenue)})</span>
@@ -5134,17 +5157,19 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
           <>
             <label style={modalLabel}>What went well?</label>
             <textarea
+              ref={wentWellRef}
               value={wentWellDraft}
               onChange={(e) => setWentWellDraft(e.target.value)}
               placeholder="e.g. Crew finished ahead of schedule, client was easy to reach"
-              style={modalTextarea}
+              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
             />
             <label style={modalLabel}>What went wrong?</label>
             <textarea
+              ref={wentWrongRef}
               value={wentWrongDraft}
               onChange={(e) => setWentWrongDraft(e.target.value)}
               placeholder="e.g. Material delivery was late, underbid the labor"
-              style={modalTextarea}
+              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
             />
             <button
               onClick={saveReport}
