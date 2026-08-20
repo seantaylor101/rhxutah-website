@@ -87,6 +87,13 @@ if (!existingColumns.has("scopeOfWork")) {
   // what to plan for and who to hire
   db.exec(`ALTER TABLE leads ADD COLUMN scopeOfWork TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("followUps")) {
+  // JSON-encoded array of { id, createdAt } — one entry per logged
+  // follow-up call/text/email while a lead sits in "bid", so the owner can
+  // both see the running count on a lead and measure whether following up
+  // more actually correlates with winning the job
+  db.exec(`ALTER TABLE leads ADD COLUMN followUps TEXT DEFAULT ''`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (

@@ -334,6 +334,31 @@ function computeMetrics(subset, overheadPercent = 13) {
   const estimatedLost = estimatedLeads.filter((l) => l.stage === "lost");
   const estimateDecidedCount = estimatedWon.length + estimatedLost.length;
 
+  // follow-up effectiveness — scoped to leads that got a bid sent and
+  // reached a decision, since logging only happens while a lead sits in
+  // "bid". Bucketed by how many follow-ups were logged before the decision,
+  // so the win rate per bucket shows whether following up more actually
+  // correlates with winning, and the won-only average answers "how many
+  // follow-ups does it typically take to win"
+  const followupEligible = subset.filter((l) => l.bidSentAt && (l.wonAt || l.stage === "lost"));
+  const followupBucketOrder = ["0", "1", "2", "3+"];
+  const followupBucketLabel = (n) => (n >= 3 ? "3+" : String(n));
+  const followupBuckets = {};
+  followupBucketOrder.forEach((k) => (followupBuckets[k] = { won: 0, lost: 0 }));
+  followupEligible.forEach((l) => {
+    const key = followupBucketLabel((l.followUps || []).length);
+    if (l.wonAt) followupBuckets[key].won++;
+    else followupBuckets[key].lost++;
+  });
+  const followupWinRateByBucket = followupBucketOrder
+    .map((key) => {
+      const { won, lost } = followupBuckets[key];
+      const decided = won + lost;
+      return { key, won, lost, decided, winRate: decided ? won / decided : null };
+    })
+    .filter((b) => b.decided > 0);
+  const followupCountsOnWon = wonLeads.filter((l) => l.bidSentAt).map((l) => (l.followUps || []).length);
+
   return {
     totalLeads: subset.length,
     closeRate: decidedCount ? wonLeads.length / decidedCount : null,
@@ -362,6 +387,9 @@ function computeMetrics(subset, overheadPercent = 13) {
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
     paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
+    avgFollowupsOnWon: avg(followupCountsOnWon),
+    avgFollowupsOnWonSample: followupCountsOnWon.length,
+    followupWinRateByBucket,
   };
 }
 
@@ -616,6 +644,29 @@ const METRIC_INFO = [
     chart: (m) => (
       <Histogram buckets={histogramBuckets(m.paceDays, 5)} formatBound={fmtDaysBound} unitLabel="Workdays per $1,000, by completed job" />
     ),
+  },
+  {
+    key: "avgFollowupsOnWon",
+    label: "Follow-up Effectiveness",
+    value: (m) => (m.avgFollowupsOnWon != null ? m.avgFollowupsOnWon.toFixed(1) : "—"),
+    sub: (m) =>
+      m.avgFollowupsOnWonSample
+        ? `avg follow-ups on ${m.avgFollowupsOnWonSample} won job${m.avgFollowupsOnWonSample === 1 ? "" : "s"}`
+        : "no won jobs with a bid sent yet",
+    description:
+      "How many times a lead typically gets followed up with (logged from the Bid Sent stage) before the job is won, and — below — how the win rate changes by follow-up count. Scoped to leads that got a bid sent and reached a decision (won or lost), since that's the only window follow-ups get logged in.",
+    chart: (m) =>
+      m.followupWinRateByBucket.length ? (
+        <ComparisonBars
+          items={m.followupWinRateByBucket.map((b) => ({
+            label: `${b.key} follow-up${b.key === "1" ? "" : "s"}`,
+            value: b.winRate != null ? b.winRate * 100 : 0,
+            formatted: b.winRate != null ? `${fmtPercent(b.winRate)} (${b.won}/${b.decided})` : "—",
+          }))}
+        />
+      ) : (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>Not enough data yet.</div>
+      ),
   },
 ];
 
@@ -1454,6 +1505,30 @@ function App() {
     }
   };
 
+  const logFollowup = async (id) => {
+    leadsVersionRef.current++;
+    try {
+      const updated = await api.logFollowup(id);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
+      setError("Couldn't log that follow-up — try again.");
+      loadLeads();
+    }
+  };
+
+  const removeFollowup = async (id, followupId) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, followUps: l.followUps.filter((f) => f.id !== followupId) } : l))
+    );
+    try {
+      const updated = await api.removeFollowup(id, followupId);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
+      loadLeads();
+    }
+  };
+
   const editField = async (id, field, value) => {
     const patch = typeof field === "object" ? field : { [field]: value };
     leadsVersionRef.current++;
@@ -2190,6 +2265,8 @@ function App() {
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
                   onOpenScopeOfWork={setScopeOfWorkLead}
+                  onLogFollowup={logFollowup}
+                  onRemoveFollowup={removeFollowup}
                   settings={settings}
                 />
               </div>
@@ -5492,6 +5569,8 @@ function LeadTicket({
   highlighted,
   onOpenReport,
   onOpenScopeOfWork,
+  onLogFollowup,
+  onRemoveFollowup,
   settings,
 }) {
   const [editingName, setEditingName] = useState(false);
@@ -6255,6 +6334,14 @@ function LeadTicket({
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
+        {editable && lead.stage === "bid" && (
+          <FollowUpSection
+            lead={lead}
+            onLog={() => onLogFollowup(lead.id)}
+            onRemove={(followupId) => onRemoveFollowup(lead.id, followupId)}
+          />
+        )}
+
         {/* scope-of-work checklist — visible once a job is won; owner can
             always open it to add/edit, the project manager only sees it once
             there's actually something on the list to check off */}
@@ -6318,6 +6405,80 @@ function priorDateFor(lead, stage) {
   if (stage === "completed") return lead.startDate || lead.wonAt || lead.createdAt;
   if (stage === "paid") return lead.wonAt || lead.createdAt;
   return null;
+}
+
+// logs a touch (call/text/email) while a lead sits in "bid" — a running
+// tally rather than a fixed checklist, since there's no set number of
+// follow-ups; each tap just adds one more dated entry. Expandable so a
+// misclick can be undone without losing the rest of the count.
+function FollowUpSection({ lead, onLog, onRemove }) {
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const followUps = lead.followUps || [];
+
+  const log = async () => {
+    setBusy(true);
+    try {
+      await onLog();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button
+          onClick={log}
+          disabled={busy}
+          style={{ ...actionBtn, background: "transparent", color: COLORS.accent, border: `1px solid ${COLORS.accent}`, opacity: busy ? 0.6 : 1 }}
+        >
+          <Phone size={13} />
+          Log follow-up
+        </button>
+        {followUps.length > 0 && (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            style={{ ...actionBtn, background: "transparent", color: "#6B6558", border: "1px solid #D8D2C2" }}
+          >
+            {followUps.length} follow-up{followUps.length === 1 ? "" : "s"}
+            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+      </div>
+      {expanded && followUps.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {[...followUps]
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .map((f) => (
+              <div
+                key={f.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  fontFamily: FONT_UTIL,
+                  fontSize: 12.5,
+                  color: COLORS.muted,
+                  padding: "4px 8px",
+                  background: COLORS.surfaceMuted,
+                  borderRadius: 6,
+                }}
+              >
+                {fmtDateTime(f.createdAt)}
+                <button
+                  onClick={() => onRemove(f.id)}
+                  style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex" }}
+                  aria-label="Remove follow-up"
+                >
+                  <X size={13} color={COLORS.muted} />
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {

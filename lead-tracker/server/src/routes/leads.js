@@ -34,7 +34,15 @@ function rowToLead(row) {
       scopeOfWork = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork };
+  let followUps = [];
+  if (row.followUps) {
+    try {
+      followUps = JSON.parse(row.followUps);
+    } catch {
+      followUps = [];
+    }
+  }
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -372,6 +380,39 @@ router.patch("/:id/scope-of-work", requireAuth("viewer"), (req, res) => {
   item.done = !!done;
 
   db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+function readFollowUps(row) {
+  if (!row.followUps) return [];
+  try {
+    return JSON.parse(row.followUps);
+  } catch {
+    return [];
+  }
+}
+
+// logs one follow-up touch (call/text/email) — owner-only, same as every
+// other sales-side action on a lead
+router.post("/:id/followups", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const followUps = readFollowUps(row);
+  followUps.push({ id: randomUUID(), createdAt: new Date().toISOString() });
+
+  db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+// undo an accidental log
+router.delete("/:id/followups/:followupId", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const followUps = readFollowUps(row).filter((f) => f.id !== req.params.followupId);
+
+  db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
