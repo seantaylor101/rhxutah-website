@@ -1,5 +1,5 @@
 import { db } from "./db.js";
-import { sendPushToAll } from "./pushService.js";
+import { sendPushToRole } from "./pushService.js";
 import { createNotification } from "./notifications.js";
 
 // UTC calendar-day key — good enough for "once per day" dedup; doesn't need
@@ -26,7 +26,10 @@ export async function sendDueReportReminders() {
     } catch (err) {
       console.error("failed to log report reminder notification:", err.message);
     }
-    sendPushToAll({ title, body, leadId: lead.id }).catch((err) =>
+    // owner-only: filling out the final report (material/labor cost) is an
+    // owner-gated action, so nagging the project manager about it too would
+    // just be noise they can't act on
+    sendPushToRole("owner", { title, body, leadId: lead.id }).catch((err) =>
       console.error("report reminder push failed:", err.message)
     );
     db.prepare(`UPDATE leads SET lastReportReminderAt = ? WHERE id = ?`).run(new Date().toISOString(), lead.id);

@@ -38,11 +38,6 @@ async function sendPush(subs, payload) {
   );
 }
 
-export async function sendPushToAll(payload) {
-  const subs = db.prepare(`SELECT * FROM push_subscriptions`).all();
-  await sendPush(subs, payload);
-}
-
 // targets only devices that were signed in as the given role when they
 // subscribed — devices that subscribed before role-tracking existed won't
 // have a role on file and are excluded until they resubscribe

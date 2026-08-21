@@ -48,6 +48,24 @@ export async function enablePush() {
   return subscription;
 }
 
+// re-registers an already-existing browser subscription with the server on
+// every app open, so the role stamped on it (owner vs viewer — see
+// pushService.js) never goes stale. Without this, a subscription created
+// before role-tracking existed, or from a device that once signed in under
+// a different role, would silently keep missing every role-targeted push
+// (e.g. "lead won" for the viewer) forever, with no way to notice or fix it
+// short of manually toggling notifications off and back on.
+export async function syncPushSubscriptionRole() {
+  if (!pushSupported()) return;
+  try {
+    const sub = await getPushSubscription();
+    if (sub) await api.pushSubscribe(sub.toJSON());
+  } catch {
+    // best-effort — a failed sync just means the role stays whatever it
+    // was; nothing to surface to the user over this
+  }
+}
+
 export async function disablePush() {
   const sub = await getPushSubscription();
   if (sub) {

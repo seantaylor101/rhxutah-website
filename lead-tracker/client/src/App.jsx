@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { pushSupported, getPushSubscription, enablePush, disablePush } from "./push.js";
+import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole } from "./push.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -334,6 +334,31 @@ function computeMetrics(subset, overheadPercent = 13) {
   const estimatedLost = estimatedLeads.filter((l) => l.stage === "lost");
   const estimateDecidedCount = estimatedWon.length + estimatedLost.length;
 
+  // follow-up effectiveness — scoped to leads that got a bid sent and
+  // reached a decision, since logging only happens while a lead sits in
+  // "bid". Bucketed by how many follow-ups were logged before the decision,
+  // so the win rate per bucket shows whether following up more actually
+  // correlates with winning, and the won-only average answers "how many
+  // follow-ups does it typically take to win"
+  const followupEligible = subset.filter((l) => l.bidSentAt && (l.wonAt || l.stage === "lost"));
+  const followupBucketOrder = ["0", "1", "2", "3+"];
+  const followupBucketLabel = (n) => (n >= 3 ? "3+" : String(n));
+  const followupBuckets = {};
+  followupBucketOrder.forEach((k) => (followupBuckets[k] = { won: 0, lost: 0 }));
+  followupEligible.forEach((l) => {
+    const key = followupBucketLabel((l.followUps || []).length);
+    if (l.wonAt) followupBuckets[key].won++;
+    else followupBuckets[key].lost++;
+  });
+  const followupWinRateByBucket = followupBucketOrder
+    .map((key) => {
+      const { won, lost } = followupBuckets[key];
+      const decided = won + lost;
+      return { key, won, lost, decided, winRate: decided ? won / decided : null };
+    })
+    .filter((b) => b.decided > 0);
+  const followupCountsOnWon = wonLeads.filter((l) => l.bidSentAt).map((l) => (l.followUps || []).length);
+
   return {
     totalLeads: subset.length,
     closeRate: decidedCount ? wonLeads.length / decidedCount : null,
@@ -362,6 +387,9 @@ function computeMetrics(subset, overheadPercent = 13) {
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
     paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
+    avgFollowupsOnWon: avg(followupCountsOnWon),
+    avgFollowupsOnWonSample: followupCountsOnWon.length,
+    followupWinRateByBucket,
   };
 }
 
@@ -616,6 +644,29 @@ const METRIC_INFO = [
     chart: (m) => (
       <Histogram buckets={histogramBuckets(m.paceDays, 5)} formatBound={fmtDaysBound} unitLabel="Workdays per $1,000, by completed job" />
     ),
+  },
+  {
+    key: "avgFollowupsOnWon",
+    label: "Follow-up Effectiveness",
+    value: (m) => (m.avgFollowupsOnWon != null ? m.avgFollowupsOnWon.toFixed(1) : "—"),
+    sub: (m) =>
+      m.avgFollowupsOnWonSample
+        ? `avg follow-ups on ${m.avgFollowupsOnWonSample} won job${m.avgFollowupsOnWonSample === 1 ? "" : "s"}`
+        : "no won jobs with a bid sent yet",
+    description:
+      "How many times a lead typically gets followed up with (logged from the Bid Sent stage) before the job is won, and — below — how the win rate changes by follow-up count. Scoped to leads that got a bid sent and reached a decision (won or lost), since that's the only window follow-ups get logged in.",
+    chart: (m) =>
+      m.followupWinRateByBucket.length ? (
+        <ComparisonBars
+          items={m.followupWinRateByBucket.map((b) => ({
+            label: `${b.key} follow-up${b.key === "1" ? "" : "s"}`,
+            value: b.winRate != null ? b.winRate * 100 : 0,
+            formatted: b.winRate != null ? `${fmtPercent(b.winRate)} (${b.won}/${b.decided})` : "—",
+          }))}
+        />
+      ) : (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>Not enough data yet.</div>
+      ),
   },
 ];
 
@@ -959,7 +1010,7 @@ class ErrorBoundary extends React.Component {
 // header hamburger menu — houses Settings (owner-only) and Account, so the
 // primary header actions (Home/History/notifications) can stay prominent
 // without crowding in two more icon buttons
-function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
+function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -972,6 +1023,17 @@ function HeaderMenu({ editable, onOpenSettings, onOpenAccount, btnStyle = header
         <>
           <div style={moreMenuScrim} onClick={() => setOpen(false)} />
           <div style={moreMenuPopover}>
+            {editable && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenContacts();
+                }}
+                style={moreMenuItem}
+              >
+                Contacts
+              </button>
+            )}
             {editable && (
               <button
                 onClick={() => {
@@ -1007,8 +1069,9 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
@@ -1161,6 +1224,22 @@ function App() {
     if (role) loadWarrantyRequests();
   }, [role, loadWarrantyRequests]);
 
+  // owner-only address book — never fetched for a viewer session, so it
+  // never even reaches a device signed in as the project manager
+  const loadContacts = useCallback(async () => {
+    if (role !== "owner") return;
+    try {
+      const data = await api.listContacts();
+      setContacts(data);
+    } catch {
+      // keep whatever was already loaded on a transient failure
+    }
+  }, [role]);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
+
   const loadSettings = useCallback(async () => {
     try {
       const data = await api.getSettings();
@@ -1215,6 +1294,12 @@ function App() {
   useEffect(() => {
     showPushPromptRef.current = showPushPrompt;
   }, [showPushPrompt]);
+
+  // keeps an already-subscribed device's role current on the server every
+  // time the app opens — see syncPushSubscriptionRole for why this matters
+  useEffect(() => {
+    if (role) syncPushSubscriptionRole();
+  }, [role]);
 
   // owner-only monthly ritual: every time the app opens (not just once) in
   // a calendar month whose goal hasn't been confirmed yet, prompt for that
@@ -1411,6 +1496,7 @@ function App() {
       setActiveStage("new");
       setView("board");
       setError("");
+      loadContacts();
     } catch {
       setError("Couldn't add that lead — try again.");
     }
@@ -1448,6 +1534,40 @@ function App() {
     );
     try {
       const updated = await api.toggleScopeOfWorkItem(id, itemId, done);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
+      loadLeads();
+    }
+  };
+
+  const deleteContact = async (id) => {
+    const prevContacts = contacts;
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+    try {
+      await api.deleteContact(id);
+    } catch {
+      setContacts(prevContacts);
+    }
+  };
+
+  const logFollowup = async (id) => {
+    leadsVersionRef.current++;
+    try {
+      const updated = await api.logFollowup(id);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
+      setError("Couldn't log that follow-up — try again.");
+      loadLeads();
+    }
+  };
+
+  const removeFollowup = async (id, followupId) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, followUps: l.followUps.filter((f) => f.id !== followupId) } : l))
+    );
+    try {
+      const updated = await api.removeFollowup(id, followupId);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     } catch {
       loadLeads();
@@ -1785,6 +1905,7 @@ function App() {
           <HeaderMenu
             editable={editable}
             onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenContacts={() => setView("contacts")}
             onOpenAccount={() => setShowAccountModal(true)}
             btnStyle={headerCornerBtn}
             iconColor={COLORS.heroRed}
@@ -1913,6 +2034,8 @@ function App() {
         />
       ) : view === "metrics" ? (
         <MetricsView leads={leads} overheadPercent={settings.overheadPercent} />
+      ) : view === "contacts" && editable ? (
+        <ContactsView contacts={contacts} onDelete={deleteContact} />
       ) : view === "warranty" ? (
         <WarrantyView
           requests={warrantyRequests}
@@ -2190,6 +2313,8 @@ function App() {
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
                   onOpenScopeOfWork={setScopeOfWorkLead}
+                  onLogFollowup={logFollowup}
+                  onRemoveFollowup={removeFollowup}
                   settings={settings}
                 />
               </div>
@@ -2202,7 +2327,7 @@ function App() {
         </>
       )}
 
-      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} />}
+      {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} contacts={contacts} />}
       {showPushPrompt && (
         <PushPromptModal onEnable={enablePushFromPrompt} onDismiss={() => setShowPushPrompt(false)} />
       )}
@@ -4763,6 +4888,88 @@ function AddWarrantyModal({ onAdd, onClose }) {
   );
 }
 
+// owner-only address book — auto-populated as leads come in (see
+// contacts.js on the server), so a repeat customer's info is one tap away
+// on the next lead instead of retyped from scratch
+function ContactsView({ contacts, onDelete }) {
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone && c.phone.toLowerCase().includes(q)) ||
+        (c.email && c.email.toLowerCase().includes(q))
+    );
+  }, [contacts, query]);
+
+  return (
+    <main style={cardsWrap}>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search contacts…"
+        style={modalInput}
+      />
+      {contacts.length === 0 && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}>
+            No contacts yet
+          </div>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+            Every lead you add saves its contact info here, so a repeat customer autofills next time.
+          </div>
+        </div>
+      )}
+      {contacts.length > 0 && filtered.length === 0 && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>No contacts match "{query}".</div>
+        </div>
+      )}
+      {filtered.map((c) => (
+        <ContactRow key={c.id} contact={c} onDelete={onDelete} />
+      ))}
+    </main>
+  );
+}
+
+function ContactRow({ contact: c, onDelete }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  return (
+    <div style={{ ...ticket, flexDirection: "column", padding: "12px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{c.name}</div>
+          {c.leadCount > 0 && (
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.accent, marginTop: 2 }}>
+              {c.leadCount} lead{c.leadCount === 1 ? "" : "s"}
+            </div>
+          )}
+        </div>
+        {!confirmDel ? (
+          <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete contact">
+            <Trash2 size={16} color="#9A9184" />
+          </button>
+        ) : (
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => onDelete(c.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete contact">
+              <Check size={16} color="#fff" />
+            </button>
+            <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete contact">
+              <X size={16} color="#fff" />
+            </button>
+          </div>
+        )}
+      </div>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 4 }}>
+        {[c.phone, c.email, c.address].filter(Boolean).join(" · ") || "No contact details on file"}
+      </div>
+    </div>
+  );
+}
+
 function ArchiveView({ leads, editable, onOpenReport }) {
   const [granularity, setGranularity] = useState("month"); // 'week' | 'month' | 'year' | 'all'
   const [openKey, setOpenKey] = useState(null);
@@ -5492,6 +5699,8 @@ function LeadTicket({
   highlighted,
   onOpenReport,
   onOpenScopeOfWork,
+  onLogFollowup,
+  onRemoveFollowup,
   settings,
 }) {
   const [editingName, setEditingName] = useState(false);
@@ -6255,6 +6464,14 @@ function LeadTicket({
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
+        {editable && lead.stage === "bid" && (
+          <FollowUpSection
+            lead={lead}
+            onLog={() => onLogFollowup(lead.id)}
+            onRemove={(followupId) => onRemoveFollowup(lead.id, followupId)}
+          />
+        )}
+
         {/* scope-of-work checklist — visible once a job is won; owner can
             always open it to add/edit, the project manager only sees it once
             there's actually something on the list to check off */}
@@ -6318,6 +6535,80 @@ function priorDateFor(lead, stage) {
   if (stage === "completed") return lead.startDate || lead.wonAt || lead.createdAt;
   if (stage === "paid") return lead.wonAt || lead.createdAt;
   return null;
+}
+
+// logs a touch (call/text/email) while a lead sits in "bid" — a running
+// tally rather than a fixed checklist, since there's no set number of
+// follow-ups; each tap just adds one more dated entry. Expandable so a
+// misclick can be undone without losing the rest of the count.
+function FollowUpSection({ lead, onLog, onRemove }) {
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const followUps = lead.followUps || [];
+
+  const log = async () => {
+    setBusy(true);
+    try {
+      await onLog();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button
+          onClick={log}
+          disabled={busy}
+          style={{ ...actionBtn, background: "transparent", color: COLORS.accent, border: `1px solid ${COLORS.accent}`, opacity: busy ? 0.6 : 1 }}
+        >
+          <Phone size={13} />
+          Log follow-up
+        </button>
+        {followUps.length > 0 && (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            style={{ ...actionBtn, background: "transparent", color: "#6B6558", border: "1px solid #D8D2C2" }}
+          >
+            {followUps.length} follow-up{followUps.length === 1 ? "" : "s"}
+            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+      </div>
+      {expanded && followUps.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {[...followUps]
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .map((f) => (
+              <div
+                key={f.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  fontFamily: FONT_UTIL,
+                  fontSize: 12.5,
+                  color: COLORS.muted,
+                  padding: "4px 8px",
+                  background: COLORS.surfaceMuted,
+                  borderRadius: 6,
+                }}
+              >
+                {fmtDateTime(f.createdAt)}
+                <button
+                  onClick={() => onRemove(f.id)}
+                  style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex" }}
+                  aria-label="Remove follow-up"
+                >
+                  <X size={13} color={COLORS.muted} />
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {
@@ -6560,7 +6851,7 @@ function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
   );
 }
 
-function AddLeadModal({ onAdd, onClose }) {
+function AddLeadModal({ onAdd, onClose, contacts }) {
   useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
@@ -6568,12 +6859,28 @@ function AddLeadModal({ onAdd, onClose }) {
   const [email, setEmail] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const canSubmit = name.trim() && source && (source !== "other" || sourceOther.trim());
 
   const submit = () => {
     if (!canSubmit) return;
     onAdd(name, job, phone, email, source, sourceOther);
+  };
+
+  // repeat-customer autofill — matched against the owner's auto-saved
+  // contacts list once at least a couple characters are typed
+  const nameMatches = useMemo(() => {
+    const q = name.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return (contacts || []).filter((c) => c.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [name, contacts]);
+
+  const pickContact = (c) => {
+    setName(c.name);
+    if (c.phone) setPhone(c.phone);
+    if (c.email) setEmail(c.email);
+    setShowSuggestions(false);
   };
 
   return (
@@ -6589,14 +6896,65 @@ function AddLeadModal({ onAdd, onClose }) {
         </div>
 
         <label style={modalLabel}>Name</label>
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Nguyen"
-          style={modalInput}
-          onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
-        />
+        <div style={{ position: "relative" }}>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setShowSuggestions(true);
+            }}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            placeholder="e.g. Nguyen"
+            style={modalInput}
+            onKeyDown={(e) => e.key === "Enter" && canSubmit && submit()}
+          />
+          {showSuggestions && nameMatches.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                right: 0,
+                zIndex: 5,
+                background: COLORS.surface,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 8,
+                marginTop: 2,
+                boxShadow: "0 4px 12px rgba(36,41,38,0.12)",
+                overflow: "hidden",
+              }}
+            >
+              {nameMatches.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onMouseDown={() => pickContact(c)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: `1px solid ${COLORS.border}`,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>
+                    {c.name}
+                  </div>
+                  {(c.phone || c.email) && (
+                    <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 1 }}>
+                      {[c.phone, c.email].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <label style={modalLabel}>Job</label>
         <input
           value={job}
