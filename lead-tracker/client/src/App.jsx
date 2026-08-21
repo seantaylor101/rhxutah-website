@@ -944,11 +944,23 @@ function fmtCurrency(n) {
 
 // which leads contributed to a period's received/won/earned numbers — shared
 // by the This week/This month cards and the "Look back" panel
+// end is optional — omit it (pass null) for an open-ended "start through
+// right now" range. An explicit upper bound of `new Date()` looks
+// equivalent, but isn't: it pins the range to whatever the *device's own
+// clock* reads at the moment the drilldown is opened, and a lead's wonAt
+// (or createdAt/paidAt) is stamped from the *server's* clock at the moment
+// the action happened. Any drift between the two — a phone's clock running
+// a few minutes slow is common — makes an entry that's genuinely inside
+// "this week" look like it's from slightly after "now" and silently drops
+// it from the list, while the dashboard tile's own total (which has never
+// bounded above) still counts it. Matching that same "no upper bound"
+// behavior here is what keeps the drilldown's total in sync with the tile
+// that opened it.
 function breakdownForRange(allLeads, start, end) {
   const inRange = (iso) => {
     if (!iso) return false;
     const d = new Date(iso);
-    return d >= start && d <= end;
+    return d >= start && (end == null || d <= end);
   };
   const all = allLeads || [];
   return {
@@ -2058,7 +2070,7 @@ function App() {
             setDrilldown({
               title: "This month",
               rangeLabel: `${fmtRangeDate(startOfMonth(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfMonth(new Date()), new Date()),
+              breakdown: breakdownForRange(leads, startOfMonth(new Date()), null),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
@@ -2103,7 +2115,7 @@ function App() {
             setDrilldown({
               title: "This week",
               rangeLabel: `${fmtRangeDate(startOfWeek(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfWeek(new Date()), new Date()),
+              breakdown: breakdownForRange(leads, startOfWeek(new Date()), null),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
