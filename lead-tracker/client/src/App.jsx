@@ -2078,7 +2078,7 @@ function App() {
           <div style={statLabel}>This month</div>
           <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} finalized</div>
         </button>
         <button
           onClick={() =>
@@ -2093,7 +2093,7 @@ function App() {
           <div style={statLabel}>2 weeks ago</div>
           <div style={statMain}>{stats.leadsPreviousWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonPreviousWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} finalized</div>
         </button>
         <button
           onClick={() =>
@@ -2108,7 +2108,7 @@ function App() {
           <div style={statLabel}>Last week</div>
           <div style={statMain}>{stats.leadsLastWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonLastWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedLastWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedLastWeek)} finalized</div>
         </button>
         <button
           onClick={() =>
@@ -2123,7 +2123,7 @@ function App() {
           <div style={statLabel}>This week</div>
           <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} finalized</div>
         </button>
       </div>
 
@@ -2180,7 +2180,7 @@ function App() {
                 {lookbackResult.leadsCount} <span style={statUnit}>leads</span>
               </div>
               <div style={statSub}>{fmtCurrency(lookbackResult.won)} won</div>
-              <div style={statSub}>{fmtCurrency(lookbackResult.earned)} earned</div>
+              <div style={statSub}>{fmtCurrency(lookbackResult.earned)} finalized</div>
               <button
                 onClick={() =>
                   setDrilldown({
@@ -2616,7 +2616,7 @@ function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose 
   const tabs = [
     { key: "received", label: `Received (${breakdown.received.length})` },
     { key: "won", label: `Won (${breakdown.won.length})` },
-    { key: "earned", label: `Earned (${breakdown.earned.length})` },
+    { key: "earned", label: `Finalized (${breakdown.earned.length})` },
   ];
   const list = breakdown[tab];
 
