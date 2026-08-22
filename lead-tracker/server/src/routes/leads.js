@@ -260,7 +260,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   if (!revert && stage === "won") {
     sendPushToRole("viewer", {
       title: "Lead won!",
-      body: `${row.name} has been won. Please contact the salesman and the customer and schedule the work ASAP.`,
+      body: `${row.name} has been won. Please contact the salesman and the customer and schedule the work ASAP. Also — go congratulate Sean! Maybe he deserves some flowers for closing this one 💐`,
     }).catch((err) => console.error("won push notify failed:", err.message));
   }
 });
