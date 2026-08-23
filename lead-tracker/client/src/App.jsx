@@ -944,11 +944,23 @@ function fmtCurrency(n) {
 
 // which leads contributed to a period's received/won/earned numbers — shared
 // by the This week/This month cards and the "Look back" panel
+// end is optional — omit it (pass null) for an open-ended "start through
+// right now" range. An explicit upper bound of `new Date()` looks
+// equivalent, but isn't: it pins the range to whatever the *device's own
+// clock* reads at the moment the drilldown is opened, and a lead's wonAt
+// (or createdAt/paidAt) is stamped from the *server's* clock at the moment
+// the action happened. Any drift between the two — a phone's clock running
+// a few minutes slow is common — makes an entry that's genuinely inside
+// "this week" look like it's from slightly after "now" and silently drops
+// it from the list, while the dashboard tile's own total (which has never
+// bounded above) still counts it. Matching that same "no upper bound"
+// behavior here is what keeps the drilldown's total in sync with the tile
+// that opened it.
 function breakdownForRange(allLeads, start, end) {
   const inRange = (iso) => {
     if (!iso) return false;
     const d = new Date(iso);
-    return d >= start && d <= end;
+    return d >= start && (end == null || d <= end);
   };
   const all = allLeads || [];
   return {
@@ -2058,7 +2070,7 @@ function App() {
             setDrilldown({
               title: "This month",
               rangeLabel: `${fmtRangeDate(startOfMonth(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfMonth(new Date()), new Date()),
+              breakdown: breakdownForRange(leads, startOfMonth(new Date()), null),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
@@ -2066,7 +2078,7 @@ function App() {
           <div style={statLabel}>This month</div>
           <div style={statMain}>{stats.leadsMonth} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonMonth)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedMonth)} finalized</div>
         </button>
         <button
           onClick={() =>
@@ -2081,7 +2093,7 @@ function App() {
           <div style={statLabel}>2 weeks ago</div>
           <div style={statMain}>{stats.leadsPreviousWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonPreviousWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedPreviousWeek)} finalized</div>
         </button>
         <button
           onClick={() =>
@@ -2096,14 +2108,14 @@ function App() {
           <div style={statLabel}>Last week</div>
           <div style={statMain}>{stats.leadsLastWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonLastWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedLastWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedLastWeek)} finalized</div>
         </button>
         <button
           onClick={() =>
             setDrilldown({
               title: "This week",
               rangeLabel: `${fmtRangeDate(startOfWeek(new Date()))} – ${fmtRangeDate(new Date())}`,
-              breakdown: breakdownForRange(leads, startOfWeek(new Date()), new Date()),
+              breakdown: breakdownForRange(leads, startOfWeek(new Date()), null),
             })
           }
           style={{ ...statCard, ...statCardBtn }}
@@ -2111,7 +2123,7 @@ function App() {
           <div style={statLabel}>This week</div>
           <div style={statMain}>{stats.leadsWeek} <span style={statUnit}>leads</span></div>
           <div style={statSub}>{fmtCurrency(stats.wonWeek)} won</div>
-          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} earned</div>
+          <div style={statSub}>{fmtCurrency(stats.earnedWeek)} finalized</div>
         </button>
       </div>
 
@@ -2168,7 +2180,7 @@ function App() {
                 {lookbackResult.leadsCount} <span style={statUnit}>leads</span>
               </div>
               <div style={statSub}>{fmtCurrency(lookbackResult.won)} won</div>
-              <div style={statSub}>{fmtCurrency(lookbackResult.earned)} earned</div>
+              <div style={statSub}>{fmtCurrency(lookbackResult.earned)} finalized</div>
               <button
                 onClick={() =>
                   setDrilldown({
@@ -2604,7 +2616,7 @@ function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose 
   const tabs = [
     { key: "received", label: `Received (${breakdown.received.length})` },
     { key: "won", label: `Won (${breakdown.won.length})` },
-    { key: "earned", label: `Earned (${breakdown.earned.length})` },
+    { key: "earned", label: `Finalized (${breakdown.earned.length})` },
   ];
   const list = breakdown[tab];
 
