@@ -6872,6 +6872,7 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showContactPicker, setShowContactPicker] = useState(false);
 
   const canSubmit = name.trim() && source && (source !== "other" || sourceOther.trim());
 
@@ -6907,7 +6908,30 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
           </button>
         </div>
 
-        <label style={modalLabel}>Name</label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, marginBottom: 6 }}>
+          <span style={{ ...modalLabel, margin: 0 }}>Name</span>
+          <button
+            type="button"
+            onClick={() => setShowContactPicker(true)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              background: "transparent",
+              border: "none",
+              color: COLORS.accent,
+              fontFamily: FONT_BODY,
+              fontWeight: 600,
+              fontSize: 12.5,
+              cursor: "pointer",
+              padding: 0,
+            }}
+            aria-label="Add from contacts"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            Contacts
+          </button>
+        </div>
         <div style={{ position: "relative" }}>
           <input
             autoFocus
@@ -7023,6 +7047,95 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
         >
           <Plus size={16} strokeWidth={2.5} /> Add to board
         </button>
+      </div>
+      {showContactPicker && (
+        <ContactPickerModal
+          contacts={contacts || []}
+          onPick={(c) => {
+            pickContact(c);
+            setShowContactPicker(false);
+          }}
+          onClose={() => setShowContactPicker(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// browsable version of the same repeat-customer autofill the Name field's
+// typeahead already does — for when you want to pick from the list instead
+// of remembering/typing the name first
+function ContactPickerModal({ contacts, onPick, onClose }) {
+  useModalBackClose(onClose);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone && c.phone.toLowerCase().includes(q)) ||
+        (c.email && c.email.toLowerCase().includes(q))
+    );
+  }, [contacts, query]);
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Add from contacts
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search contacts…"
+          style={{ ...modalInput, marginBottom: 12 }}
+        />
+        {contacts.length === 0 ? (
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13, padding: "8px 0" }}>
+            No contacts yet — they'll show up here as you add leads.
+          </div>
+        ) : filtered.length === 0 ? (
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13, padding: "8px 0" }}>
+            No contacts match "{query}".
+          </div>
+        ) : (
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {filtered.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onPick(c)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "10px 4px",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: `1px solid ${COLORS.border}`,
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
+                  {c.name}
+                </div>
+                {(c.phone || c.email) && (
+                  <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
+                    {[c.phone, c.email].filter(Boolean).join(" · ")}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
