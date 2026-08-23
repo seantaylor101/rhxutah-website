@@ -12,7 +12,7 @@ router.get("/leads/:id.ics", requireAuth("viewer"), (req, res) => {
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(req.params.id);
   if (!lead || !lead.appointmentAt) return res.status(404).json({ error: "No appointment set" });
 
-  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lead Slayer//Appointments//EN", buildEvent(lead), "END:VCALENDAR"].join(
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lead Hammer//Appointments//EN", buildEvent(lead), "END:VCALENDAR"].join(
     "\r\n"
   );
   res.set("Content-Type", "text/calendar; charset=utf-8");
@@ -31,7 +31,7 @@ router.get("/feed/:token.ics", (req, res) => {
   const leads = db
     .prepare(`SELECT * FROM leads WHERE appointmentAt IS NOT NULL AND archived = 0 ORDER BY appointmentAt ASC`)
     .all();
-  const ics = buildCalendar(leads, { name: "Lead Slayer Appointments" });
+  const ics = buildCalendar(leads, { name: "Lead Hammer Appointments" });
   res.set("Content-Type", "text/calendar; charset=utf-8");
   res.send(ics);
 });

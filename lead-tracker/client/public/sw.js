@@ -1,5 +1,5 @@
 self.addEventListener("push", (event) => {
-  let data = { title: "Lead Slayer", body: "You have a new notification." };
+  let data = { title: "Lead Hammer", body: "You have a new notification." };
   try {
     data = event.data.json();
   } catch {
@@ -7,7 +7,7 @@ self.addEventListener("push", (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(data.title || "Lead Slayer", {
+    self.registration.showNotification(data.title || "Lead Hammer", {
       body: data.body || "",
       icon: "/icon-192.png",
       badge: "/icon-192.png",

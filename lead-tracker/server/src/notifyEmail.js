@@ -15,13 +15,13 @@ export async function sendBackupEmail(lead) {
     lead.phone ? `Phone: ${lead.phone}` : null,
     lead.email ? `Email: ${lead.email}` : null,
     ``,
-    `Open Lead Slayer: ${process.env.APP_URL || "https://rhxutah-website.onrender.com"}`,
+    `Open Lead Hammer: ${process.env.APP_URL || "https://rhxutah-website.onrender.com"}`,
   ].filter((l) => l !== null);
 
   const body = new URLSearchParams({
     access_key: accessKey,
     subject: `New lead: ${lead.name}`,
-    from_name: "Lead Slayer",
+    from_name: "Lead Hammer",
     message: lines.join("\n"),
   });
 
@@ -44,7 +44,7 @@ export async function sendBackupSnapshotEmail(snapshot) {
   const dateLabel = snapshot.takenAt.slice(0, 10);
 
   const lines = [
-    `Daily backup of your Lead Slayer leads — ${leadCount} lead${leadCount === 1 ? "" : "s"}.`,
+    `Daily backup of your Lead Hammer leads — ${leadCount} lead${leadCount === 1 ? "" : "s"}.`,
     ``,
     `Snapshot taken: ${snapshot.takenAt}`,
     ``,
@@ -58,8 +58,8 @@ export async function sendBackupSnapshotEmail(snapshot) {
 
   const body = new URLSearchParams({
     access_key: accessKey,
-    subject: `Lead Slayer backup — ${leadCount} lead${leadCount === 1 ? "" : "s"} — ${dateLabel}`,
-    from_name: "Lead Slayer",
+    subject: `Lead Hammer backup — ${leadCount} lead${leadCount === 1 ? "" : "s"} — ${dateLabel}`,
+    from_name: "Lead Hammer",
     message: lines.join("\n"),
   });
 

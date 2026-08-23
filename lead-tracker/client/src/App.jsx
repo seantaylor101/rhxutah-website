@@ -2466,7 +2466,7 @@ function LoginScreen({ onLogin }) {
       <div style={{ width: "100%", maxWidth: 340 }}>
         <img
           src="/logo-hero.jpg"
-          alt="Lead Slayer"
+          alt="Lead Hammer"
           style={{ width: "100%", maxWidth: 260, display: "block", margin: "0 auto 20px", borderRadius: 12 }}
         />
         <label style={modalLabel}>Passcode</label>
