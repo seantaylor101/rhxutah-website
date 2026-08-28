@@ -308,6 +308,62 @@ function resolveWorkDays(lead) {
   return businessDaysBetween(lead.startDate, lead.completedAt);
 }
 
+// inverse of businessDaysBetween: the calendar date `totalDays` business
+// days after (and including) startIso — e.g. a 3-day job starting Friday
+// ends Tuesday, skipping the weekend in between
+function addBusinessDays(startIso, totalDays) {
+  const d = new Date(startIso);
+  d.setUTCHours(0, 0, 0, 0);
+  let count = 1;
+  while (count < totalDays) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) count++;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+// a scheduled job on the calendar shows its known actual span once
+// completed, or — before then — a projected one sized off the same
+// workdays-per-$1,000 build-pace figure the Final Report modal already
+// uses to compare a job against average (see FinalReportModal's
+// expectedWorkDays). No history yet to pace off of just falls back to a
+// single-day placeholder bar rather than not showing up at all.
+function projectedJobSpan(lead, allMetrics) {
+  if (!lead.startDate) return null;
+  const start = lead.startDate.slice(0, 10);
+  if (lead.completedAt) {
+    return { start, end: lead.completedAt.slice(0, 10), projected: false };
+  }
+  const revenue = lead.revenue || 0;
+  const manualDays = resolveWorkDays(lead);
+  const estDays =
+    manualDays != null
+      ? manualDays
+      : allMetrics.avgDaysPerThousand != null && revenue > 0
+      ? Math.max(1, Math.round(allMetrics.avgDaysPerThousand * (revenue / 1000)))
+      : 1;
+  return { start, end: addBusinessDays(start, estDays), projected: true };
+}
+
+// deterministic, unbounded-cardinality color per lead (not a fixed
+// categorical palette — a calendar can have arbitrarily many jobs on
+// screen at once, unlike a chart legend). Golden-angle hue steps keep
+// adjacent ids visually separated; fixed saturation/lightness keeps every
+// bar dark enough for white label text without per-color contrast math.
+function leadColor(id) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  const hue = (hash * 137.508) % 360;
+  return `hsl(${hue.toFixed(1)}, 62%, 40%)`;
+}
+
+// jobs shown on the job calendar: won or further along, with a start date
+// set — same "AT_OR_AFTER_WON" scope the server enforces for who can edit
+// startDate, so a lead that's since been marked lost (which leaves
+// startDate in place but no longer means anything) never shows up
+const CALENDAR_STAGES = new Set(["won", "progress", "completed", "paid"]);
+
 function computeMetrics(subset, overheadPercent = 13) {
   const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
   const avg = (nums) => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null);
@@ -1086,7 +1142,7 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts' | 'calendar'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
@@ -2032,6 +2088,8 @@ function App() {
                     ? "Your Goals"
                     : view === "metrics"
                     ? "Performance Metrics"
+                    : view === "calendar"
+                    ? "Job Calendar"
                     : view === "archive"
                     ? "Archive"
                     : ""}
@@ -2056,8 +2114,11 @@ function App() {
           onOpenMetrics={() => setView("metrics")}
           onOpenBoard={() => setView("board")}
           onOpenWarranty={() => setView("warranty")}
+          onOpenCalendar={() => setView("calendar")}
           onOpenLead={navigateToLead}
         />
+      ) : view === "calendar" ? (
+        <CalendarView leads={leads} allMetrics={allSourcesMetrics} onOpenLead={navigateToLead} />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -3661,6 +3722,7 @@ function DashboardView({
   onOpenMetrics,
   onOpenBoard,
   onOpenWarranty,
+  onOpenCalendar,
   onOpenLead,
 }) {
   const { plan, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
@@ -3779,7 +3841,243 @@ function DashboardView({
         </DashboardTile>
       </div>
 
+      <DashboardTile
+        onClick={onOpenCalendar}
+        icon={<Calendar size={16} color={COLORS.progress} />}
+        title="Job Calendar"
+        accent={COLORS.progress}
+        big
+      >
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted }}>
+          {(counts.won || 0) + (counts.progress || 0) > 0
+            ? `${counts.won || 0} won, ${counts.progress || 0} in progress — tap to see the schedule`
+            : "See every won job laid out on a calendar, sized by projected build time"}
+        </div>
+      </DashboardTile>
+
       <ActivityFeed role={role} />
+    </div>
+  );
+}
+
+// job schedule as a month calendar — one horizontal bar per won job,
+// spanning startDate through either its actual completion date or (while
+// still scheduled/in progress) a build-pace-projected end date. Visible to
+// both roles, same as the leads data it's drawn from.
+function CalendarView({ leads, allMetrics, onOpenLead }) {
+  const [monthStart, setMonthStart] = useState(() => {
+    const d = new Date();
+    d.setUTCDate(1);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  });
+
+  const toKey = (d) => d.toISOString().slice(0, 10);
+  const monthStartKey = toKey(monthStart);
+  const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(
+    monthStart
+  );
+
+  const monthEnd = useMemo(() => {
+    const d = new Date(monthStart);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    d.setUTCDate(0);
+    return d;
+  }, [monthStart]);
+  const monthEndKey = toKey(monthEnd);
+
+  const gridStart = useMemo(() => {
+    const d = new Date(monthStart);
+    d.setUTCDate(d.getUTCDate() - d.getUTCDay());
+    return d;
+  }, [monthStart]);
+  const gridEnd = useMemo(() => {
+    const d = new Date(monthEnd);
+    d.setUTCDate(d.getUTCDate() + (6 - d.getUTCDay()));
+    return d;
+  }, [monthEnd]);
+  const gridEndKey = toKey(gridEnd);
+
+  const weeks = useMemo(() => {
+    const out = [];
+    const cur = new Date(gridStart);
+    while (toKey(cur) <= gridEndKey) {
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(toKey(cur));
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      out.push(days);
+    }
+    return out;
+  }, [gridStart, gridEndKey]);
+
+  // one lane number per job, assigned greedily across the whole visible grid
+  // (not per-week) so a multi-week job sits in the same row the whole way
+  // across instead of jumping lanes each time the calendar wraps a line
+  const jobList = useMemo(() => {
+    const gridStartKey = toKey(gridStart);
+    const spans = (leads || [])
+      .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
+      .map((l) => {
+        const span = projectedJobSpan(l, allMetrics);
+        return span ? { lead: l, ...span, color: leadColor(l.id) } : null;
+      })
+      .filter((j) => j && j.start <= gridEndKey && j.end >= gridStartKey)
+      .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
+
+    const laneEnds = [];
+    for (const job of spans) {
+      let lane = laneEnds.findIndex((end) => end < job.start);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(job.end);
+      } else {
+        laneEnds[lane] = job.end;
+      }
+      job.lane = lane;
+    }
+    return spans;
+  }, [leads, allMetrics, gridStart, gridEndKey]);
+
+  const BAR_H = 20;
+  const BAR_GAP = 4;
+  const DAY_LABEL_H = 22;
+  const ROW_PAD = 6;
+  const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  return (
+    <div style={cardsWrap}>
+      <div style={stageHeadRow}>
+        <button
+          onClick={() =>
+            setMonthStart((d) => {
+              const n = new Date(d);
+              n.setUTCMonth(n.getUTCMonth() - 1);
+              return n;
+            })
+          }
+          style={navArrow}
+          aria-label="Previous month"
+        >
+          <ChevronLeft size={18} color={COLORS.ink} />
+        </button>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 16, textAlign: "center", flex: 1 }}>
+          {monthLabel}
+        </div>
+        <button
+          onClick={() =>
+            setMonthStart((d) => {
+              const n = new Date(d);
+              n.setUTCMonth(n.getUTCMonth() + 1);
+              return n;
+            })
+          }
+          style={navArrow}
+          aria-label="Next month"
+        >
+          <ChevronRight size={18} color={COLORS.ink} />
+        </button>
+      </div>
+
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
+        One bar per won job, a different color for each — solid once it's actually in progress or done, softer while
+        it's just scheduled and the length is a build-pace estimate. Tap a bar to open that lead.
+      </div>
+
+      {jobList.length === 0 && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}>
+            Nothing scheduled this month
+          </div>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+            Set a start date on a won job and it'll show up here.
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...ticket, flexDirection: "column", padding: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${COLORS.border}` }}>
+          {WEEKDAY_LABELS.map((d) => (
+            <div key={d} style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted, textAlign: "center", padding: "6px 0" }}>
+              {d}
+            </div>
+          ))}
+        </div>
+
+        {weeks.map((days, wi) => {
+          const weekStart = days[0];
+          const weekEnd = days[6];
+          const rowJobs = jobList.filter((j) => j.start <= weekEnd && j.end >= weekStart);
+          const laneCount = rowJobs.length ? Math.max(...rowJobs.map((j) => j.lane)) + 1 : 0;
+          const rowHeight = DAY_LABEL_H + laneCount * (BAR_H + BAR_GAP) + ROW_PAD;
+
+          return (
+            <div
+              key={weekStart}
+              style={{
+                position: "relative",
+                borderBottom: wi < weeks.length - 1 ? `1px solid ${COLORS.border}` : "none",
+                height: rowHeight,
+              }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                {days.map((dayKey) => {
+                  const inMonth = dayKey >= monthStartKey && dayKey <= monthEndKey;
+                  const dayNum = Number(dayKey.slice(8, 10));
+                  return (
+                    <div key={dayKey} style={{ borderRight: `1px solid ${COLORS.border}`, height: DAY_LABEL_H, padding: "4px 0 0 4px" }}>
+                      <span style={{ fontFamily: FONT_UTIL, fontSize: 11, color: inMonth ? COLORS.muted : "#C9C4B6" }}>{dayNum}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {rowJobs.map((job) => {
+                const clippedStart = job.start >= weekStart ? job.start : weekStart;
+                const clippedEnd = job.end <= weekEnd ? job.end : weekEnd;
+                const startCol = days.indexOf(clippedStart);
+                const endCol = days.indexOf(clippedEnd);
+                const left = (startCol / 7) * 100;
+                const width = ((endCol - startCol + 1) / 7) * 100;
+                const startsHere = job.start >= weekStart;
+                return (
+                  <button
+                    key={`${job.lead.id}-${weekStart}`}
+                    onClick={() => onOpenLead(job.lead.id)}
+                    title={`${job.lead.name}${job.lead.job ? " — " + job.lead.job : ""} · ${fmtDate(job.start)}–${fmtDate(
+                      job.end
+                    )}${job.projected ? " (projected)" : ""}`}
+                    style={{
+                      position: "absolute",
+                      left: `calc(${left}% + 3px)`,
+                      width: `calc(${width}% - 6px)`,
+                      top: DAY_LABEL_H + job.lane * (BAR_H + BAR_GAP),
+                      height: BAR_H,
+                      background: job.color,
+                      opacity: job.projected ? 0.55 : 1,
+                      border: job.projected ? `1.5px dashed ${job.color}` : "none",
+                      borderRadius: 5,
+                      color: "#fff",
+                      fontFamily: FONT_UTIL,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      textAlign: "left",
+                      padding: "0 6px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {startsHere ? job.lead.name : ""}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
