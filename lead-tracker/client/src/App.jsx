@@ -37,6 +37,11 @@ const Check = (p) => (
     <polyline points="20 6 9 17 4 12" />
   </Icon>
 );
+const Pencil = (p) => (
+  <Icon {...p}>
+    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+  </Icon>
+);
 const Trash2 = (p) => (
   <Icon {...p}>
     <polyline points="3 6 5 6 21 6" />
@@ -6022,6 +6027,22 @@ function LeadTicket({
                   >
                     <MessageCircle size={15} color={COLORS.accent} />
                   </a>
+                  {/* the number and call/text icons above all stopPropagation to
+                  avoid triggering edit mode, which can leave no empty row space
+                  left to tap on a phone screen — so give edit its own explicit target */}
+                  {editable && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPhoneDraft(lead.phone || "");
+                        setEditingPhone(true);
+                      }}
+                      aria-label="Edit phone"
+                      style={{ ...iconBtnGhost, display: "inline-flex" }}
+                    >
+                      <Pencil size={14} color={COLORS.muted} />
+                    </button>
+                  )}
                 </>
               ) : (
                 <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No phone set</span>
