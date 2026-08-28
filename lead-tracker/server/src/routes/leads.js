@@ -318,6 +318,27 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
+// viewer-level so the project manager can schedule/reschedule a won job's
+// start date without needing owner access — restricted to jobs that have
+// actually been won (not e.g. a still-open bid) and to just this one field,
+// unlike the owner-only general-purpose PATCH /:id above
+router.patch("/:id/start-date", requireAuth("viewer"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  if (!AT_OR_AFTER_WON.has(row.stage)) {
+    return res.status(403).json({ error: "Start date can only be set on a won job" });
+  }
+
+  const { startDate } = req.body || {};
+  if (startDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(startDate || "")) {
+    return res.status(400).json({ error: "startDate must be YYYY-MM-DD or empty" });
+  }
+
+  db.prepare(`UPDATE leads SET startDate = ? WHERE id = ?`).run(startDate, row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
 router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
