@@ -205,6 +205,12 @@ const Activity = (p) => (
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
   </Icon>
 );
+const Search = (p) => (
+  <Icon {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </Icon>
+);
 // ---- design tokens ----
 // Matches the main RHX site: light content area, dark green header band,
 // brand green for primary actions — same palette and font (Open Sans) as rhxutah.com.
@@ -1142,6 +1148,7 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [showLeadSearch, setShowLeadSearch] = useState(false);
   const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts' | 'calendar'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -2055,6 +2062,10 @@ function App() {
                 <History size={20} color={COLORS.heroRed} strokeWidth={2} />
                 <span style={headerTileLabel}>Activity</span>
               </button>
+              <button onClick={() => setShowLeadSearch(true)} style={headerTile} aria-label="Search leads">
+                <Search size={20} color={COLORS.heroRed} strokeWidth={2} />
+                <span style={headerTileLabel}>Search</span>
+              </button>
               <NotificationBell
                 onOpenLead={navigateToLead}
                 btnStyle={headerTile}
@@ -2469,6 +2480,16 @@ function App() {
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
+        />
+      )}
+      {showLeadSearch && (
+        <LeadSearchModal
+          leads={leads || []}
+          onSelect={(id) => {
+            setShowLeadSearch(false);
+            navigateToLead(id);
+          }}
+          onClose={() => setShowLeadSearch(false)}
         />
       )}
       {showSettingsModal && (
@@ -7405,6 +7426,114 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
           onClose={() => setShowContactPicker(false)}
         />
       )}
+    </div>
+  );
+}
+
+// find-a-lead-by-name across every stage/bucket at once, rather than
+// clicking through each stage tab (or the Archive tab) looking for it —
+// picking a result reuses navigateToLead, so it lands exactly where that
+// lead already opens from a notification tap
+function LeadSearchModal({ leads, onSelect, onClose }) {
+  useModalBackClose(onClose);
+  const [query, setQuery] = useState("");
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return (leads || [])
+      .filter((l) => l.name.toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+      .slice(0, 25);
+  }, [leads, query]);
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Find a lead
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name…"
+          style={{ ...modalInput, marginBottom: 12 }}
+        />
+        {!query.trim() ? (
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13, padding: "8px 0" }}>
+            Searches every stage and the archive, not just the one you're currently viewing.
+          </div>
+        ) : results.length === 0 ? (
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13, padding: "8px 0" }}>
+            No leads named "{query}".
+          </div>
+        ) : (
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {results.map((l) => {
+              const stage = STAGES.find((s) => s.key === l.stage);
+              const stageLabel = l.archived ? "Paid / Archived" : stage ? stage.short : l.stage;
+              const stageColor = stage ? stage.color : COLORS.muted;
+              return (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => onSelect(l.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "10px 4px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: `1px solid ${COLORS.border}`,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: FONT_BODY, fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
+                      {l.name}
+                    </div>
+                    {l.job && (
+                      <div
+                        style={{
+                          fontFamily: FONT_UTIL,
+                          fontSize: 12,
+                          color: COLORS.muted,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {l.job}
+                      </div>
+                    )}
+                  </div>
+                  <span
+                    style={{
+                      ...countPill,
+                      flexShrink: 0,
+                      background: `${stageColor}1A`,
+                      color: stageColor,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {stageLabel}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
