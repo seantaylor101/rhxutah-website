@@ -1605,6 +1605,22 @@ function App() {
     }
   };
 
+  // separate from editField/api.editLead — the viewer role is allowed to
+  // schedule/reschedule a won job's start date even though every other field
+  // on the lead stays owner-only, so this goes through its own endpoint
+  const editStartDate = async (id, startDate) => {
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, startDate } : l)));
+    try {
+      const updated = await api.editStartDate(id, startDate);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
   const deleteLead = async (id) => {
     const prevLeads = leads;
     leadsVersionRef.current++;
@@ -2324,6 +2340,7 @@ function App() {
                   lead={lead}
                   onMove={moveLead}
                   onEditField={editField}
+                  onEditStartDate={editStartDate}
                   onDelete={deleteLead}
                   editable={editable}
                   role={role}
@@ -5710,6 +5727,7 @@ function LeadTicket({
   lead,
   onMove,
   onEditField,
+  onEditStartDate,
   onDelete,
   editable,
   role,
@@ -5787,8 +5805,15 @@ function LeadTicket({
     setEditingReceived(false);
   };
 
+  // owner keeps going through the general-purpose lead editor; the viewer
+  // role only has access to the dedicated start-date endpoint (server-
+  // enforced — see routes/leads.js PATCH /:id/start-date)
   const saveStart = () => {
-    onEditField(lead.id, "startDate", startDraft);
+    if (role === "owner") {
+      onEditField(lead.id, "startDate", startDraft);
+    } else {
+      onEditStartDate(lead.id, startDraft);
+    }
     setEditingStart(false);
   };
 
@@ -6401,11 +6426,14 @@ function LeadTicket({
           )}
         </div>
 
-        {/* start date, only for won-not-started (and visible afterwards too) */}
+        {/* start date, only for won-not-started (and visible afterwards too) —
+        editable by the viewer role too (not just editable/owner) since
+        scheduling a won job's start date is a project-manager task; the
+        server enforces the same "won or later" restriction independently */}
         {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
           <div
             onClick={
-              !editingStart && editable
+              !editingStart && (editable || role === "viewer")
                 ? () => {
                     setStartDraft(lead.startDate || "");
                     setEditingStart(true);
@@ -6417,7 +6445,7 @@ function LeadTicket({
               display: "flex",
               alignItems: "center",
               gap: 6,
-              cursor: !editingStart && editable ? "pointer" : "default",
+              cursor: !editingStart && (editable || role === "viewer") ? "pointer" : "default",
             }}
           >
             <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Start date</span>

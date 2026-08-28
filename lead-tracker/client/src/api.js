@@ -46,6 +46,8 @@ export const api = {
       }),
     }),
   editLead: (id, patch) => request(`/leads/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  editStartDate: (id, startDate) =>
+    request(`/leads/${id}/start-date`, { method: "PATCH", body: JSON.stringify({ startDate }) }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
   setScopeOfWork: (id, items) =>
     request(`/leads/${id}/scope-of-work`, { method: "PUT", body: JSON.stringify({ items }) }),
