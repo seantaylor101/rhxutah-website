@@ -24,6 +24,14 @@ function localHour(date) {
   return raw % 24;
 }
 
+// 0 = Sunday ... 6 = Saturday. Built from the already-computed local
+// calendar date (not re-parsed from a locale string), so this can't hit
+// the same class of Intl/Node-version quirk that bit localHour above.
+function localWeekday(date) {
+  const [y, m, d] = localDateKey(date).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
 function formatLocalTime(iso) {
   return new Intl.DateTimeFormat("en-US", { timeZone: BUSINESS_TZ, hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 }
@@ -64,28 +72,38 @@ function digestTitle(count, when) {
 // in settings) rather than a fixed clock check, so — like the other
 // reminder sweeps in this file's siblings — a late-starting server still
 // catches up instead of silently skipping the day.
+//
+// No Sunday morning digest (nothing's ever scheduled that day) and no
+// Saturday evening digest (its look-ahead would just be that same empty
+// Sunday) — both still get marked "sent" for the day so the sweep doesn't
+// keep re-evaluating them every 5 minutes for nothing.
 export async function sendDueAppointmentDigests() {
   const now = new Date();
   const hour = localHour(now);
   const todayKey = localDateKey(now);
+  const weekday = localWeekday(now);
 
   if (hour >= 7 && readSetting("morningDigestSentDate") !== todayKey) {
     writeSetting("morningDigestSentDate", todayKey);
-    const leads = appointmentsOnLocalDate(todayKey);
-    await sendPushToRole("owner", {
-      title: digestTitle(leads.length, "today"),
-      body: digestBody(leads),
-    }).catch((err) => console.error("morning appointment digest push failed:", err.message));
+    if (weekday !== 0) {
+      const leads = appointmentsOnLocalDate(todayKey);
+      await sendPushToRole("owner", {
+        title: digestTitle(leads.length, "today"),
+        body: digestBody(leads),
+      }).catch((err) => console.error("morning appointment digest push failed:", err.message));
+    }
   }
 
   if (hour >= 21 && readSetting("eveningDigestSentDate") !== todayKey) {
     writeSetting("eveningDigestSentDate", todayKey);
-    const tomorrowKey = localDateKey(new Date(now.getTime() + 24 * 60 * 60 * 1000));
-    const leads = appointmentsOnLocalDate(tomorrowKey);
-    await sendPushToRole("owner", {
-      title: digestTitle(leads.length, "tomorrow"),
-      body: digestBody(leads),
-    }).catch((err) => console.error("evening appointment digest push failed:", err.message));
+    if (weekday !== 6) {
+      const tomorrowKey = localDateKey(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+      const leads = appointmentsOnLocalDate(tomorrowKey);
+      await sendPushToRole("owner", {
+        title: digestTitle(leads.length, "tomorrow"),
+        body: digestBody(leads),
+      }).catch((err) => console.error("evening appointment digest push failed:", err.message));
+    }
   }
 }
 
