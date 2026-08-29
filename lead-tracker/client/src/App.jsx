@@ -1182,6 +1182,7 @@ function App() {
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
   const [scopeOfWorkLead, setScopeOfWorkLead] = useState(null);
+  const [managerPromptLead, setManagerPromptLead] = useState(null);
   const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
   const bootHtmlRef = useRef(null);
   // bumped by every leads/warranty mutation so a slower-resolving fetch
@@ -1589,13 +1590,37 @@ function App() {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
-      // just marked won — prompt to fill out the scope-of-work checklist so
-      // the project manager knows exactly what to plan for
-      if (!revert && stage === "won") setScopeOfWorkLead(updated);
+      // just marked won — first prompt for who's managing the job (this is
+      // also what decides whether Dave gets the "Lead won!" push, see
+      // saveJobManager below), then the scope-of-work checklist so the
+      // project manager knows exactly what to plan for
+      if (!revert && stage === "won") setManagerPromptLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
       loadLeads();
     }
+  };
+
+  // resolves the job-manager prompt, whether a name was actually picked or
+  // it was skipped — either way the flow continues on to the scope-of-work
+  // prompt for the same lead
+  const saveJobManager = async (id, manager) => {
+    setManagerPromptLead(null);
+    if (manager) {
+      leadsVersionRef.current++;
+      setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
+      try {
+        const updated = await api.editLead(id, { manager });
+        setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+        setScopeOfWorkLead(updated);
+        return;
+      } catch {
+        setError("Couldn't save the job manager — try again.");
+        loadLeads();
+      }
+    }
+    const lead = (leads || []).find((l) => l.id === id);
+    if (lead) setScopeOfWorkLead(lead);
   };
 
   const saveScopeOfWork = async (id, items) => {
@@ -2463,6 +2488,13 @@ function App() {
         <MissingInfoAlertModal
           leads={leads}
           onClose={() => setShowMissingInfoAlert(false)}
+        />
+      )}
+      {managerPromptLead && (
+        <JobManagerModal
+          lead={managerPromptLead}
+          onPick={(manager) => saveJobManager(managerPromptLead.id, manager)}
+          onSkip={() => saveJobManager(managerPromptLead.id, null)}
         />
       )}
       {scopeOfWorkLead && (
@@ -5890,6 +5922,60 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   );
 }
 
+// runs right after a lead is marked won, before the scope-of-work prompt —
+// picking Dave here is also what triggers the "Lead won!" push to him (see
+// saveJobManager/routes/leads.js PATCH /:id), so skipping just means no one
+// gets paged about this particular job yet
+function JobManagerModal({ lead, onPick, onSkip }) {
+  useModalBackClose(onSkip);
+  return (
+    <div style={modalOverlay} onClick={onSkip}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Who is managing this job?
+          </div>
+          <button onClick={onSkip} style={iconBtnGhost} aria-label="Skip">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          {lead.name} was just marked won. Tag who's running it day-to-day — Dave gets notified only when he's the
+          one tagged.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {["Sean", "Dave"].map((name) => (
+            <button
+              key={name}
+              onClick={() => onPick(name)}
+              style={{ ...addBtn, width: "100%", justifyContent: "center" }}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={onSkip}
+          style={{
+            marginTop: 12,
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.muted,
+            cursor: "pointer",
+            textAlign: "center",
+          }}
+        >
+          Skip for now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // scope-of-work checklist for a won job. `canEdit` (owner) gets full
 // add/remove/edit-text controls plus Save; everyone else (the project
 // manager) can only check items off as the crew works through them.
@@ -6080,6 +6166,8 @@ function LeadTicket({
   const [sourceOtherDraft, setSourceOtherDraft] = useState(lead.sourceOther || "");
   const [editingAppointment, setEditingAppointment] = useState(false);
   const [appointmentDraft, setAppointmentDraft] = useState(isoToDateTimeLocal(lead.appointmentAt));
+  const [editingManager, setEditingManager] = useState(false);
+  const [managerDraft, setManagerDraft] = useState(lead.manager || "");
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
@@ -6173,6 +6261,16 @@ function LeadTicket({
       sourceOther: needsOther ? sourceOtherDraft.trim() : "",
     });
     setEditingSource(false);
+  };
+
+  const openManagerEdit = () => {
+    setManagerDraft(lead.manager || "");
+    setEditingManager(true);
+  };
+
+  const saveManager = () => {
+    onEditField(lead.id, "manager", managerDraft || null);
+    setEditingManager(false);
   };
 
   const openAppointmentEdit = () => {
@@ -6779,6 +6877,53 @@ function LeadTicket({
                   <Check size={18} color="#fff" />
                 </button>
                 <button onClick={() => setEditingStart(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* who's managing the job day-to-day — first picked via the job-manager
+            prompt right after the win; visible to both roles, editable by the
+            owner only. Changing it to Dave here (not just from that prompt)
+            also fires the "Lead won!" push if the job is still at "won" */}
+        {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
+          <div
+            onClick={!editingManager && editable ? openManagerEdit : undefined}
+            style={{
+              marginTop: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingManager && editable ? "pointer" : "default",
+            }}
+          >
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Managed by</span>
+            {!editingManager ? (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.manager ? "#4A463D" : "#B8B0A0" }}>
+                {lead.manager || "not set"}
+              </span>
+            ) : (
+              <>
+                <select
+                  autoFocus
+                  value={managerDraft}
+                  onChange={(e) => setManagerDraft(e.target.value)}
+                  style={{ ...inlineInput, appearance: "auto" }}
+                >
+                  <option value="">Not set</option>
+                  <option value="Sean">Sean</option>
+                  <option value="Dave">Dave</option>
+                </select>
+                <button onClick={saveManager} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save manager">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button
+                  onClick={() => setEditingManager(false)}
+                  style={{ ...iconBtn, background: "#B8B0A0" }}
+                  aria-label="Cancel manager edit"
+                >
                   <X size={18} color="#fff" />
                 </button>
               </>
