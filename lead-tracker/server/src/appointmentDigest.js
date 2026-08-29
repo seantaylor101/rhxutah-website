@@ -16,7 +16,12 @@ function localDateKey(date) {
 }
 
 function localHour(date) {
-  return Number(new Intl.DateTimeFormat("en-US", { timeZone: BUSINESS_TZ, hour: "numeric", hour12: false }).format(date));
+  // % 24 guards against a real cross-version Intl quirk: hour12:false
+  // returns "24" for midnight on Node 20 (this app's runtime, per the
+  // Dockerfile) but "00" on Node 22+ — an un-normalized "24" would satisfy
+  // both hour >= 7 and hour >= 21 below and fire both digests at midnight
+  const raw = Number(new Intl.DateTimeFormat("en-US", { timeZone: BUSINESS_TZ, hour: "numeric", hour12: false }).format(date));
+  return raw % 24;
 }
 
 function formatLocalTime(iso) {
