@@ -24,7 +24,10 @@ const EDITABLE_FIELDS = new Set([
   "source",
   "sourceOther",
   "appointmentAt",
+  "manager",
 ]);
+
+const VALID_MANAGERS = new Set(["Sean", "Dave"]);
 
 function rowToLead(row) {
   let scopeOfWork = [];
@@ -255,14 +258,10 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     sendDueReportReminders().catch((err) => console.error("report reminder sweep failed:", err.message));
   }
 
-  // best-effort — the move is already saved, don't let a push hiccup affect
-  // the response
-  if (!revert && stage === "won") {
-    sendPushToRole("viewer", {
-      title: "Lead won!",
-      body: `${row.name} has been won. Please contact the salesman and the customer and schedule the work ASAP.`,
-    }).catch((err) => console.error("won push notify failed:", err.message));
-  }
+  // no push here anymore on a fresh win — the client prompts for who's
+  // managing the job right after this move resolves, and that's what
+  // actually triggers the "Lead won!" push (see PATCH /:id below), so Dave
+  // only hears about it when he's the one tagged on it
 });
 
 router.patch("/:id", requireAuth("owner"), (req, res) => {
@@ -295,12 +294,30 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
     // old appointment's already-sent flag silently suppressing it
     updates.appointmentReminderSentAt = null;
   }
+  if ("manager" in updates) {
+    updates.manager = updates.manager || null;
+    if (updates.manager && !VALID_MANAGERS.has(updates.manager)) {
+      return res.status(400).json({ error: "manager must be 'Sean' or 'Dave'" });
+    }
+  }
 
   const fields = Object.keys(updates);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
     ...updates,
     id: row.id,
   });
+
+  // the "Lead won!" push only fires once Dave is actually tagged as the
+  // manager on a job that's still sitting at "won" (not, say, a manager
+  // correction made weeks later once the job's already in progress) — see
+  // routes/leads.js POST /:id/move, which used to send this unconditionally
+  if (updates.manager === "Dave" && row.stage === "won") {
+    sendPushToRole("viewer", {
+      title: "Lead won!",
+      body: `${row.name} has been won and tagged to you. Please contact the salesman and the customer and schedule the work ASAP.`,
+      leadId: row.id,
+    }).catch((err) => console.error("won push notify failed:", err.message));
+  }
 
   if (["name", "phone", "email", "address"].some((f) => f in updates)) {
     const merged = { ...row, ...updates };

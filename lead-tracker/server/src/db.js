@@ -94,6 +94,14 @@ if (!existingColumns.has("followUps")) {
   // more actually correlates with winning the job
   db.exec(`ALTER TABLE leads ADD COLUMN followUps TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("manager")) {
+  // who's running this job day-to-day — "Sean" or "Dave", picked right
+  // after a lead is marked won (see the job-manager prompt that runs
+  // before the scope-of-work prompt). Gates the "Lead won!" push: it only
+  // goes out once Dave is actually tagged as the manager, not on every won
+  // job regardless of who's handling it
+  db.exec(`ALTER TABLE leads ADD COLUMN manager TEXT`);
+}
 if (!existingColumns.has("contactId")) {
   // which contacts-table row this lead is tied to, set once at creation.
   // Later edits to name/phone/email/address update that same contact
