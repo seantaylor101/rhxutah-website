@@ -1230,7 +1230,6 @@ function App() {
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
-  const [calendarFocus, setCalendarFocus] = useState(null); // { leadId, token } | null
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
@@ -1583,13 +1582,6 @@ function App() {
     },
     [leads]
   );
-
-  // token changes on every tap so re-tapping the "View on calendar" button
-  // for the same lead still re-jumps the calendar even if it's since scrolled
-  const viewLeadOnCalendar = useCallback((leadId) => {
-    setCalendarFocus({ leadId, token: Date.now() });
-    setView("calendar");
-  }, []);
 
   // deep-link from a push notification tap: either this window is opened
   // fresh with ?lead=<id>, or the service worker posts a message to an
@@ -2208,7 +2200,7 @@ function App() {
           onOpenLead={navigateToLead}
         />
       ) : view === "calendar" ? (
-        <CalendarView leads={leads} allMetrics={allSourcesMetrics} role={role} focus={calendarFocus} onOpenLead={navigateToLead} />
+        <CalendarView leads={leads} allMetrics={allSourcesMetrics} role={role} onOpenLead={navigateToLead} />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -2499,7 +2491,6 @@ function App() {
                   onOpenReport={setReportLead}
                   onLogFollowup={logFollowup}
                   onRemoveFollowup={removeFollowup}
-                  onViewOnCalendar={viewLeadOnCalendar}
                   settings={settings}
                 />
               </div>
@@ -2510,6 +2501,10 @@ function App() {
         <ArchiveView leads={leads} editable={editable} onOpenReport={setReportLead} />
       )}
         </>
+      )}
+
+      {view === "board" && activeStage === "won" && (
+        <CalendarSlideOver leads={leads} allMetrics={allSourcesMetrics} role={role} onOpenLead={navigateToLead} />
       )}
 
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} contacts={contacts} />}
@@ -3973,7 +3968,7 @@ function isMyJob(lead, role) {
   return lead.manager === "Dave";
 }
 
-function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
+function CalendarView({ leads, allMetrics, role, onOpenLead }) {
   const [monthStart, setMonthStart] = useState(() => {
     const d = new Date();
     d.setUTCDate(1);
@@ -3985,19 +3980,6 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
   // anything unassigned). The viewer's own "mine" tab already isolates
   // exactly this, so they don't get a separate "pm" tab.
   const [calFilter, setCalFilter] = useState("all");
-
-  // jumping here from a lead (the "View on calendar" button) lands on
-  // that job's actual month instead of whatever month happened to be
-  // showing — focus.token changes on every tap so re-tapping the same
-  // lead still re-jumps even if you'd since scrolled elsewhere
-  useEffect(() => {
-    if (!focus?.leadId) return;
-    const lead = (leads || []).find((l) => l.id === focus.leadId);
-    if (!lead?.startDate) return;
-    const d = new Date(`${lead.startDate}T00:00:00.000Z`);
-    d.setUTCDate(1);
-    setMonthStart(d);
-  }, [focus?.token]);
 
   const toKey = (d) => d.toISOString().slice(0, 10);
   const monthStartKey = toKey(monthStart);
@@ -4232,7 +4214,6 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                       cursor: "pointer",
-                      boxShadow: job.lead.id === focus?.leadId ? `0 0 0 2px ${COLORS.surface}, 0 0 0 4px ${COLORS.accent}` : "none",
                     }}
                   >
                     {job.lead.name}
@@ -4242,6 +4223,123 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+const CAL_DRAWER_HANDLE_W = 40;
+const CAL_DRAWER_WIDTH_VW = 88;
+
+// quick-access peek at the Job Calendar while working the Won stage: a tab
+// pinned to the right edge that drags (or taps) open into a panel covering
+// most of the screen, so scheduling a run of won jobs doesn't mean leaving
+// the board to check the calendar and coming back. Closed-position math is
+// done in CSS (calc(88vw - handle width)) rather than measured off the DOM
+// so it holds up across a resize without a layout-effect recompute; drag
+// deltas are converted through window.innerWidth instead, which only needs
+// to be current at the instant of the gesture.
+function CalendarSlideOver({ leads, allMetrics, role, onOpenLead }) {
+  const [open, setOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [liveTranslate, setLiveTranslate] = useState(null);
+  const dragRef = useRef(null);
+
+  const closedTranslate = () => window.innerWidth * (CAL_DRAWER_WIDTH_VW / 100) - CAL_DRAWER_HANDLE_W;
+
+  const handlePointerDown = (e) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startTranslate: open ? 0 : closedTranslate(), moved: 0 };
+    setDragging(true);
+  };
+  const handlePointerMove = (e) => {
+    if (!dragRef.current) return;
+    const delta = e.clientX - dragRef.current.startX;
+    dragRef.current.moved = Math.max(dragRef.current.moved, Math.abs(delta));
+    const max = closedTranslate();
+    setLiveTranslate(Math.min(max, Math.max(0, dragRef.current.startTranslate + delta)));
+  };
+  const handlePointerUp = () => {
+    if (!dragRef.current) return;
+    const { moved, startTranslate } = dragRef.current;
+    if (moved < 6) {
+      // treat as a tap rather than a drag
+      setOpen((o) => !o);
+    } else {
+      const current = liveTranslate ?? startTranslate;
+      setOpen(current < closedTranslate() / 2);
+    }
+    dragRef.current = null;
+    setDragging(false);
+    setLiveTranslate(null);
+  };
+
+  const translate =
+    dragging && liveTranslate != null ? `translateX(${liveTranslate}px)` : `translateX(${open ? 0 : "calc(" + CAL_DRAWER_WIDTH_VW + "vw - " + CAL_DRAWER_HANDLE_W + "px)"})`;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        bottom: 0,
+        right: 0,
+        width: `${CAL_DRAWER_WIDTH_VW}vw`,
+        display: "flex",
+        zIndex: 35,
+        transform: translate,
+        transition: dragging ? "none" : "transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+        boxShadow: "-6px 0 24px rgba(36,41,38,0.28)",
+      }}
+    >
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        role="button"
+        aria-label={open ? "Close job calendar" : "Open job calendar"}
+        style={{
+          width: CAL_DRAWER_HANDLE_W,
+          flexShrink: 0,
+          background: COLORS.accent,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          cursor: dragging ? "grabbing" : "grab",
+          touchAction: "none",
+          borderRadius: "14px 0 0 14px",
+          userSelect: "none",
+        }}
+      >
+        {open ? <ChevronRight size={16} color={COLORS.surface} /> : <ChevronLeft size={16} color={COLORS.surface} />}
+        <Calendar size={16} color={COLORS.surface} />
+        <span
+          style={{
+            writingMode: "vertical-rl",
+            transform: "rotate(180deg)",
+            fontFamily: FONT_UTIL,
+            fontWeight: 700,
+            fontSize: 12,
+            color: COLORS.surface,
+            letterSpacing: 0.5,
+          }}
+        >
+          Calendar
+        </span>
+      </div>
+      <div style={{ flex: 1, minWidth: 0, background: COLORS.bg, overflowY: "auto" }}>
+        <CalendarView
+          leads={leads}
+          allMetrics={allMetrics}
+          role={role}
+          onOpenLead={(id) => {
+            setOpen(false);
+            onOpenLead(id);
+          }}
+        />
       </div>
     </div>
   );
@@ -6176,7 +6274,6 @@ function LeadTicket({
   onOpenReport,
   onLogFollowup,
   onRemoveFollowup,
-  onViewOnCalendar,
   settings,
 }) {
   const [editingName, setEditingName] = useState(false);
@@ -7058,19 +7155,6 @@ function LeadTicket({
               </>
             )}
           </div>
-        )}
-
-        {/* jump straight to this job's spot on the Job Calendar, so a won lead
-            can be scheduled and immediately checked against everything else
-            already on the board without hunting for the right month */}
-        {lead.startDate && CALENDAR_STAGES.has(lead.stage) && onViewOnCalendar && (
-          <button
-            onClick={() => onViewOnCalendar(lead.id)}
-            style={{ ...actionBtn, marginTop: 8, background: "transparent", color: COLORS.accent, border: `1px solid ${COLORS.accent}` }}
-          >
-            <Calendar size={13} />
-            View on calendar
-          </button>
         )}
 
         {/* completed date — the exact day the job finished, used for time-to-complete
