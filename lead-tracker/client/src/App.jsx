@@ -1780,11 +1780,13 @@ function App() {
   // separate from editField/api.editLead — the viewer role is allowed to
   // schedule/reschedule a won job's start date even though every other field
   // on the lead stays owner-only, so this goes through its own endpoint
-  const editStartDate = async (id, startDate) => {
+  const editStartDate = async (id, startDate, actualWorkDays) => {
     leadsVersionRef.current++;
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, startDate } : l)));
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, startDate, ...(actualWorkDays !== undefined ? { actualWorkDays } : {}) } : l))
+    );
     try {
-      const updated = await api.editStartDate(id, startDate);
+      const updated = await api.editStartDate(id, startDate, actualWorkDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -6008,6 +6010,81 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   );
 }
 
+// runs right after a start date is entered/changed on a won job — an
+// owner-given (or, if the viewer set the date, PM-given) duration estimate
+// beats the automatic per-job-type one, since it comes from someone who
+// actually knows this specific job. Saves into the same actualWorkDays
+// column the Mark Complete/Final Report flows fill in with the real
+// elapsed days once the job finishes, so this is only ever a placeholder
+// until then (see resolveWorkDays/projectedJobSpan, which already prefer
+// actualWorkDays over any estimate). Skippable — this is an accuracy aid,
+// not a required step like the job-manager/scope-of-work prompts.
+function WorkDaysPromptModal({ leadName, onSave, onSkip }) {
+  useModalBackClose(onSkip);
+  const [days, setDays] = useState("");
+
+  const save = () => {
+    const n = parseFloat(days);
+    if (!isNaN(n) && n > 0) onSave(n);
+    else onSkip();
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onSkip}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            How many days do you expect this to take?
+          </div>
+          <button onClick={onSkip} style={iconBtnGhost} aria-label="Skip">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          {leadName} — this becomes the calendar's projected length for this job instead of the automatic
+          type-based estimate. You (or the crew) know this specific job better than an average ever will.
+        </div>
+        <input
+          autoFocus
+          type="number"
+          min="0.5"
+          step="0.5"
+          inputMode="decimal"
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          placeholder="e.g. 7"
+          style={{ ...modalInput, marginBottom: 14 }}
+        />
+        <button
+          onClick={save}
+          disabled={!days}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: days ? 1 : 0.5 }}
+        >
+          Save estimate
+        </button>
+        <button
+          onClick={onSkip}
+          style={{
+            marginTop: 10,
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.muted,
+            cursor: "pointer",
+            textAlign: "center",
+          }}
+        >
+          Skip — use the automatic estimate
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // runs right after a lead is marked won, before the scope-of-work prompt —
 // required, not dismissible (no X, no backdrop/back-button close): picking
 // a name is the only way out, same as the scope-of-work prompt right after
@@ -6229,6 +6306,7 @@ function LeadTicket({
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
+  const [showWorkDaysPrompt, setShowWorkDaysPrompt] = useState(false);
   const [editingCompleted, setEditingCompleted] = useState(false);
   const [completedDraft, setCompletedDraft] = useState("");
   const [editingRevenue, setEditingRevenue] = useState(false);
@@ -6294,6 +6372,20 @@ function LeadTicket({
       onEditStartDate(lead.id, startDraft);
     }
     setEditingStart(false);
+    // only when actually setting a date, not clearing one — nothing to
+    // estimate a duration for once there's no start date
+    if (startDraft) setShowWorkDaysPrompt(true);
+  };
+
+  const saveWorkDaysEstimate = (days) => {
+    if (role === "owner") {
+      onEditField(lead.id, "actualWorkDays", days);
+    } else {
+      // viewer's endpoint is start-date-scoped, so resend the (unchanged)
+      // date alongside the new estimate rather than needing a second route
+      onEditStartDate(lead.id, startDraft, days);
+    }
+    setShowWorkDaysPrompt(false);
   };
 
   // completedAt is a plain calendar date at heart (no meaningful time-of-day),
@@ -6364,6 +6456,7 @@ function LeadTicket({
   };
 
   return (
+    <>
     <div
       id={`lead-${lead.id}`}
       style={
@@ -7087,6 +7180,14 @@ function LeadTicket({
           )}
       </div>
     </div>
+    {showWorkDaysPrompt && (
+      <WorkDaysPromptModal
+        leadName={lead.name}
+        onSave={saveWorkDaysEstimate}
+        onSkip={() => setShowWorkDaysPrompt(false)}
+      />
+    )}
+    </>
   );
 }
 
