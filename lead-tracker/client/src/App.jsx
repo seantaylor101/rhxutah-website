@@ -1255,7 +1255,6 @@ function App() {
   const [showWarrantyAlert, setShowWarrantyAlert] = useState(false);
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
-  const [scopeOfWorkLead, setScopeOfWorkLead] = useState(null);
   const [managerPromptLead, setManagerPromptLead] = useState(null);
   const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
   const bootHtmlRef = useRef(null);
@@ -1664,11 +1663,9 @@ function App() {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
-      // just marked won — prompt for who's managing the job (skippable —
-      // Sean goes over scope directly with the PM, so this is a quick tag
-      // when convenient, not a gate on winning the job; it's also what
-      // decides whether Dave gets the "Lead won!" push, see saveJobManager
-      // below), then the scope-of-work checklist
+      // just marked won — prompt for who's managing the job (skippable);
+      // also what decides whether Dave gets the "Lead won!" push, see
+      // saveJobManager below
       if (!revert && stage === "won") setManagerPromptLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
@@ -1677,45 +1674,17 @@ function App() {
   };
 
   // resolves the job-manager prompt, whether a name was actually picked or
-  // it was skipped — either way the flow continues on to the (also
-  // skippable) scope-of-work prompt for the same lead
+  // it was skipped
   const saveJobManager = async (id, manager) => {
     setManagerPromptLead(null);
-    if (manager) {
-      leadsVersionRef.current++;
-      setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
-      try {
-        const updated = await api.editLead(id, { manager });
-        setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
-        setScopeOfWorkLead(updated);
-        return;
-      } catch {
-        setError("Couldn't save the job manager — try again.");
-        loadLeads();
-      }
-    }
-    const lead = (leads || []).find((l) => l.id === id);
-    if (lead) setScopeOfWorkLead(lead);
-  };
-
-  const saveScopeOfWork = async (id, items) => {
-    const updated = await api.setScopeOfWork(id, items);
+    if (!manager) return;
     leadsVersionRef.current++;
-    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
-    return updated;
-  };
-
-  const toggleScopeOfWorkItem = async (id, itemId, done) => {
-    leadsVersionRef.current++;
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, scopeOfWork: l.scopeOfWork.map((i) => (i.id === itemId ? { ...i, done } : i)) } : l
-      )
-    );
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
     try {
-      const updated = await api.toggleScopeOfWorkItem(id, itemId, done);
+      const updated = await api.editLead(id, { manager });
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     } catch {
+      setError("Couldn't save the job manager — try again.");
       loadLeads();
     }
   };
@@ -2520,7 +2489,6 @@ function App() {
                   role={role}
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
-                  onOpenScopeOfWork={setScopeOfWorkLead}
                   onLogFollowup={logFollowup}
                   onRemoveFollowup={removeFollowup}
                   settings={settings}
@@ -2572,15 +2540,6 @@ function App() {
           lead={managerPromptLead}
           onPick={(manager) => saveJobManager(managerPromptLead.id, manager)}
           onSkip={() => saveJobManager(managerPromptLead.id, null)}
-        />
-      )}
-      {scopeOfWorkLead && (
-        <ScopeOfWorkModal
-          lead={leads.find((l) => l.id === scopeOfWorkLead.id) || scopeOfWorkLead}
-          canEdit={editable}
-          onSave={(items) => saveScopeOfWork(scopeOfWorkLead.id, items)}
-          onToggle={(itemId, done) => toggleScopeOfWorkItem(scopeOfWorkLead.id, itemId, done)}
-          onClose={() => setScopeOfWorkLead(null)}
         />
       )}
       {showAccountModal && (
@@ -6134,160 +6093,6 @@ function JobManagerModal({ lead, onPick, onSkip }) {
   );
 }
 
-// scope-of-work checklist for a won job. `canEdit` (owner) gets full
-// add/remove/edit-text controls plus Save; everyone else (the project
-// manager) can only check items off as the crew works through them.
-// Always dismissible — Sean goes over scope directly with the PM, so this
-// is a convenience, not a gate on winning the job.
-function ScopeOfWorkModal({ lead, canEdit, onSave, onToggle, onClose }) {
-  useModalBackClose(onClose);
-  const [items, setItems] = useState(lead.scopeOfWork || []);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const addItem = () => {
-    const text = draft.trim();
-    if (!text) return;
-    setItems((prev) => [...prev, { id: `new-${Date.now()}-${prev.length}`, text, done: false }]);
-    setDraft("");
-  };
-
-  const removeItem = (id) => setItems((prev) => prev.filter((i) => i.id !== id));
-  const updateText = (id, text) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, text } : i)));
-
-  const toggle = async (id, done) => {
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done } : i)));
-    if (!onToggle) return;
-    try {
-      await onToggle(id, done);
-    } catch {
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done: !done } : i)));
-    }
-  };
-
-  const save = async () => {
-    setSaving(true);
-    setErr("");
-    try {
-      await onSave(items);
-      onClose();
-    } catch (e) {
-      setErr(e.message || "Couldn't save the checklist");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div style={modalOverlay} onClick={onClose}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
-            Scope of work
-          </div>
-          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-            <X size={18} color={COLORS.muted} />
-          </button>
-        </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          {canEdit
-            ? `${lead.name} — job won! List out what needs to happen so the project manager knows exactly what to plan for and who to hire.`
-            : `${lead.name} — check items off as they're taken care of.`}
-        </div>
-
-        {items.length === 0 && !canEdit && (
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted, marginBottom: 12 }}>
-            Nothing on the checklist yet.
-          </div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: canEdit ? 12 : 20 }}>
-          {items.map((item) => (
-            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button
-                onClick={() => toggle(item.id, !item.done)}
-                aria-label={item.done ? "Mark item not done" : "Mark item done"}
-                style={{
-                  width: 24,
-                  height: 24,
-                  flexShrink: 0,
-                  borderRadius: 6,
-                  border: `1.5px solid ${item.done ? COLORS.accent : COLORS.border}`,
-                  background: item.done ? COLORS.accent : "transparent",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor: "pointer",
-                }}
-              >
-                {item.done && <Check size={15} color="#fff" />}
-              </button>
-              {canEdit ? (
-                <input
-                  value={item.text}
-                  onChange={(e) => updateText(item.id, e.target.value)}
-                  style={{ ...inlineInput, flex: 1 }}
-                />
-              ) : (
-                <span
-                  style={{
-                    flex: 1,
-                    fontFamily: FONT_BODY,
-                    fontSize: 14.5,
-                    color: item.done ? COLORS.muted : COLORS.ink,
-                    textDecoration: item.done ? "line-through" : "none",
-                  }}
-                >
-                  {item.text}
-                </span>
-              )}
-              {canEdit && (
-                <button onClick={() => removeItem(item.id)} style={iconBtnGhost} aria-label="Remove item">
-                  <X size={16} color="#9A9184" />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {canEdit && (
-          <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addItem())}
-                placeholder="e.g. Order gutters, schedule crew"
-                style={{ ...modalInput, flex: 1 }}
-              />
-              <button onClick={addItem} style={{ ...iconBtn, background: COLORS.accent, width: 44 }} aria-label="Add item">
-                <Plus size={18} color="#fff" />
-              </button>
-            </div>
-            {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
-            <button
-              onClick={save}
-              disabled={saving}
-              style={{ ...addBtn, background: COLORS.accent, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1 }}
-            >
-              {saving ? "Saving…" : "Save checklist"}
-            </button>
-          </>
-        )}
-        {!canEdit && (
-          <button
-            onClick={onClose}
-            style={{ ...addBtn, background: COLORS.accent, width: "100%", justifyContent: "center" }}
-          >
-            Close
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function LeadTicket({
   lead,
   onMove,
@@ -6298,7 +6103,6 @@ function LeadTicket({
   role,
   highlighted,
   onOpenReport,
-  onOpenScopeOfWork,
   onLogFollowup,
   onRemoveFollowup,
   settings,
@@ -6329,6 +6133,8 @@ function LeadTicket({
   const [appointmentDraft, setAppointmentDraft] = useState(isoToDateTimeLocal(lead.appointmentAt));
   const [editingManager, setEditingManager] = useState(false);
   const [managerDraft, setManagerDraft] = useState(lead.manager || "");
+  const [editingWorkDaysEst, setEditingWorkDaysEst] = useState(false);
+  const [workDaysEstDraft, setWorkDaysEstDraft] = useState(lead.actualWorkDays != null ? String(lead.actualWorkDays) : "");
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
@@ -6446,6 +6252,28 @@ function LeadTicket({
   const saveManager = () => {
     onEditField(lead.id, "manager", managerDraft || null);
     setEditingManager(false);
+  };
+
+  const openWorkDaysEstEdit = () => {
+    setWorkDaysEstDraft(lead.actualWorkDays != null ? String(lead.actualWorkDays) : "");
+    setEditingWorkDaysEst(true);
+  };
+
+  // shares the actualWorkDays column with the one-time post-start-date
+  // prompt (WorkDaysPromptModal) and the Mark Complete/Final Report actual
+  // — same override precedence applies (resolveWorkDays/projectedJobSpan
+  // already prefer this over the automatic per-type estimate), this just
+  // gives it a persistent, reopenable place to edit rather than a single
+  // pop-up moment
+  const saveWorkDaysEst = () => {
+    const n = parseFloat(workDaysEstDraft);
+    const value = !isNaN(n) && n > 0 ? n : null;
+    if (role === "owner") {
+      onEditField(lead.id, "actualWorkDays", value);
+    } else {
+      onEditStartDate(lead.id, lead.startDate || "", value);
+    }
+    setEditingWorkDaysEst(false);
   };
 
   const openAppointmentEdit = () => {
@@ -7107,6 +6935,59 @@ function LeadTicket({
           </div>
         )}
 
+        {/* expected work days — how long this specific job is projected to
+            take, overriding the automatic per-job-type estimate the
+            calendar would otherwise use (see projectedJobSpan). Editable by
+            either role any time a job is won or in progress, not just the
+            one-time prompt right after a start date is set, so it's easy
+            to set on jobs that never got a start date yet or revise later.
+            Once completed, the real number lives in the Final Report
+            instead, so this field steps aside then. */}
+        {(lead.stage === "won" || lead.stage === "progress") && (
+          <div
+            onClick={!editingWorkDaysEst ? openWorkDaysEstEdit : undefined}
+            style={{
+              marginTop: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: !editingWorkDaysEst ? "pointer" : "default",
+            }}
+          >
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Expected days</span>
+            {!editingWorkDaysEst ? (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.actualWorkDays ? "#4A463D" : "#B8B0A0" }}>
+                {lead.actualWorkDays ? `${lead.actualWorkDays} day${lead.actualWorkDays === 1 ? "" : "s"}` : "not set"}
+              </span>
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  inputMode="decimal"
+                  value={workDaysEstDraft}
+                  onChange={(e) => setWorkDaysEstDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveWorkDaysEst()}
+                  placeholder="e.g. 7"
+                  style={inlineInput}
+                />
+                <button onClick={saveWorkDaysEst} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save expected days">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button
+                  onClick={() => setEditingWorkDaysEst(false)}
+                  style={{ ...iconBtn, background: "#B8B0A0" }}
+                  aria-label="Cancel expected days edit"
+                >
+                  <X size={18} color="#fff" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {/* completed date — the exact day the job finished, used for time-to-complete
             stats on the final report; editable in case a backfilled lead got today's
             date instead of the real completion date */}
@@ -7173,22 +7054,6 @@ function LeadTicket({
           />
         )}
 
-        {/* scope-of-work checklist — visible once a job is won; owner can
-            always open it to add/edit, the project manager only sees it once
-            there's actually something on the list to check off */}
-        {onOpenScopeOfWork &&
-          ["won", "progress", "completed", "paid"].includes(lead.stage) &&
-          (editable || (lead.scopeOfWork && lead.scopeOfWork.length > 0)) && (
-            <button
-              onClick={() => onOpenScopeOfWork(lead)}
-              style={{ ...actionBtn, marginTop: 8, background: "transparent", color: "#6B6558", border: "1px solid #D8D2C2" }}
-            >
-              <ListChecks size={13} />
-              {lead.scopeOfWork && lead.scopeOfWork.length > 0
-                ? `Scope of work (${lead.scopeOfWork.filter((i) => i.done).length}/${lead.scopeOfWork.length})`
-                : "Add scope of work"}
-            </button>
-          )}
       </div>
     </div>
     {showWorkDaysPrompt && (

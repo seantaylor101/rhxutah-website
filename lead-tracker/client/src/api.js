@@ -52,10 +52,6 @@ export const api = {
       body: JSON.stringify(actualWorkDays !== undefined ? { startDate, actualWorkDays } : { startDate }),
     }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
-  setScopeOfWork: (id, items) =>
-    request(`/leads/${id}/scope-of-work`, { method: "PUT", body: JSON.stringify({ items }) }),
-  toggleScopeOfWorkItem: (id, itemId, done) =>
-    request(`/leads/${id}/scope-of-work`, { method: "PATCH", body: JSON.stringify({ itemId, done }) }),
   logFollowup: (id) => request(`/leads/${id}/followups`, { method: "POST" }),
   removeFollowup: (id, followupId) => request(`/leads/${id}/followups/${followupId}`, { method: "DELETE" }),
   deleteLead: (id) => request(`/leads/${id}`, { method: "DELETE" }),
