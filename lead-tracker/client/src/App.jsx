@@ -4244,10 +4244,34 @@ function CalendarSlideOver({ leads, allMetrics, role, onOpenLead }) {
   const [dragging, setDragging] = useState(false);
   const [liveTranslate, setLiveTranslate] = useState(null);
   const dragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+
+  // opening/closing on pointerup changes what's rendered under the finger
+  // right before the browser's own compatibility "click" event fires for
+  // that same touch — without this, that ghost click hits whatever tile or
+  // lead card is now sitting where the finger lifted, "randomly" navigating
+  // there. Swallowing exactly one click, in the capture phase so it never
+  // reaches any element's own handler, kills it before it can do that.
+  useEffect(() => {
+    const swallow = (e) => {
+      if (!suppressClickRef.current) return;
+      suppressClickRef.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener("click", swallow, true);
+    return () => document.removeEventListener("click", swallow, true);
+  }, []);
 
   const closedTranslate = () => window.innerWidth * (CAL_DRAWER_WIDTH_VW / 100) - CAL_DRAWER_HANDLE_W;
 
   const handlePointerDown = (e) => {
+    // stops touch browsers generating their own compatibility mousedown/
+    // mouseup/click for this gesture at all — the spec-sanctioned way to
+    // avoid the ghost-click-lands-on-whatever's-now-there bug (belt and
+    // suspenders alongside the document-level swallow above, since not
+    // every engine honors this the same way)
+    e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { startX: e.clientX, startTranslate: open ? 0 : closedTranslate(), moved: 0 };
     setDragging(true);
@@ -4262,6 +4286,10 @@ function CalendarSlideOver({ leads, allMetrics, role, onOpenLead }) {
   const handlePointerUp = () => {
     if (!dragRef.current) return;
     const { moved, startTranslate } = dragRef.current;
+    suppressClickRef.current = true;
+    setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 500);
     if (moved < 6) {
       // treat as a tap rather than a drag
       setOpen((o) => !o);
