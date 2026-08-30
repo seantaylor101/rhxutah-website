@@ -1230,6 +1230,7 @@ function App() {
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
+  const [calendarFocus, setCalendarFocus] = useState(null); // { leadId, token } | null
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
@@ -1582,6 +1583,13 @@ function App() {
     },
     [leads]
   );
+
+  // token changes on every tap so re-tapping the "View on calendar" button
+  // for the same lead still re-jumps the calendar even if it's since scrolled
+  const viewLeadOnCalendar = useCallback((leadId) => {
+    setCalendarFocus({ leadId, token: Date.now() });
+    setView("calendar");
+  }, []);
 
   // deep-link from a push notification tap: either this window is opened
   // fresh with ?lead=<id>, or the service worker posts a message to an
@@ -2200,7 +2208,7 @@ function App() {
           onOpenLead={navigateToLead}
         />
       ) : view === "calendar" ? (
-        <CalendarView leads={leads} allMetrics={allSourcesMetrics} onOpenLead={navigateToLead} />
+        <CalendarView leads={leads} allMetrics={allSourcesMetrics} role={role} focus={calendarFocus} onOpenLead={navigateToLead} />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -2491,6 +2499,7 @@ function App() {
                   onOpenReport={setReportLead}
                   onLogFollowup={logFollowup}
                   onRemoveFollowup={removeFollowup}
+                  onViewOnCalendar={viewLeadOnCalendar}
                   settings={settings}
                 />
               </div>
@@ -3953,13 +3962,38 @@ function DashboardView({
 // spanning startDate through either its actual completion date or (while
 // still scheduled/in progress) a build-pace-projected end date. Visible to
 // both roles, same as the leads data it's drawn from.
-function CalendarView({ leads, allMetrics, onOpenLead }) {
+// "mine" maps directly onto this app's two fixed people: the owner role is
+// always Sean, the viewer role is always Dave (see VALID_MANAGERS on the
+// server). A job with no manager tagged yet defaults into the owner's
+// "My Jobs" (someone has to own it until it's explicitly handed off) but
+// never into the viewer's — Dave only sees what he's actually been tagged
+// on, same principle the "Lead won!" push gating already uses.
+function isMyJob(lead, role) {
+  if (role === "owner") return lead.manager === "Sean" || !lead.manager;
+  return lead.manager === "Dave";
+}
+
+function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
   const [monthStart, setMonthStart] = useState(() => {
     const d = new Date();
     d.setUTCDate(1);
     d.setUTCHours(0, 0, 0, 0);
     return d;
   });
+  const [filterMine, setFilterMine] = useState(false);
+
+  // jumping here from a lead (the "View on calendar" button) lands on
+  // that job's actual month instead of whatever month happened to be
+  // showing — focus.token changes on every tap so re-tapping the same
+  // lead still re-jumps even if you'd since scrolled elsewhere
+  useEffect(() => {
+    if (!focus?.leadId) return;
+    const lead = (leads || []).find((l) => l.id === focus.leadId);
+    if (!lead?.startDate) return;
+    const d = new Date(`${lead.startDate}T00:00:00.000Z`);
+    d.setUTCDate(1);
+    setMonthStart(d);
+  }, [focus?.token]);
 
   const toKey = (d) => d.toISOString().slice(0, 10);
   const monthStartKey = toKey(monthStart);
@@ -4008,6 +4042,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
     const gridStartKey = toKey(gridStart);
     const spans = (leads || [])
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
+      .filter((l) => !filterMine || isMyJob(l, role))
       .map((l) => {
         const span = projectedJobSpan(l, allMetrics);
         return span ? { lead: l, ...span } : null;
@@ -4033,7 +4068,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
       job.textColor = text;
     }
     return spans;
-  }, [leads, allMetrics, gridStart, gridEndKey]);
+  }, [leads, allMetrics, gridStart, gridEndKey, filterMine, role]);
 
   const BAR_H = 20;
   const BAR_GAP = 4;
@@ -4075,9 +4110,33 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
         </button>
       </div>
 
+      <div style={{ display: "flex", gap: 8 }}>
+        {[
+          { key: false, label: "All Jobs" },
+          { key: true, label: "My Jobs" },
+        ].map((tab) => (
+          <button
+            key={String(tab.key)}
+            onClick={() => setFilterMine(tab.key)}
+            style={{
+              ...tabBtn,
+              background: filterMine === tab.key ? COLORS.accent : "transparent",
+              color: filterMine === tab.key ? COLORS.surface : COLORS.ink,
+              borderColor: COLORS.accent,
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
-        One bar per won job, a different color for each — solid once it's actually in progress or done, softer while
-        it's just scheduled and the length is a build-pace estimate. Tap a bar to open that lead.
+        {filterMine
+          ? role === "owner"
+            ? "Just what's tagged to you, plus anything unassigned. "
+            : "Just the jobs tagged to you. "
+          : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. "}
+        Tap a bar to open that lead.
       </div>
 
       {jobList.length === 0 && (
@@ -4162,6 +4221,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                       cursor: "pointer",
+                      boxShadow: job.lead.id === focus?.leadId ? `0 0 0 2px ${COLORS.surface}, 0 0 0 4px ${COLORS.accent}` : "none",
                     }}
                   >
                     {job.lead.name}
@@ -6105,6 +6165,7 @@ function LeadTicket({
   onOpenReport,
   onLogFollowup,
   onRemoveFollowup,
+  onViewOnCalendar,
   settings,
 }) {
   const [editingName, setEditingName] = useState(false);
@@ -6986,6 +7047,19 @@ function LeadTicket({
               </>
             )}
           </div>
+        )}
+
+        {/* jump straight to this job's spot on the Job Calendar, so a won lead
+            can be scheduled and immediately checked against everything else
+            already on the board without hunting for the right month */}
+        {lead.startDate && CALENDAR_STAGES.has(lead.stage) && onViewOnCalendar && (
+          <button
+            onClick={() => onViewOnCalendar(lead.id)}
+            style={{ ...actionBtn, marginTop: 8, background: "transparent", color: COLORS.accent, border: `1px solid ${COLORS.accent}` }}
+          >
+            <Calendar size={13} />
+            View on calendar
+          </button>
         )}
 
         {/* completed date — the exact day the job finished, used for time-to-complete
