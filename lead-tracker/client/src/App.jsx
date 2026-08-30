@@ -329,39 +329,100 @@ function addBusinessDays(startIso, totalDays) {
   return d.toISOString().slice(0, 10);
 }
 
+// keyword -> job-type category, first match wins. Covers this business's
+// actual services (rhxutah.com: seamless gutters, siding, stucco,
+// in-ground drainage, permanent holiday lighting) plus roof/deck/window
+// work that shows up in job descriptions even without their own landing
+// pages. "job" is free text ("e.g. Gutters, Lehi"), so this is a substring
+// match, not an exact one.
+const JOB_TYPE_RULES = [
+  { key: "gutters", match: /gutter/i },
+  { key: "siding", match: /siding|hardie/i },
+  { key: "stucco", match: /stucco/i },
+  { key: "drainage", match: /drain/i },
+  { key: "lighting", match: /\blight/i },
+  { key: "roof", match: /roof/i },
+  { key: "deck", match: /\bdeck/i },
+  { key: "windows", match: /window/i },
+];
+
+function jobTypeOf(jobText) {
+  const rule = JOB_TYPE_RULES.find((r) => r.match.test(jobText || ""));
+  return rule ? rule.key : "other";
+}
+
+// starting-assumption workday counts by job type — flat, not scaled by
+// revenue like the data-driven estimate below is — used only until a type
+// has at least 2 completed jobs of its own to pace off of. Ballpark
+// residential-exterior-trade durations for a single crew; siding's number
+// is Sean's own stated real-world pace (a full re-side generally runs
+// about a week to a week and a half), not a generic online figure, since
+// the whole point is that your own numbers beat a generic calculator the
+// moment you have any — these are just a placeholder until you do.
+const DEFAULT_DAYS_BY_TYPE = {
+  gutters: 1,
+  siding: 7,
+  stucco: 4,
+  drainage: 2,
+  lighting: 1,
+  roof: 2,
+  deck: 5,
+  windows: 2,
+  other: 3,
+};
+
 // a scheduled job on the calendar shows its known actual span once
-// completed, or — before then — a projected one sized off the same
-// workdays-per-$1,000 build-pace figure the Final Report modal already
-// uses to compare a job against average (see FinalReportModal's
-// expectedWorkDays). No history yet to pace off of just falls back to a
-// single-day placeholder bar rather than not showing up at all.
+// completed, or — before then — a projected one. Prefers the same
+// workdays-per-$1,000 build-pace figure the Final Report modal uses to
+// compare a job against average (see FinalReportModal's expectedWorkDays),
+// but computed per job TYPE rather than blended across every type of job
+// this business does — a siding job and a gutter job don't take the same
+// number of days per dollar, so blending them skews estimates for both.
+// Falls back to the flat per-type default above until that type has
+// enough of its own completed-job history (>=2) to trust its own pace.
 function projectedJobSpan(lead, allMetrics) {
   if (!lead.startDate) return null;
   const start = lead.startDate.slice(0, 10);
   if (lead.completedAt) {
     return { start, end: lead.completedAt.slice(0, 10), projected: false };
   }
-  const revenue = lead.revenue || 0;
   const manualDays = resolveWorkDays(lead);
-  const estDays =
-    manualDays != null
-      ? manualDays
-      : allMetrics.avgDaysPerThousand != null && revenue > 0
-      ? Math.max(1, Math.round(allMetrics.avgDaysPerThousand * (revenue / 1000)))
-      : 1;
+  let estDays;
+  if (manualDays != null) {
+    estDays = manualDays;
+  } else {
+    const revenue = lead.revenue || 0;
+    const type = jobTypeOf(lead.job);
+    const typeStats = allMetrics.avgDaysPerThousandByType?.[type];
+    estDays =
+      typeStats && typeStats.sample >= 2 && revenue > 0
+        ? Math.max(1, Math.round(typeStats.value * (revenue / 1000)))
+        : DEFAULT_DAYS_BY_TYPE[type];
+  }
   return { start, end: addBusinessDays(start, estDays), projected: true };
 }
 
-// deterministic, unbounded-cardinality color per lead (not a fixed
-// categorical palette — a calendar can have arbitrarily many jobs on
-// screen at once, unlike a chart legend). Golden-angle hue steps keep
-// adjacent ids visually separated; fixed saturation/lightness keeps every
-// bar dark enough for white label text without per-color contrast math.
-function leadColor(id) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  const hue = (hash * 137.508) % 360;
-  return `hsl(${hue.toFixed(1)}, 62%, 40%)`;
+// the dataviz skill's validated default categorical palette — its fixed
+// order is specifically chosen so ADJACENT slots clear CVD/contrast
+// separation gates, which is exactly what's needed here since lanes stack
+// directly next to each other in the same week. Assigned by LANE, not a
+// hash of the lead id, so two jobs that happen to land side by side are
+// always maximally distinct rather than a coincidence of their ids' hashes
+// (bg/text pairs picked per-swatch by fill luminance, per the same skill's
+// mark-label rule, rather than assuming white always reads).
+const LANE_COLORS = [
+  { bg: "#2a78d6", text: COLORS.ink }, // blue
+  { bg: "#eb6834", text: COLORS.ink }, // orange
+  { bg: "#1baf7a", text: COLORS.ink }, // aqua
+  { bg: "#eda100", text: COLORS.ink }, // yellow
+  { bg: "#e87ba4", text: COLORS.ink }, // magenta
+  { bg: "#008300", text: "#fff" }, // green
+  { bg: "#4a3aa7", text: "#fff" }, // violet
+  { bg: "#e34948", text: COLORS.ink }, // red
+];
+
+function laneColor(lane) {
+  return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
 // jobs shown on the job calendar: won or further along, with a start date
@@ -380,6 +441,18 @@ function computeMetrics(subset, overheadPercent = 13) {
   const bidLeads = subset.filter((l) => l.bidSentAt);
   const paceLeads = subset.filter(
     (l) => l.completedAt && l.startDate && l.revenue > 0 && resolveWorkDays(l) != null
+  );
+  // same pace figure as avgDaysPerThousand below, but split out per job
+  // type (see jobTypeOf) — feeds the job calendar's per-type duration
+  // projections, since a siding job and a gutter job don't take the same
+  // number of days per dollar and blending them skews estimates for both
+  const paceDaysByType = {};
+  for (const l of paceLeads) {
+    const type = jobTypeOf(l.job);
+    (paceDaysByType[type] ||= []).push(resolveWorkDays(l) / (l.revenue / 1000));
+  }
+  const avgDaysPerThousandByType = Object.fromEntries(
+    Object.entries(paceDaysByType).map(([type, arr]) => [type, { value: avg(arr), sample: arr.length }])
   );
   const decidedCount = wonLeads.length + lostLeads.length;
 
@@ -454,6 +527,7 @@ function computeMetrics(subset, overheadPercent = 13) {
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
     paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
+    avgDaysPerThousandByType,
     avgFollowupsOnWon: avg(followupCountsOnWon),
     avgFollowupsOnWonSample: followupCountsOnWon.length,
     followupWinRateByBucket,
@@ -3981,7 +4055,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
       .map((l) => {
         const span = projectedJobSpan(l, allMetrics);
-        return span ? { lead: l, ...span, color: leadColor(l.id) } : null;
+        return span ? { lead: l, ...span } : null;
       })
       .filter((j) => j && j.start <= gridEndKey && j.end >= gridStartKey)
       .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
@@ -3996,6 +4070,12 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
         laneEnds[lane] = job.end;
       }
       job.lane = lane;
+      // colored by lane, not by lead id — guarantees jobs stacked next to
+      // each other (the only case that actually needs to be distinct) get
+      // maximally separated colors instead of a hash-collision gamble
+      const { bg, text } = laneColor(lane);
+      job.color = bg;
+      job.textColor = text;
     }
     return spans;
   }, [leads, allMetrics, gridStart, gridEndKey]);
@@ -4100,7 +4180,6 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                 const endCol = days.indexOf(clippedEnd);
                 const left = (startCol / 7) * 100;
                 const width = ((endCol - startCol + 1) / 7) * 100;
-                const startsHere = job.start >= weekStart;
                 return (
                   <button
                     key={`${job.lead.id}-${weekStart}`}
@@ -4118,7 +4197,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                       opacity: job.projected ? 0.55 : 1,
                       border: job.projected ? `1.5px dashed ${job.color}` : "none",
                       borderRadius: 5,
-                      color: "#fff",
+                      color: job.textColor,
                       fontFamily: FONT_UTIL,
                       fontSize: 11,
                       fontWeight: 600,
@@ -4130,7 +4209,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                       cursor: "pointer",
                     }}
                   >
-                    {startsHere ? job.lead.name : ""}
+                    {job.lead.name}
                   </button>
                 );
               })}
