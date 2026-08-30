@@ -3980,7 +3980,11 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
     d.setUTCHours(0, 0, 0, 0);
     return d;
   });
-  const [filterMine, setFilterMine] = useState(false);
+  // "all" | "mine" | "pm" — the owner-only "pm" tab isolates just what's
+  // tagged to Dave, distinct from "mine" (which for the owner also folds in
+  // anything unassigned). The viewer's own "mine" tab already isolates
+  // exactly this, so they don't get a separate "pm" tab.
+  const [calFilter, setCalFilter] = useState("all");
 
   // jumping here from a lead (the "View on calendar" button) lands on
   // that job's actual month instead of whatever month happened to be
@@ -4042,7 +4046,11 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
     const gridStartKey = toKey(gridStart);
     const spans = (leads || [])
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
-      .filter((l) => !filterMine || isMyJob(l, role))
+      .filter((l) => {
+        if (calFilter === "mine") return isMyJob(l, role);
+        if (calFilter === "pm") return l.manager === "Dave";
+        return true;
+      })
       .map((l) => {
         const span = projectedJobSpan(l, allMetrics);
         return span ? { lead: l, ...span } : null;
@@ -4068,7 +4076,7 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
       job.textColor = text;
     }
     return spans;
-  }, [leads, allMetrics, gridStart, gridEndKey, filterMine, role]);
+  }, [leads, allMetrics, gridStart, gridEndKey, calFilter, role]);
 
   const BAR_H = 20;
   const BAR_GAP = 4;
@@ -4110,18 +4118,19 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {[
-          { key: false, label: "All Jobs" },
-          { key: true, label: "My Jobs" },
+          { key: "all", label: "All Jobs" },
+          { key: "mine", label: "My Jobs" },
+          ...(role === "owner" ? [{ key: "pm", label: "PM's Jobs" }] : []),
         ].map((tab) => (
           <button
-            key={String(tab.key)}
-            onClick={() => setFilterMine(tab.key)}
+            key={tab.key}
+            onClick={() => setCalFilter(tab.key)}
             style={{
               ...tabBtn,
-              background: filterMine === tab.key ? COLORS.accent : "transparent",
-              color: filterMine === tab.key ? COLORS.surface : COLORS.ink,
+              background: calFilter === tab.key ? COLORS.accent : "transparent",
+              color: calFilter === tab.key ? COLORS.surface : COLORS.ink,
               borderColor: COLORS.accent,
             }}
           >
@@ -4131,11 +4140,13 @@ function CalendarView({ leads, allMetrics, role, focus, onOpenLead }) {
       </div>
 
       <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
-        {filterMine
+        {calFilter === "mine"
           ? role === "owner"
             ? "Just what's tagged to you, plus anything unassigned. "
             : "Just the jobs tagged to you. "
-          : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. "}
+          : calFilter === "pm"
+            ? "Just what's tagged to your PM. "
+            : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. "}
         Tap a bar to open that lead.
       </div>
 
