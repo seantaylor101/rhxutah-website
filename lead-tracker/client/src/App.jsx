@@ -1256,7 +1256,6 @@ function App() {
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
   const [scopeOfWorkLead, setScopeOfWorkLead] = useState(null);
-  const [scopeOfWorkRequired, setScopeOfWorkRequired] = useState(false);
   const [managerPromptLead, setManagerPromptLead] = useState(null);
   const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
   const bootHtmlRef = useRef(null);
@@ -1665,10 +1664,11 @@ function App() {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
-      // just marked won — first prompt for who's managing the job (this is
-      // also what decides whether Dave gets the "Lead won!" push, see
-      // saveJobManager below), then the scope-of-work checklist so the
-      // project manager knows exactly what to plan for
+      // just marked won — prompt for who's managing the job (skippable —
+      // Sean goes over scope directly with the PM, so this is a quick tag
+      // when convenient, not a gate on winning the job; it's also what
+      // decides whether Dave gets the "Lead won!" push, see saveJobManager
+      // below), then the scope-of-work checklist
       if (!revert && stage === "won") setManagerPromptLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
@@ -1676,35 +1676,26 @@ function App() {
     }
   };
 
-  // resolves the required job-manager prompt (Sean or Dave — no skip
-  // option), then chains straight into the equally-required scope-of-work
-  // prompt for the same lead, so marking a lead won always ends with both
-  // done, not just started
+  // resolves the job-manager prompt, whether a name was actually picked or
+  // it was skipped — either way the flow continues on to the (also
+  // skippable) scope-of-work prompt for the same lead
   const saveJobManager = async (id, manager) => {
     setManagerPromptLead(null);
-    leadsVersionRef.current++;
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
-    try {
-      const updated = await api.editLead(id, { manager });
-      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
-      setScopeOfWorkRequired(true);
-      setScopeOfWorkLead(updated);
-    } catch {
-      setError("Couldn't save the job manager — try again.");
-      loadLeads();
-      // still required — the lead was already moved to won, so don't leave
-      // the flow stuck on a failed save with no way to reach the scope prompt
-      const lead = (leads || []).find((l) => l.id === id);
-      setScopeOfWorkRequired(true);
-      if (lead) setScopeOfWorkLead(lead);
+    if (manager) {
+      leadsVersionRef.current++;
+      setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
+      try {
+        const updated = await api.editLead(id, { manager });
+        setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+        setScopeOfWorkLead(updated);
+        return;
+      } catch {
+        setError("Couldn't save the job manager — try again.");
+        loadLeads();
+      }
     }
-  };
-
-  // the manual "Add scope of work" button (available any time after a win,
-  // not just right after it) always opens in non-required/dismissible mode
-  const openScopeOfWork = (lead) => {
-    setScopeOfWorkRequired(false);
-    setScopeOfWorkLead(lead);
+    const lead = (leads || []).find((l) => l.id === id);
+    if (lead) setScopeOfWorkLead(lead);
   };
 
   const saveScopeOfWork = async (id, items) => {
@@ -2529,7 +2520,7 @@ function App() {
                   role={role}
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
-                  onOpenScopeOfWork={openScopeOfWork}
+                  onOpenScopeOfWork={setScopeOfWorkLead}
                   onLogFollowup={logFollowup}
                   onRemoveFollowup={removeFollowup}
                   settings={settings}
@@ -2577,13 +2568,16 @@ function App() {
         />
       )}
       {managerPromptLead && (
-        <JobManagerModal lead={managerPromptLead} onPick={(manager) => saveJobManager(managerPromptLead.id, manager)} />
+        <JobManagerModal
+          lead={managerPromptLead}
+          onPick={(manager) => saveJobManager(managerPromptLead.id, manager)}
+          onSkip={() => saveJobManager(managerPromptLead.id, null)}
+        />
       )}
       {scopeOfWorkLead && (
         <ScopeOfWorkModal
           lead={leads.find((l) => l.id === scopeOfWorkLead.id) || scopeOfWorkLead}
           canEdit={editable}
-          required={scopeOfWorkRequired}
           onSave={(items) => saveScopeOfWork(scopeOfWorkLead.id, items)}
           onToggle={(itemId, done) => toggleScopeOfWorkItem(scopeOfWorkLead.id, itemId, done)}
           onClose={() => setScopeOfWorkLead(null)}
@@ -6086,20 +6080,26 @@ function WorkDaysPromptModal({ leadName, onSave, onSkip }) {
 }
 
 // runs right after a lead is marked won, before the scope-of-work prompt —
-// required, not dismissible (no X, no backdrop/back-button close): picking
-// a name is the only way out, same as the scope-of-work prompt right after
-// it. Picking Dave here is also what triggers the "Lead won!" push to him
-// (see saveJobManager/routes/leads.js PATCH /:id).
-function JobManagerModal({ lead, onPick }) {
+// skippable, not required: Sean goes over scope directly with the PM
+// anyway, so this is just a quick way to tag it when convenient, not a
+// gate on winning the job. Picking Dave here is also what triggers the
+// "Lead won!" push to him (see saveJobManager/routes/leads.js PATCH /:id).
+function JobManagerModal({ lead, onPick, onSkip }) {
+  useModalBackClose(onSkip);
   return (
-    <div style={modalOverlay}>
+    <div style={modalOverlay} onClick={onSkip}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 6 }}>
-          Who is managing this job?
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Who is managing this job?
+          </div>
+          <button onClick={onSkip} style={iconBtnGhost} aria-label="Skip">
+            <X size={18} color={COLORS.muted} />
+          </button>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          {lead.name} was just marked won. Tag who's running it day-to-day before continuing — Dave gets notified
-          only when he's the one tagged.
+          {lead.name} was just marked won. Tag who's running it day-to-day — Dave gets notified only when he's the
+          one tagged.
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {["Sean", "Dave"].map((name) => (
@@ -6112,6 +6112,23 @@ function JobManagerModal({ lead, onPick }) {
             </button>
           ))}
         </div>
+        <button
+          onClick={onSkip}
+          style={{
+            marginTop: 12,
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.muted,
+            cursor: "pointer",
+            textAlign: "center",
+          }}
+        >
+          Skip for now
+        </button>
       </div>
     </div>
   );
@@ -6120,12 +6137,10 @@ function JobManagerModal({ lead, onPick }) {
 // scope-of-work checklist for a won job. `canEdit` (owner) gets full
 // add/remove/edit-text controls plus Save; everyone else (the project
 // manager) can only check items off as the crew works through them.
-// `required` (set only right after the job-manager prompt, not on the
-// later "Add scope of work" button) makes this non-dismissible — no X, no
-// tap-outside, no browser-back — so Save is the only way through, same as
-// the job-manager prompt right before it.
-function ScopeOfWorkModal({ lead, canEdit, onSave, onToggle, onClose, required }) {
-  useModalBackClose(required ? () => {} : onClose);
+// Always dismissible — Sean goes over scope directly with the PM, so this
+// is a convenience, not a gate on winning the job.
+function ScopeOfWorkModal({ lead, canEdit, onSave, onToggle, onClose }) {
+  useModalBackClose(onClose);
   const [items, setItems] = useState(lead.scopeOfWork || []);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -6165,22 +6180,18 @@ function ScopeOfWorkModal({ lead, canEdit, onSave, onToggle, onClose, required }
   };
 
   return (
-    <div style={modalOverlay} onClick={required ? undefined : onClose}>
+    <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
             Scope of work
           </div>
-          {!required && (
-            <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-              <X size={18} color={COLORS.muted} />
-            </button>
-          )}
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          {required
-            ? `${lead.name} — job won! List out what needs to happen so the project manager knows exactly what to plan for and who to hire, then save to continue.`
-            : canEdit
+          {canEdit
             ? `${lead.name} — job won! List out what needs to happen so the project manager knows exactly what to plan for and who to hire.`
             : `${lead.name} — check items off as they're taken care of.`}
         </div>
