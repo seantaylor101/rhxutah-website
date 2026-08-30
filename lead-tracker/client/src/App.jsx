@@ -329,39 +329,100 @@ function addBusinessDays(startIso, totalDays) {
   return d.toISOString().slice(0, 10);
 }
 
+// keyword -> job-type category, first match wins. Covers this business's
+// actual services (rhxutah.com: seamless gutters, siding, stucco,
+// in-ground drainage, permanent holiday lighting) plus roof/deck/window
+// work that shows up in job descriptions even without their own landing
+// pages. "job" is free text ("e.g. Gutters, Lehi"), so this is a substring
+// match, not an exact one.
+const JOB_TYPE_RULES = [
+  { key: "gutters", match: /gutter/i },
+  { key: "siding", match: /siding|hardie/i },
+  { key: "stucco", match: /stucco/i },
+  { key: "drainage", match: /drain/i },
+  { key: "lighting", match: /\blight/i },
+  { key: "roof", match: /roof/i },
+  { key: "deck", match: /\bdeck/i },
+  { key: "windows", match: /window/i },
+];
+
+function jobTypeOf(jobText) {
+  const rule = JOB_TYPE_RULES.find((r) => r.match.test(jobText || ""));
+  return rule ? rule.key : "other";
+}
+
+// starting-assumption workday counts by job type — flat, not scaled by
+// revenue like the data-driven estimate below is — used only until a type
+// has at least 2 completed jobs of its own to pace off of. Ballpark
+// residential-exterior-trade durations for a single crew; siding's number
+// is Sean's own stated real-world pace (a full re-side generally runs
+// about a week to a week and a half), not a generic online figure, since
+// the whole point is that your own numbers beat a generic calculator the
+// moment you have any — these are just a placeholder until you do.
+const DEFAULT_DAYS_BY_TYPE = {
+  gutters: 1,
+  siding: 7,
+  stucco: 4,
+  drainage: 2,
+  lighting: 1,
+  roof: 2,
+  deck: 5,
+  windows: 2,
+  other: 3,
+};
+
 // a scheduled job on the calendar shows its known actual span once
-// completed, or — before then — a projected one sized off the same
-// workdays-per-$1,000 build-pace figure the Final Report modal already
-// uses to compare a job against average (see FinalReportModal's
-// expectedWorkDays). No history yet to pace off of just falls back to a
-// single-day placeholder bar rather than not showing up at all.
+// completed, or — before then — a projected one. Prefers the same
+// workdays-per-$1,000 build-pace figure the Final Report modal uses to
+// compare a job against average (see FinalReportModal's expectedWorkDays),
+// but computed per job TYPE rather than blended across every type of job
+// this business does — a siding job and a gutter job don't take the same
+// number of days per dollar, so blending them skews estimates for both.
+// Falls back to the flat per-type default above until that type has
+// enough of its own completed-job history (>=2) to trust its own pace.
 function projectedJobSpan(lead, allMetrics) {
   if (!lead.startDate) return null;
   const start = lead.startDate.slice(0, 10);
   if (lead.completedAt) {
     return { start, end: lead.completedAt.slice(0, 10), projected: false };
   }
-  const revenue = lead.revenue || 0;
   const manualDays = resolveWorkDays(lead);
-  const estDays =
-    manualDays != null
-      ? manualDays
-      : allMetrics.avgDaysPerThousand != null && revenue > 0
-      ? Math.max(1, Math.round(allMetrics.avgDaysPerThousand * (revenue / 1000)))
-      : 1;
+  let estDays;
+  if (manualDays != null) {
+    estDays = manualDays;
+  } else {
+    const revenue = lead.revenue || 0;
+    const type = jobTypeOf(lead.job);
+    const typeStats = allMetrics.avgDaysPerThousandByType?.[type];
+    estDays =
+      typeStats && typeStats.sample >= 2 && revenue > 0
+        ? Math.max(1, Math.round(typeStats.value * (revenue / 1000)))
+        : DEFAULT_DAYS_BY_TYPE[type];
+  }
   return { start, end: addBusinessDays(start, estDays), projected: true };
 }
 
-// deterministic, unbounded-cardinality color per lead (not a fixed
-// categorical palette — a calendar can have arbitrarily many jobs on
-// screen at once, unlike a chart legend). Golden-angle hue steps keep
-// adjacent ids visually separated; fixed saturation/lightness keeps every
-// bar dark enough for white label text without per-color contrast math.
-function leadColor(id) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  const hue = (hash * 137.508) % 360;
-  return `hsl(${hue.toFixed(1)}, 62%, 40%)`;
+// the dataviz skill's validated default categorical palette — its fixed
+// order is specifically chosen so ADJACENT slots clear CVD/contrast
+// separation gates, which is exactly what's needed here since lanes stack
+// directly next to each other in the same week. Assigned by LANE, not a
+// hash of the lead id, so two jobs that happen to land side by side are
+// always maximally distinct rather than a coincidence of their ids' hashes
+// (bg/text pairs picked per-swatch by fill luminance, per the same skill's
+// mark-label rule, rather than assuming white always reads).
+const LANE_COLORS = [
+  { bg: "#2a78d6", text: COLORS.ink }, // blue
+  { bg: "#eb6834", text: COLORS.ink }, // orange
+  { bg: "#1baf7a", text: COLORS.ink }, // aqua
+  { bg: "#eda100", text: COLORS.ink }, // yellow
+  { bg: "#e87ba4", text: COLORS.ink }, // magenta
+  { bg: "#008300", text: "#fff" }, // green
+  { bg: "#4a3aa7", text: "#fff" }, // violet
+  { bg: "#e34948", text: COLORS.ink }, // red
+];
+
+function laneColor(lane) {
+  return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
 // jobs shown on the job calendar: won or further along, with a start date
@@ -380,6 +441,18 @@ function computeMetrics(subset, overheadPercent = 13) {
   const bidLeads = subset.filter((l) => l.bidSentAt);
   const paceLeads = subset.filter(
     (l) => l.completedAt && l.startDate && l.revenue > 0 && resolveWorkDays(l) != null
+  );
+  // same pace figure as avgDaysPerThousand below, but split out per job
+  // type (see jobTypeOf) — feeds the job calendar's per-type duration
+  // projections, since a siding job and a gutter job don't take the same
+  // number of days per dollar and blending them skews estimates for both
+  const paceDaysByType = {};
+  for (const l of paceLeads) {
+    const type = jobTypeOf(l.job);
+    (paceDaysByType[type] ||= []).push(resolveWorkDays(l) / (l.revenue / 1000));
+  }
+  const avgDaysPerThousandByType = Object.fromEntries(
+    Object.entries(paceDaysByType).map(([type, arr]) => [type, { value: avg(arr), sample: arr.length }])
   );
   const decidedCount = wonLeads.length + lostLeads.length;
 
@@ -454,6 +527,7 @@ function computeMetrics(subset, overheadPercent = 13) {
     avgDaysPerThousand: avg(paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000))),
     avgDaysPerThousandSample: paceLeads.length,
     paceDays: paceLeads.map((l) => resolveWorkDays(l) / (l.revenue / 1000)),
+    avgDaysPerThousandByType,
     avgFollowupsOnWon: avg(followupCountsOnWon),
     avgFollowupsOnWonSample: followupCountsOnWon.length,
     followupWinRateByBucket,
@@ -1706,11 +1780,13 @@ function App() {
   // separate from editField/api.editLead — the viewer role is allowed to
   // schedule/reschedule a won job's start date even though every other field
   // on the lead stays owner-only, so this goes through its own endpoint
-  const editStartDate = async (id, startDate) => {
+  const editStartDate = async (id, startDate, actualWorkDays) => {
     leadsVersionRef.current++;
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, startDate } : l)));
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, startDate, ...(actualWorkDays !== undefined ? { actualWorkDays } : {}) } : l))
+    );
     try {
-      const updated = await api.editStartDate(id, startDate);
+      const updated = await api.editStartDate(id, startDate, actualWorkDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
     } catch {
@@ -3981,7 +4057,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
       .map((l) => {
         const span = projectedJobSpan(l, allMetrics);
-        return span ? { lead: l, ...span, color: leadColor(l.id) } : null;
+        return span ? { lead: l, ...span } : null;
       })
       .filter((j) => j && j.start <= gridEndKey && j.end >= gridStartKey)
       .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
@@ -3996,6 +4072,12 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
         laneEnds[lane] = job.end;
       }
       job.lane = lane;
+      // colored by lane, not by lead id — guarantees jobs stacked next to
+      // each other (the only case that actually needs to be distinct) get
+      // maximally separated colors instead of a hash-collision gamble
+      const { bg, text } = laneColor(lane);
+      job.color = bg;
+      job.textColor = text;
     }
     return spans;
   }, [leads, allMetrics, gridStart, gridEndKey]);
@@ -4100,7 +4182,6 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                 const endCol = days.indexOf(clippedEnd);
                 const left = (startCol / 7) * 100;
                 const width = ((endCol - startCol + 1) / 7) * 100;
-                const startsHere = job.start >= weekStart;
                 return (
                   <button
                     key={`${job.lead.id}-${weekStart}`}
@@ -4118,7 +4199,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                       opacity: job.projected ? 0.55 : 1,
                       border: job.projected ? `1.5px dashed ${job.color}` : "none",
                       borderRadius: 5,
-                      color: "#fff",
+                      color: job.textColor,
                       fontFamily: FONT_UTIL,
                       fontSize: 11,
                       fontWeight: 600,
@@ -4130,7 +4211,7 @@ function CalendarView({ leads, allMetrics, onOpenLead }) {
                       cursor: "pointer",
                     }}
                   >
-                    {startsHere ? job.lead.name : ""}
+                    {job.lead.name}
                   </button>
                 );
               })}
@@ -5929,6 +6010,81 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
   );
 }
 
+// runs right after a start date is entered/changed on a won job — an
+// owner-given (or, if the viewer set the date, PM-given) duration estimate
+// beats the automatic per-job-type one, since it comes from someone who
+// actually knows this specific job. Saves into the same actualWorkDays
+// column the Mark Complete/Final Report flows fill in with the real
+// elapsed days once the job finishes, so this is only ever a placeholder
+// until then (see resolveWorkDays/projectedJobSpan, which already prefer
+// actualWorkDays over any estimate). Skippable — this is an accuracy aid,
+// not a required step like the job-manager/scope-of-work prompts.
+function WorkDaysPromptModal({ leadName, onSave, onSkip }) {
+  useModalBackClose(onSkip);
+  const [days, setDays] = useState("");
+
+  const save = () => {
+    const n = parseFloat(days);
+    if (!isNaN(n) && n > 0) onSave(n);
+    else onSkip();
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onSkip}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            How many days do you expect this to take?
+          </div>
+          <button onClick={onSkip} style={iconBtnGhost} aria-label="Skip">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          {leadName} — this becomes the calendar's projected length for this job instead of the automatic
+          type-based estimate. You (or the crew) know this specific job better than an average ever will.
+        </div>
+        <input
+          autoFocus
+          type="number"
+          min="0.5"
+          step="0.5"
+          inputMode="decimal"
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          placeholder="e.g. 7"
+          style={{ ...modalInput, marginBottom: 14 }}
+        />
+        <button
+          onClick={save}
+          disabled={!days}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: days ? 1 : 0.5 }}
+        >
+          Save estimate
+        </button>
+        <button
+          onClick={onSkip}
+          style={{
+            marginTop: 10,
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.muted,
+            cursor: "pointer",
+            textAlign: "center",
+          }}
+        >
+          Skip — use the automatic estimate
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // runs right after a lead is marked won, before the scope-of-work prompt —
 // required, not dismissible (no X, no backdrop/back-button close): picking
 // a name is the only way out, same as the scope-of-work prompt right after
@@ -6150,6 +6306,7 @@ function LeadTicket({
   const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
+  const [showWorkDaysPrompt, setShowWorkDaysPrompt] = useState(false);
   const [editingCompleted, setEditingCompleted] = useState(false);
   const [completedDraft, setCompletedDraft] = useState("");
   const [editingRevenue, setEditingRevenue] = useState(false);
@@ -6215,6 +6372,20 @@ function LeadTicket({
       onEditStartDate(lead.id, startDraft);
     }
     setEditingStart(false);
+    // only when actually setting a date, not clearing one — nothing to
+    // estimate a duration for once there's no start date
+    if (startDraft) setShowWorkDaysPrompt(true);
+  };
+
+  const saveWorkDaysEstimate = (days) => {
+    if (role === "owner") {
+      onEditField(lead.id, "actualWorkDays", days);
+    } else {
+      // viewer's endpoint is start-date-scoped, so resend the (unchanged)
+      // date alongside the new estimate rather than needing a second route
+      onEditStartDate(lead.id, startDraft, days);
+    }
+    setShowWorkDaysPrompt(false);
   };
 
   // completedAt is a plain calendar date at heart (no meaningful time-of-day),
@@ -6285,6 +6456,7 @@ function LeadTicket({
   };
 
   return (
+    <>
     <div
       id={`lead-${lead.id}`}
       style={
@@ -7008,6 +7180,14 @@ function LeadTicket({
           )}
       </div>
     </div>
+    {showWorkDaysPrompt && (
+      <WorkDaysPromptModal
+        leadName={lead.name}
+        onSave={saveWorkDaysEstimate}
+        onSkip={() => setShowWorkDaysPrompt(false)}
+      />
+    )}
+    </>
   );
 }
 

@@ -25,7 +25,18 @@ const EDITABLE_FIELDS = new Set([
   "sourceOther",
   "appointmentAt",
   "manager",
+  "actualWorkDays",
 ]);
+
+// a positive number of (fractional, quarter-day-ish) work days, or empty/
+// null to clear — shared between the owner's general-purpose PATCH /:id
+// below and the viewer-level PATCH /:id/start-date's optional estimate
+function parseWorkDays(value) {
+  if (value === null || value === undefined || value === "") return { ok: true, value: null };
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return { ok: false };
+  return { ok: true, value: n };
+}
 
 const VALID_MANAGERS = new Set(["Sean", "Dave"]);
 
@@ -300,6 +311,11 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
       return res.status(400).json({ error: "manager must be 'Sean' or 'Dave'" });
     }
   }
+  if ("actualWorkDays" in updates) {
+    const parsed = parseWorkDays(updates.actualWorkDays);
+    if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
+    updates.actualWorkDays = parsed.value;
+  }
 
   const fields = Object.keys(updates);
   db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
@@ -347,12 +363,27 @@ router.patch("/:id/start-date", requireAuth("viewer"), (req, res) => {
     return res.status(403).json({ error: "Start date can only be set on a won job" });
   }
 
-  const { startDate } = req.body || {};
+  const { startDate, actualWorkDays } = req.body || {};
   if (startDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(startDate || "")) {
     return res.status(400).json({ error: "startDate must be YYYY-MM-DD or empty" });
   }
 
-  db.prepare(`UPDATE leads SET startDate = ? WHERE id = ?`).run(startDate, row.id);
+  const updates = { startDate };
+  // optional owner-or-viewer "how many days do you expect this to take"
+  // estimate, entered right after setting a start date — same column the
+  // Mark Complete/Final Report flows fill in with the real elapsed days
+  // once the job finishes, so this is only ever a placeholder until then
+  if (actualWorkDays !== undefined) {
+    const parsed = parseWorkDays(actualWorkDays);
+    if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
+    updates.actualWorkDays = parsed.value;
+  }
+
+  const fields = Object.keys(updates);
+  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
+    ...updates,
+    id: row.id,
+  });
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
