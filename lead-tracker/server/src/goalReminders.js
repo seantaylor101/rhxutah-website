@@ -1,9 +1,6 @@
 import { db } from "./db.js";
 import { sendPushToRole } from "./pushService.js";
-
-function currentMonthKey() {
-  return new Date().toISOString().slice(0, 7);
-}
+import { localMonthKey } from "./businessTime.js";
 
 function readGoalMonthFields() {
   const rows = db
@@ -27,7 +24,7 @@ function markPushSent(monthKey) {
 // settings API) purely to keep this to one push per month, not one per
 // hourly sweep.
 export async function sendDueGoalReminder() {
-  const monthKey = currentMonthKey();
+  const monthKey = localMonthKey();
   const { confirmed, pushSent } = readGoalMonthFields();
   if (confirmed === monthKey) return;
   if (pushSent === monthKey) return;

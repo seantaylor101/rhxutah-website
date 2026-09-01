@@ -6,6 +6,7 @@ import { sendDueReportReminders } from "../reportReminders.js";
 import { sendPushToRole } from "../pushService.js";
 import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
+import { localMonthKey } from "../businessTime.js";
 
 const router = Router();
 
@@ -103,19 +104,16 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
 
 export { SOURCES };
 
-function yearMonth(dateLike) {
-  const d = new Date(dateLike);
-  return `${d.getFullYear()}-${d.getMonth()}`;
-}
-
 // Mirrors the old client-side sweep: paid leads roll into the archive once the
-// calendar month they were paid in has passed.
+// calendar month they were paid in has passed — in business-local time, so a
+// job paid earlier today doesn't get swept while it's still today just
+// because UTC has already ticked into the next month.
 function sweepArchive() {
-  const thisMonth = yearMonth(new Date());
+  const thisMonth = localMonthKey();
   const rows = db
     .prepare(`SELECT * FROM leads WHERE stage = 'paid' AND archived = 0 AND paidAt IS NOT NULL`)
     .all();
-  const toSweep = rows.filter((row) => yearMonth(row.paidAt) !== thisMonth);
+  const toSweep = rows.filter((row) => localMonthKey(new Date(row.paidAt)) !== thisMonth);
   if (!toSweep.length) return;
 
   const now = new Date().toISOString();

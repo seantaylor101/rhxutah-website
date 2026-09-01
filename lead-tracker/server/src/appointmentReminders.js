@@ -1,7 +1,7 @@
 import { db } from "./db.js";
 import { sendPushToRole } from "./pushService.js";
+import { BUSINESS_TZ } from "./businessTime.js";
 
-const BUSINESS_TZ = "America/Denver";
 const REMINDER_LEAD_MS = 60 * 60 * 1000; // fire starting 1 hour before the appointment
 const STALE_MS = 60 * 60 * 1000; // more than an hour past due — not worth a late reminder anymore
 

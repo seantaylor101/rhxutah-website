@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { localMonthKey } from "../businessTime.js";
 
 const router = Router();
 
@@ -118,7 +119,7 @@ router.patch("/", requireAuth("owner"), (req, res) => {
   // month that happens in, computed server-side rather than trusted from
   // the client
   if (body.goalMonthlyTakeHome !== undefined) {
-    updates.goalMonthConfirmed = new Date().toISOString().slice(0, 7);
+    updates.goalMonthConfirmed = localMonthKey();
   }
 
   if (body.goalDataSource !== undefined) {
