@@ -1020,6 +1020,14 @@ function startOfMonth(d) {
   return x;
 }
 
+// "YYYY-MM" in the device's local calendar — deliberately not
+// toISOString().slice(0, 7), which is UTC and so flips to the next month
+// hours before local midnight on the last day of the month (the business
+// runs on Mountain time, well behind UTC)
+function localMonthKey(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function endOfWeek(d) {
   const x = startOfWeek(d);
   x.setDate(x.getDate() + 6);
@@ -1472,7 +1480,7 @@ function App() {
     if (role !== "owner") return;
     goalPromptCheckedRef.current = true;
     if (!settings.popupGoalEnabled) return;
-    const monthKey = new Date().toISOString().slice(0, 7);
+    const monthKey = localMonthKey();
     if (settings.goalMonthConfirmed === monthKey) return;
     // deliberately no cleanup here — `leads` (a dependency) can get a new
     // array reference again shortly after mount, which would re-run this

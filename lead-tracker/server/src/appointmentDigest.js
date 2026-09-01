@@ -1,7 +1,7 @@
 import { db } from "./db.js";
 import { sendPushToRole } from "./pushService.js";
+import { BUSINESS_TZ } from "./businessTime.js";
 
-const BUSINESS_TZ = "America/Denver";
 const SWEEP_MS = 5 * 60 * 1000;
 
 function localDateKey(date) {
