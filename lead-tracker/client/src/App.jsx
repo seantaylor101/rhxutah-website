@@ -3990,7 +3990,6 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
   const [calFilter, setCalFilter] = useState("all");
 
   const toKey = (d) => d.toISOString().slice(0, 10);
-  const monthStartKey = toKey(monthStart);
   const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(
     monthStart
   );
@@ -4001,7 +4000,6 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
     d.setUTCDate(0);
     return d;
   }, [monthStart]);
-  const monthEndKey = toKey(monthEnd);
 
   const gridStart = useMemo(() => {
     const d = new Date(monthStart);
@@ -4178,11 +4176,10 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
                 {days.map((dayKey) => {
-                  const inMonth = dayKey >= monthStartKey && dayKey <= monthEndKey;
                   const dayNum = Number(dayKey.slice(8, 10));
                   return (
                     <div key={dayKey} style={{ borderRight: `1px solid ${COLORS.border}`, height: DAY_LABEL_H, padding: "4px 0 0 4px" }}>
-                      <span style={{ fontFamily: FONT_UTIL, fontSize: 11, color: inMonth ? COLORS.muted : "#C9C4B6" }}>{dayNum}</span>
+                      <span style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted }}>{dayNum}</span>
                     </div>
                   );
                 })}
