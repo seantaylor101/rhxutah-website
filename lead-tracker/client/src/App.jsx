@@ -1591,6 +1591,13 @@ function App() {
     [leads]
   );
 
+  const [warrantyFocus, setWarrantyFocus] = useState(null); // { stage, token } | null
+
+  const openWarrantyFromCalendar = useCallback(() => {
+    setWarrantyFocus({ stage: "scheduled", token: Date.now() });
+    setView("warranty");
+  }, []);
+
   // deep-link from a push notification tap: either this window is opened
   // fresh with ?lead=<id>, or the service worker posts a message to an
   // already-open tab it just focused
@@ -1792,11 +1799,11 @@ function App() {
     }
   };
 
-  const moveWarrantyRequest = async (id, stage, revert) => {
+  const moveWarrantyRequest = async (id, stage, revert, date) => {
     warrantyVersionRef.current++;
     setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? { ...w, stage } : w)));
     try {
-      const updated = await api.moveWarrantyRequest(id, stage, revert);
+      const updated = await api.moveWarrantyRequest(id, stage, revert, date);
       setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
       setError("");
     } catch {
@@ -2208,7 +2215,14 @@ function App() {
           onOpenLead={navigateToLead}
         />
       ) : view === "calendar" ? (
-        <CalendarView leads={leads} allMetrics={allSourcesMetrics} role={role} onOpenLead={navigateToLead} />
+        <CalendarView
+          leads={leads}
+          allMetrics={allSourcesMetrics}
+          role={role}
+          warrantyRequests={warrantyRequests}
+          onOpenLead={navigateToLead}
+          onOpenWarranty={openWarrantyFromCalendar}
+        />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -2232,6 +2246,7 @@ function App() {
           onUploadPhotos={uploadWarrantyPhotos}
           onDeletePhoto={deleteWarrantyPhoto}
           onBack={() => setView("dashboard")}
+          focus={warrantyFocus}
         />
       ) : (
         <>
@@ -2512,7 +2527,14 @@ function App() {
       )}
 
       {view === "board" && activeStage === "won" && (
-        <CalendarSlideOver leads={leads} allMetrics={allSourcesMetrics} role={role} onOpenLead={navigateToLead} />
+        <CalendarSlideOver
+          leads={leads}
+          allMetrics={allSourcesMetrics}
+          role={role}
+          warrantyRequests={warrantyRequests}
+          onOpenLead={navigateToLead}
+          onOpenWarranty={openWarrantyFromCalendar}
+        />
       )}
 
       {showAdd && <AddLeadModal onAdd={addLead} onClose={() => setShowAdd(false)} contacts={contacts} />}
@@ -3976,7 +3998,7 @@ function isMyJob(lead, role) {
   return lead.manager === "Dave";
 }
 
-function CalendarView({ leads, allMetrics, role, onOpenLead }) {
+function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, onOpenWarranty }) {
   const [monthStart, setMonthStart] = useState(() => {
     const d = new Date();
     d.setUTCDate(1);
@@ -4032,7 +4054,7 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
   // across instead of jumping lanes each time the calendar wraps a line
   const jobList = useMemo(() => {
     const gridStartKey = toKey(gridStart);
-    const spans = (leads || [])
+    const leadSpans = (leads || [])
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
       .filter((l) => {
         if (calFilter === "mine") return isMyJob(l, role);
@@ -4043,7 +4065,26 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
         const span = projectedJobSpan(l, allMetrics);
         return span ? { lead: l, ...span } : null;
       })
-      .filter((j) => j && j.start <= gridEndKey && j.end >= gridStartKey)
+      .filter(Boolean);
+
+    // scheduled warranty repairs — shown regardless of the All/My/PM's Jobs
+    // filter, since a warranty request has no manager to filter by, and
+    // hiding it there would look like the schedule date silently vanished
+    const warrantySpans = (warrantyRequests || [])
+      .filter((w) => w.stage === "scheduled" && w.scheduledAt)
+      .map((w) => {
+        const day = w.scheduledAt.slice(0, 10);
+        return {
+          lead: { id: w.id, name: w.name, job: w.issue || "Warranty repair" },
+          start: day,
+          end: day,
+          projected: false,
+          kind: "warranty",
+        };
+      });
+
+    const spans = [...leadSpans, ...warrantySpans]
+      .filter((j) => j.start <= gridEndKey && j.end >= gridStartKey)
       .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
 
     const laneEnds = [];
@@ -4056,15 +4097,23 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
         laneEnds[lane] = job.end;
       }
       job.lane = lane;
-      // colored by lane, not by lead id — guarantees jobs stacked next to
-      // each other (the only case that actually needs to be distinct) get
-      // maximally separated colors instead of a hash-collision gamble
-      const { bg, text } = laneColor(lane);
-      job.color = bg;
-      job.textColor = text;
+      if (job.kind === "warranty") {
+        // a fixed color, not lane-based, so a warranty repair reads as
+        // "warranty" at a glance regardless of which lane it lands in —
+        // same rust used for warranty everywhere else in the app
+        job.color = COLORS.rust;
+        job.textColor = "#fff";
+      } else {
+        // colored by lane, not by lead id — guarantees jobs stacked next to
+        // each other (the only case that actually needs to be distinct) get
+        // maximally separated colors instead of a hash-collision gamble
+        const { bg, text } = laneColor(lane);
+        job.color = bg;
+        job.textColor = text;
+      }
     }
     return spans;
-  }, [leads, allMetrics, gridStart, gridEndKey, calFilter, role]);
+  }, [leads, allMetrics, gridStart, gridEndKey, calFilter, role, warrantyRequests]);
 
   const BAR_H = 20;
   const BAR_GAP = 4;
@@ -4134,8 +4183,8 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
             : "Just the jobs tagged to you. "
           : calFilter === "pm"
             ? "Just what's tagged to your PM. "
-            : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. "}
-        Tap a bar to open that lead.
+            : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. Scheduled warranty repairs show up in rust. "}
+        Tap a bar to open it.
       </div>
 
       {jobList.length === 0 && (
@@ -4195,7 +4244,7 @@ function CalendarView({ leads, allMetrics, role, onOpenLead }) {
                 return (
                   <button
                     key={`${job.lead.id}-${weekStart}`}
-                    onClick={() => onOpenLead(job.lead.id)}
+                    onClick={() => (job.kind === "warranty" ? onOpenWarranty() : onOpenLead(job.lead.id))}
                     title={`${job.lead.name}${job.lead.job ? " — " + job.lead.job : ""} · ${fmtDate(job.start)}–${fmtDate(
                       job.end
                     )}${job.projected ? " (projected)" : ""}`}
@@ -4244,7 +4293,7 @@ const CAL_DRAWER_WIDTH_VW = 88;
 // so it holds up across a resize without a layout-effect recompute; drag
 // deltas are converted through window.innerWidth instead, which only needs
 // to be current at the instant of the gesture.
-function CalendarSlideOver({ leads, allMetrics, role, onOpenLead }) {
+function CalendarSlideOver({ leads, allMetrics, role, warrantyRequests, onOpenLead, onOpenWarranty }) {
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [liveTranslate, setLiveTranslate] = useState(null);
@@ -4368,9 +4417,14 @@ function CalendarSlideOver({ leads, allMetrics, role, onOpenLead }) {
           leads={leads}
           allMetrics={allMetrics}
           role={role}
+          warrantyRequests={warrantyRequests}
           onOpenLead={(id) => {
             setOpen(false);
             onOpenLead(id);
+          }}
+          onOpenWarranty={() => {
+            setOpen(false);
+            onOpenWarranty();
           }}
         />
       </div>
@@ -4780,9 +4834,18 @@ function WarrantyView({
   onUploadPhotos,
   onDeletePhoto,
   onBack,
+  focus,
 }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
+
+  // jumping here from a tap on a scheduled repair's calendar bar lands on
+  // the Scheduled tab instead of the default Reported one — otherwise the
+  // request that was just tapped is nowhere in sight. token changes on every
+  // tap so this re-syncs even if the view was already mounted on some other tab.
+  useEffect(() => {
+    if (focus?.stage) setActiveStage(focus.stage);
+  }, [focus?.token]);
 
   const counts = useMemo(() => {
     const c = { reported: 0, scheduled: 0, resolved: 0 };
@@ -4931,6 +4994,7 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
   const [issueDraft, setIssueDraft] = useState(request.issue || "");
   const [confirmDel, setConfirmDel] = useState(false);
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
 
   const stageIdx = WARRANTY_STAGES.findIndex((s) => s.key === request.stage);
   const stage = WARRANTY_STAGES[stageIdx];
@@ -5153,7 +5217,13 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
             )}
             {nextStage && (
               <button
-                onClick={() => (nextStage.key === "resolved" ? setShowResolveModal(true) : onMove(request.id, nextStage.key))}
+                onClick={() =>
+                  nextStage.key === "resolved"
+                    ? setShowResolveModal(true)
+                    : nextStage.key === "scheduled"
+                    ? setShowScheduleModal(true)
+                    : onMove(request.id, nextStage.key)
+                }
                 style={{ ...actionBtn, background: "transparent", color: nextStage.color, border: `1px solid ${nextStage.color}` }}
               >
                 {stage.actionLabel}
@@ -5175,6 +5245,50 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
           onCancel={() => setShowResolveModal(false)}
         />
       )}
+      {showScheduleModal && (
+        <WarrantyScheduleModal
+          onConfirm={(date) => {
+            onMove(request.id, "scheduled", undefined, date);
+            setShowScheduleModal(false);
+          }}
+          onCancel={() => setShowScheduleModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// asks which day the repair is actually scheduled for, rather than silently
+// stamping "right now" — that date is what puts it on the Job Calendar, so a
+// vague "sometime" schedule wouldn't show up anywhere useful there
+function WarrantyScheduleModal({ onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
+  const [date, setDate] = useState(toDateInputValue(new Date()));
+
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          When's this scheduled?
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+          This shows up on the Job Calendar so it's easy to see alongside everything else on the schedule.
+        </div>
+        <label style={modalLabel}>Scheduled date</label>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={modalInput} />
+        <button
+          onClick={() => onConfirm(date)}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14 }}
+        >
+          Confirm
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
     </div>
   );
 }
