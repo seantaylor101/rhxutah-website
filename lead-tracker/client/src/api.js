@@ -67,10 +67,10 @@ export const api = {
   markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
   listWarrantyRequests: () => request("/warranty"),
   addWarrantyRequest: (payload) => request("/warranty", { method: "POST", body: JSON.stringify(payload) }),
-  moveWarrantyRequest: (id, stage, revert) =>
+  moveWarrantyRequest: (id, stage, revert, date) =>
     request(`/warranty/${id}/move`, {
       method: "POST",
-      body: JSON.stringify({ stage, ...(revert ? { revert: true } : {}) }),
+      body: JSON.stringify({ stage, ...(revert ? { revert: true } : {}), ...(date ? { date } : {}) }),
     }),
   editWarrantyRequest: (id, patch) => request(`/warranty/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteWarrantyRequest: (id) => request(`/warranty/${id}`, { method: "DELETE" }),

@@ -76,7 +76,7 @@ function getOr404(id, res) {
 // viewer-level so both roles can move a request through the pipeline —
 // adding, editing, and deleting requests stay owner-only below
 router.post("/:id/move", requireAuth("viewer"), (req, res) => {
-  const { stage, revert } = req.body || {};
+  const { stage, revert, date } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
   const row = getOr404(req.params.id, res);
   if (!row) return;
@@ -94,7 +94,19 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     if (stage !== "scheduled") patch.scheduledAt = null;
     patch.resolvedAt = null;
   } else if (stage === "scheduled") {
-    patch.scheduledAt = ts;
+    // date is the day the repair work is actually scheduled for — a plain
+    // calendar date, not "the instant this button was tapped" — so this
+    // shows up on the right day on the Job Calendar. Build it as UTC
+    // midnight directly, same as the leads route's date handling, rather
+    // than parsing `${date}T00:00:00` (no zone) through Date, which is
+    // interpreted in whatever timezone this process happens to run in.
+    if (date) {
+      const parsed = new Date(`${date}T00:00:00.000Z`);
+      if (isNaN(parsed.getTime())) return res.status(400).json({ error: "Invalid date" });
+      patch.scheduledAt = parsed.toISOString();
+    } else {
+      patch.scheduledAt = ts;
+    }
   } else if (stage === "resolved") {
     patch.resolvedAt = ts;
   }
