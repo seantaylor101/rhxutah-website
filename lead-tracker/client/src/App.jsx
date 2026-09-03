@@ -931,6 +931,17 @@ function lastNameOf(name) {
   return parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
 }
 
+// turn-by-turn directions link for a customer address, in whichever app
+// this device is set to prefer (see the once-ever MapsPreferenceModal
+// prompt and the toggle in Account) — defaults to Apple Maps, matching
+// this app's original hardcoded behavior, until a device answers otherwise
+function mapsHref(address, preference) {
+  const encoded = encodeURIComponent(address);
+  return preference === "google"
+    ? `https://www.google.com/maps/dir/?api=1&destination=${encoded}`
+    : `https://maps.apple.com/?daddr=${encoded}`;
+}
+
 function sourceLabel(lead) {
   if (!lead.source) return null;
   if (lead.source === "other") return lead.sourceOther ? `Other — ${lead.sourceOther}` : "Other";
@@ -1225,6 +1236,16 @@ function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, b
 function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [role, setRole] = useState(null); // null = not signed in on this device
+  // per-device, not part of the shared settings — "google" | "apple", read
+  // from localStorage once at mount and updated in state alongside it so an
+  // address link re-renders with the new href the instant it changes
+  const [mapsPreference, setMapsPreferenceState] = useState(
+    () => localStorage.getItem("rhxMapsPreference") || "apple"
+  );
+  const setMapsPreference = (value) => {
+    localStorage.setItem("rhxMapsPreference", value);
+    setMapsPreferenceState(value);
+  };
   const [leads, setLeads] = useState(null); // null = loading
   const [activeStage, setActiveStage] = useState("new");
   const [showAdd, setShowAdd] = useState(false);
@@ -1253,6 +1274,7 @@ function App() {
     popupGoalEnabled: true,
     popupWarrantyEnabled: true,
     popupMissingInfoEnabled: true,
+    popupMapsEnabled: true,
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
@@ -1260,6 +1282,7 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showGoalPrompt, setShowGoalPrompt] = useState(false);
+  const [showMapsPrompt, setShowMapsPrompt] = useState(false);
   const [showWarrantyAlert, setShowWarrantyAlert] = useState(false);
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
@@ -1278,9 +1301,12 @@ function App() {
   const lastWarrantyJsonRef = useRef("");
   const pushPromptCheckedRef = useRef(false);
   const goalPromptCheckedRef = useRef(false);
+  const mapsPromptCheckedRef = useRef(false);
+  const mapsPromptShowingRef = useRef(false);
   const warrantyAlertShownRef = useRef(false);
   const missingInfoAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
+  const showGoalPromptRef = useRef(false);
   const editable = role === "owner";
 
   // installed PWAs get suspended in the background instead of reloading, so
@@ -1492,6 +1518,46 @@ function App() {
     }, 1200);
   }, [role, leads, settingsLoaded, settings.goalMonthConfirmed, settings.popupGoalEnabled]);
 
+  useEffect(() => {
+    showGoalPromptRef.current = showGoalPrompt;
+  }, [showGoalPrompt]);
+
+  // once ever per device (any role), ask which app to open turn-by-turn
+  // directions in. Reactive on the push/goal prompts' own live state (not a
+  // one-shot delayed snapshot of it) so this actually gets its turn once
+  // they close, however long that takes — a fixed-delay check would mean a
+  // push prompt still sitting open past that delay (the normal case, since
+  // it waits on an actual person to read and tap it) silently skips this for
+  // the whole session, deferring it to a reload that a PWA left running for
+  // days might never get. Also waits for warrantyAlertDelayElapsed, the
+  // same "push/goal have had time to resolve" signal the warranty alert
+  // below uses, so this doesn't jump the gun before push's async
+  // subscription check has even had a chance to flip showPushPrompt true.
+  // mapsPromptShowingRef is set synchronously (unlike the showMapsPrompt
+  // state, which lags a render behind) so the warranty effect below —
+  // which runs after this one every commit, same as every other hook in
+  // this component — can reliably see "maps just claimed this turn" even
+  // on the very commit both effects become eligible at once.
+  useEffect(() => {
+    if (mapsPromptCheckedRef.current) return;
+    if (!role || leads === null || !settingsLoaded || !warrantyAlertDelayElapsed) return;
+    if (showPushPrompt || showGoalPrompt) return;
+    mapsPromptCheckedRef.current = true;
+    if (!settings.popupMapsEnabled) return;
+    if (localStorage.getItem("rhxMapsPromptSeen")) return;
+    mapsPromptShowingRef.current = true;
+    localStorage.setItem("rhxMapsPromptSeen", "1");
+    setShowMapsPrompt(true);
+  }, [role, leads, settingsLoaded, warrantyAlertDelayElapsed, settings.popupMapsEnabled, showPushPrompt, showGoalPrompt]);
+
+  // must clear mapsPromptShowingRef here too, not just the state — otherwise
+  // the warranty-alert effect's synchronous ref check above would see it
+  // stuck true forever and never show again this session
+  const closeMapsPrompt = useCallback(() => {
+    mapsPromptShowingRef.current = false;
+    setShowMapsPrompt(false);
+  }, []);
+
   // gives the push/goal prompts (which fire on their own 1200ms delay) a
   // head start before the warranty alert gets a turn — set once per mount,
   // deliberately not re-triggered by anything else
@@ -1519,14 +1585,14 @@ function App() {
   // has no "confirmed" state to suppress it, since simply having the app
   // open doesn't resolve a warranty request; it keeps showing once per
   // session for as long as anything is still open. Re-checks (rather than a
-  // one-shot check) whenever the other two auto-popups' state changes, so a
-  // goal/push prompt that's still open at the 1800ms mark doesn't
+  // one-shot check) whenever the other auto-popups' state changes, so a
+  // goal/push/maps prompt that's still open at the 1800ms mark doesn't
   // permanently suppress this for the rest of the session — it fires as
   // soon as they clear instead
   useEffect(() => {
     if (warrantyAlertShownRef.current) return;
     if (!role || !warrantyLoaded || !warrantyAlertDelayElapsed || !settingsLoaded) return;
-    if (showPushPrompt || showGoalPrompt) return;
+    if (showPushPrompt || showGoalPrompt || showMapsPrompt || mapsPromptShowingRef.current) return;
     const stillOpen = settings.popupWarrantyEnabled
       ? warrantyRequests.filter((w) => w.stage !== "resolved").length
       : 0;
@@ -1549,6 +1615,7 @@ function App() {
     warrantyRequests,
     showPushPrompt,
     showGoalPrompt,
+    showMapsPrompt,
     maybeShowMissingInfoAlert,
   ]);
 
@@ -2516,6 +2583,7 @@ function App() {
                   onLogFollowup={logFollowup}
                   onRemoveFollowup={removeFollowup}
                   settings={settings}
+                  mapsPreference={mapsPreference}
                 />
               </div>
             ))}
@@ -2548,6 +2616,15 @@ function App() {
           defaultTakeHome={settings.goalMonthlyTakeHome}
           onSetGoal={setMonthlyGoalFromPrompt}
           onDismiss={() => setShowGoalPrompt(false)}
+        />
+      )}
+      {showMapsPrompt && (
+        <MapsPreferenceModal
+          onPick={(choice) => {
+            setMapsPreference(choice);
+            closeMapsPrompt();
+          }}
+          onDismiss={closeMapsPrompt}
         />
       )}
       {showWarrantyAlert && (
@@ -2583,6 +2660,8 @@ function App() {
           onSwitch={handleLogin}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
+          mapsPreference={mapsPreference}
+          onSetMapsPreference={setMapsPreference}
         />
       )}
       {showLeadSearch && (
@@ -2958,6 +3037,83 @@ function PushPromptModal({ onEnable, onDismiss }) {
   );
 }
 
+function MapsPreferenceModal({ onPick, onDismiss }) {
+  useModalBackClose(onDismiss);
+  return (
+    <div style={modalOverlay} onClick={onDismiss}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              background: `${COLORS.accent}1a`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <MapPin size={24} color={COLORS.accent} />
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 17,
+            color: COLORS.ink,
+            textAlign: "center",
+            marginBottom: 8,
+          }}
+        >
+          Which app for directions?
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_BODY,
+            fontSize: 13.5,
+            color: COLORS.muted,
+            textAlign: "center",
+            marginBottom: 18,
+          }}
+        >
+          Tapping a customer's address opens turn-by-turn directions. Pick which app you want that to open in —
+          this is just for this device, and you can change it anytime from Account.
+        </div>
+        <button
+          onClick={() => onPick("google")}
+          style={{ ...roleOption, justifyContent: "center", borderColor: COLORS.border, marginBottom: 8 }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Google Maps</span>
+        </button>
+        <button onClick={() => onPick("apple")} style={{ ...roleOption, justifyContent: "center", borderColor: COLORS.border }}>
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Apple Maps</span>
+        </button>
+        <button
+          onClick={onDismiss}
+          style={{
+            display: "block",
+            width: "100%",
+            textAlign: "center",
+            background: "transparent",
+            border: "none",
+            marginTop: 12,
+            padding: 0,
+            cursor: "pointer",
+            fontFamily: FONT_BODY,
+            fontWeight: 600,
+            color: COLORS.muted,
+            fontSize: 13,
+          }}
+        >
+          I'll decide later
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MonthlyGoalPromptModal({ monthLabel, defaultTakeHome, onSetGoal, onDismiss }) {
   useModalBackClose(onDismiss);
   const [draft, setDraft] = useState(defaultTakeHome ? String(defaultTakeHome) : "");
@@ -3209,7 +3365,7 @@ function MissingInfoAlertModal({ leads, onClose }) {
   );
 }
 
-function AccountModal({ role, onSwitch, onLogout, onClose }) {
+function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSetMapsPreference }) {
   useModalBackClose(onClose);
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
@@ -3304,6 +3460,30 @@ function AccountModal({ role, onSwitch, onLogout, onClose }) {
             )}
           </>
         )}
+
+        <label style={modalLabel}>Directions app on this device</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          {[
+            { key: "apple", label: "Apple Maps" },
+            { key: "google", label: "Google Maps" },
+          ].map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => onSetMapsPreference(opt.key)}
+              style={{
+                ...roleOption,
+                flex: 1,
+                justifyContent: "center",
+                borderColor: mapsPreference === opt.key ? COLORS.accent : COLORS.border,
+                background: mapsPreference === opt.key ? `${COLORS.accent}1a` : COLORS.surfaceMuted,
+              }}
+            >
+              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 13.5 }}>
+                {opt.label}
+              </span>
+            </button>
+          ))}
+        </div>
 
         <label style={modalLabel}>Switch access with a different passcode</label>
         <input
@@ -4489,6 +4669,11 @@ const POPUP_TOGGLES = [
     key: "popupMissingInfoEnabled",
     label: "Missing customer info alert",
     description: "Reminds the owner about leads missing a phone, email, or address.",
+  },
+  {
+    key: "popupMapsEnabled",
+    label: "Directions app prompt",
+    description: "Asks a device whether to open turn-by-turn directions in Apple or Google Maps, once ever per device.",
   },
 ];
 
@@ -6463,6 +6648,7 @@ function LeadTicket({
   onLogFollowup,
   onRemoveFollowup,
   settings,
+  mapsPreference,
 }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(lead.name);
@@ -6935,7 +7121,7 @@ function LeadTicket({
           </div>
         )}
 
-        {/* address — tap it to open turn-by-turn directions in Apple Maps, tap elsewhere in the row to edit */}
+        {/* address — tap it to open turn-by-turn directions in this device's preferred maps app, tap elsewhere in the row to edit */}
         {(lead.address || editable) && (
           <div
             onClick={
@@ -6957,7 +7143,7 @@ function LeadTicket({
             {!editingAddress ? (
               lead.address ? (
                 <a
-                  href={`https://maps.apple.com/?daddr=${encodeURIComponent(lead.address)}`}
+                  href={mapsHref(lead.address, mapsPreference)}
                   onClick={(e) => e.stopPropagation()}
                   style={{
                     display: "flex",

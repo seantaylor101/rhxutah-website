@@ -63,6 +63,7 @@ function readSettings() {
     popupGoalEnabled: map.popupGoalEnabled !== "0",
     popupWarrantyEnabled: map.popupWarrantyEnabled !== "0",
     popupMissingInfoEnabled: map.popupMissingInfoEnabled !== "0",
+    popupMapsEnabled: map.popupMapsEnabled !== "0",
   };
 }
 
@@ -91,7 +92,13 @@ const GOAL_NUMBER_FIELDS = {
   goalNationalProfitMargin: (n) => Number.isFinite(n) && n > 0 && n <= 100,
 };
 
-const POPUP_TOGGLE_FIELDS = ["popupPushEnabled", "popupGoalEnabled", "popupWarrantyEnabled", "popupMissingInfoEnabled"];
+const POPUP_TOGGLE_FIELDS = [
+  "popupPushEnabled",
+  "popupGoalEnabled",
+  "popupWarrantyEnabled",
+  "popupMissingInfoEnabled",
+  "popupMapsEnabled",
+];
 
 router.patch("/", requireAuth("owner"), (req, res) => {
   const body = req.body || {};
