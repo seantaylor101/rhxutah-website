@@ -2247,6 +2247,7 @@ function App() {
           onDeletePhoto={deleteWarrantyPhoto}
           onBack={() => setView("dashboard")}
           focus={warrantyFocus}
+          contacts={contacts}
         />
       ) : (
         <>
@@ -4835,6 +4836,7 @@ function WarrantyView({
   onDeletePhoto,
   onBack,
   focus,
+  contacts,
 }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
@@ -4977,6 +4979,7 @@ function WarrantyView({
             setActiveStage("reported");
           }}
           onClose={() => setShowAdd(false)}
+          contacts={contacts}
         />
       )}
     </>
@@ -5548,7 +5551,7 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
   );
 }
 
-function AddWarrantyModal({ onAdd, onClose }) {
+function AddWarrantyModal({ onAdd, onClose, contacts }) {
   useModalBackClose(onClose);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -5556,6 +5559,7 @@ function AddWarrantyModal({ onAdd, onClose }) {
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [showContactPicker, setShowContactPicker] = useState(false);
 
   const canSubmit = name.trim().length > 0;
 
@@ -5571,6 +5575,13 @@ function AddWarrantyModal({ onAdd, onClose }) {
     }
   };
 
+  const pickContact = (c) => {
+    setName(c.name);
+    if (c.phone) setPhone(c.phone);
+    if (c.email) setEmail(c.email);
+    setShowContactPicker(false);
+  };
+
   return (
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -5582,7 +5593,30 @@ function AddWarrantyModal({ onAdd, onClose }) {
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
-        <label style={modalLabel}>Customer name</label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, marginBottom: 6 }}>
+          <span style={{ ...modalLabel, margin: 0 }}>Customer name</span>
+          <button
+            type="button"
+            onClick={() => setShowContactPicker(true)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              background: "transparent",
+              border: "none",
+              color: COLORS.accent,
+              fontFamily: FONT_BODY,
+              fontWeight: 600,
+              fontSize: 12.5,
+              cursor: "pointer",
+              padding: 0,
+            }}
+            aria-label="Add from contacts"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            Contacts
+          </button>
+        </div>
         <input
           autoFocus
           value={name}
@@ -5626,6 +5660,13 @@ function AddWarrantyModal({ onAdd, onClose }) {
           Add request
         </button>
       </div>
+      {showContactPicker && (
+        <ContactPickerModal
+          contacts={contacts || []}
+          onPick={pickContact}
+          onClose={() => setShowContactPicker(false)}
+        />
+      )}
     </div>
   );
 }
