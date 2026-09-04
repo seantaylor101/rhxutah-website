@@ -561,14 +561,15 @@ function computeGoalPlan({ annualTakeHome, monthlyOverhead, winRatePercent, avgJ
   };
 }
 
-// same math as computeGoalPlan, but reading straight off the saved settings
-// (not in-progress draft inputs) — used anywhere that needs "the current
-// goal" without an editing form attached, like the dashboard tile and the
-// Goals page's read-only status view
-function computeGoalPlanFromSettings(settings, myMetrics) {
-  const takeHomeNum = Number(settings.goalMonthlyTakeHome) || 0;
-  const overheadNum = Number(settings.goalMonthlyOverhead) || 0;
-  const source = settings.goalDataSource;
+// same math as computeGoalPlan, but reading straight off the saved goal/settings
+// (not in-progress draft inputs) — used anywhere that needs "the current goal"
+// without an editing form attached, like the dashboard tile and the Goals page's
+// read-only status view. `goal` is the caller's own per-user goal; `settings` still
+// supplies the tenant-wide national-average reference numbers.
+function computeGoalPlanFromSettings(goal, settings, myMetrics) {
+  const takeHomeNum = Number(goal.monthlyTakeHome) || 0;
+  const overheadNum = Number(goal.monthlyOverhead) || 0;
+  const source = goal.dataSource;
   const missing = [];
   if (source === "mine") {
     if (!myMetrics.closeRateSample) missing.push("win rate");
@@ -1262,13 +1263,9 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
     overheadPercent: 13,
-    goalMonthlyTakeHome: 0,
-    goalMonthlyOverhead: 0,
-    goalDataSource: "national",
     goalNationalWinRate: 25,
     goalNationalAvgJobValue: 9500,
     goalNationalProfitMargin: 24,
-    goalMonthConfirmed: "",
     popupPushEnabled: true,
     popupGoalEnabled: true,
     popupWarrantyEnabled: true,
@@ -1276,6 +1273,9 @@ function App() {
     popupMapsEnabled: true,
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // each tenant user (admin or PM) has their own income goal now, not one shared setting
+  const [goal, setGoal] = useState({ monthlyTakeHome: null, monthlyOverhead: null, dataSource: "national", monthConfirmed: "" });
+  const [goalLoaded, setGoalLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
@@ -1471,16 +1471,36 @@ function App() {
     }
   }, []);
 
-  // shared by the Settings modal and the income-goal panel, so both stay in
-  // sync with whichever one last saved
+  // shared by the Settings modal and the income-goal panel's national-assumption
+  // fields (tenant-admin-only), so both stay in sync with whichever one last saved
   const saveSettings = async (patch) => {
     const updated = await api.updateSettings(patch);
     setSettings(updated);
     return updated;
   };
 
+  const loadGoal = useCallback(async () => {
+    if (isPlatformAdmin) return;
+    try {
+      const data = await api.getMyGoal();
+      setGoal(data);
+    } catch {
+      // keep the default already in state
+    } finally {
+      setGoalLoaded(true);
+    }
+  }, [isPlatformAdmin]);
+
+  // shared by the Settings modal's Goals tab and the income-goal panel -- everyone's
+  // own take-home target, monthly overhead, and national-vs-mine data source choice
+  const saveGoal = async (patch) => {
+    const updated = await api.updateMyGoal(patch);
+    setGoal(updated);
+    return updated;
+  };
+
   const setMonthlyGoalFromPrompt = async (amount) => {
-    await saveSettings({ goalMonthlyTakeHome: amount });
+    await saveGoal({ monthlyTakeHome: amount });
     setShowGoalPrompt(false);
     setView("goals");
   };
@@ -1488,6 +1508,10 @@ function App() {
   useEffect(() => {
     if (role) loadSettings();
   }, [role, loadSettings]);
+
+  useEffect(() => {
+    if (role) loadGoal();
+  }, [role, loadGoal]);
 
   // offer to enable push the first time the app is ever opened on a device
   // — runs once (guarded by the ref, not just the effect deps, since `leads`
@@ -1521,25 +1545,23 @@ function App() {
     if (role) syncPushSubscriptionRole();
   }, [role]);
 
-  // owner-only monthly ritual: every time the app opens (not just once) in
-  // a calendar month whose goal hasn't been confirmed yet, prompt for that
-  // month's take-home goal. Driven by the server's goalMonthConfirmed
-  // (stamped whenever the take-home is saved, from either this prompt or
-  // the regular Income Goal panel) rather than a local "seen" flag, so it
-  // keeps asking on every open — across devices — until an actual number
-  // is set, not just until the prompt has been shown once. Delayed so it
-  // doesn't stack on top of the once-ever push prompt on the rare session
-  // where both would otherwise fire together — the push flow is fully
-  // async (a service-worker subscription lookup) but settles well within
-  // this delay in practice
+  // monthly ritual for every tenant user (admin or PM, each has their own goal now):
+  // every time the app opens (not just once) in a calendar month whose goal hasn't
+  // been confirmed yet, prompt for that month's take-home goal. Driven by the
+  // server's goal.monthConfirmed (stamped whenever the take-home is saved, from
+  // either this prompt or the regular Income Goal panel) rather than a local "seen"
+  // flag, so it keeps asking on every open — across devices — until an actual number
+  // is set, not just until the prompt has been shown once. Delayed so it doesn't
+  // stack on top of the once-ever push prompt on the rare session where both would
+  // otherwise fire together — the push flow is fully async (a service-worker
+  // subscription lookup) but settles well within this delay in practice
   useEffect(() => {
     if (goalPromptCheckedRef.current) return;
-    if (!role || leads === null || !settingsLoaded) return;
-    if (role !== "tenant_admin") return;
+    if (!role || leads === null || !settingsLoaded || !goalLoaded) return;
     goalPromptCheckedRef.current = true;
     if (!settings.popupGoalEnabled) return;
     const monthKey = localMonthKey();
-    if (settings.goalMonthConfirmed === monthKey) return;
+    if (goal.monthConfirmed === monthKey) return;
     // deliberately no cleanup here — `leads` (a dependency) can get a new
     // array reference again shortly after mount, which would re-run this
     // effect; a clearTimeout cleanup would cancel the pending timeout right
@@ -1548,7 +1570,7 @@ function App() {
       if (showPushPromptRef.current) return;
       setShowGoalPrompt(true);
     }, 1200);
-  }, [role, leads, settingsLoaded, settings.goalMonthConfirmed, settings.popupGoalEnabled]);
+  }, [role, leads, settingsLoaded, goalLoaded, goal.monthConfirmed, settings.popupGoalEnabled]);
 
   useEffect(() => {
     showGoalPromptRef.current = showGoalPrompt;
@@ -1884,6 +1906,32 @@ function App() {
       setError("Couldn't assign that job — try again.");
       loadLeads();
     }
+  };
+
+  // check/uncheck one scope-of-work item — admin on any job, or a PM on their own
+  // (server-enforced, see PATCH /leads/:id/scope-of-work)
+  const toggleScopeItem = async (id, itemId, done) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, scopeOfWork: (l.scopeOfWork || []).map((i) => (i.id === itemId ? { ...i, done } : i)) } : l
+      )
+    );
+    try {
+      const updated = await api.toggleScopeOfWorkItem(id, itemId, done);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    } catch {
+      setError("Couldn't update that checklist item — try again.");
+      loadLeads();
+    }
+  };
+
+  // full replace of the checklist item list — admin-only
+  const saveScopeOfWork = async (id, items) => {
+    leadsVersionRef.current++;
+    const updated = await api.replaceScopeOfWork(id, items);
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    return updated;
   };
 
   // separate from editField/api.editLead — the viewer role is allowed to
@@ -2374,6 +2422,7 @@ function App() {
         <DashboardView
           editable={editable}
           role={role}
+          goal={goal}
           settings={settings}
           stats={stats}
           counts={counts}
@@ -2399,7 +2448,10 @@ function App() {
         />
       ) : view === "goals" ? (
         <GoalsView
+          role={role}
+          goal={goal}
           settings={settings}
+          onSaveGoal={saveGoal}
           onSaveSettings={saveSettings}
           myMetrics={allSourcesMetrics}
           wonThisMonth={stats.wonMonth}
@@ -2684,6 +2736,8 @@ function App() {
                   onEditStartDate={editStartDate}
                   onAssignPm={assignPm}
                   pms={users.filter((u) => u.role === "pm" && !u.disabledAt)}
+                  onToggleScopeItem={toggleScopeItem}
+                  onSaveScopeOfWork={saveScopeOfWork}
                   onDelete={deleteLead}
                   editable={editable}
                   role={role}
@@ -2722,7 +2776,7 @@ function App() {
       {showGoalPrompt && (
         <MonthlyGoalPromptModal
           monthLabel={new Date().toLocaleDateString(undefined, { month: "long" })}
-          defaultTakeHome={settings.goalMonthlyTakeHome}
+          defaultTakeHome={goal.monthlyTakeHome}
           onSetGoal={setMonthlyGoalFromPrompt}
           onDismiss={() => setShowGoalPrompt(false)}
         />
@@ -4171,9 +4225,9 @@ function GoalPlanSummary({ plan, wonThisMonth, takeHomeNum }) {
 
 // wraps the editable inputs; used both for first-time setup (no onCancel)
 // and for revising an existing goal from the Goals page (onCancel provided)
-function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, onSaved, onCancel }) {
-  const [takeHomeDraft, setTakeHomeDraft] = useState(settings.goalMonthlyTakeHome ? String(settings.goalMonthlyTakeHome) : "");
-  const [overheadDraft, setOverheadDraft] = useState(settings.goalMonthlyOverhead ? String(settings.goalMonthlyOverhead) : "");
+function IncomeGoalEditor({ role, goal, settings, onSaveGoal, onSaveSettings, myMetrics, wonThisMonth, onSaved, onCancel }) {
+  const [takeHomeDraft, setTakeHomeDraft] = useState(goal.monthlyTakeHome ? String(goal.monthlyTakeHome) : "");
+  const [overheadDraft, setOverheadDraft] = useState(goal.monthlyOverhead ? String(goal.monthlyOverhead) : "");
   const [winRateDraft, setWinRateDraft] = useState(String(settings.goalNationalWinRate));
   const [avgJobDraft, setAvgJobDraft] = useState(String(settings.goalNationalAvgJobValue));
   const [marginDraft, setMarginDraft] = useState(String(settings.goalNationalProfitMargin));
@@ -4181,12 +4235,16 @@ function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, o
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
 
-  const source = settings.goalDataSource;
+  const source = goal.dataSource;
+  // the national-average assumptions are tenant-wide (one set of numbers for the whole
+  // business), so only the tenant admin can edit them here -- a PM sees them read-only
+  // and switches to "My averages" if they want numbers based on their own track record
+  const canEditNational = role === "tenant_admin";
 
   const switchSource = async (next) => {
     if (next === source) return;
     try {
-      await onSaveSettings({ goalDataSource: next });
+      await onSaveGoal({ dataSource: next });
     } catch {
       // best-effort — a failed preference switch just doesn't stick, not
       // worth an error banner over
@@ -4206,22 +4264,21 @@ function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, o
       setErr("Enter a non-negative overhead amount");
       return;
     }
-    const patch = { goalMonthlyTakeHome: takeHomeNum, goalMonthlyOverhead: overheadNum };
-    if (source === "national") {
+    let nationalPatch = null;
+    if (source === "national" && canEditNational) {
       const winRate = parseFloat(winRateDraft);
       const avgJob = parseFloat(avgJobDraft);
       const margin = parseFloat(marginDraft);
       if (isNaN(winRate) || winRate <= 0 || winRate > 100) return setErr("Win rate must be between 0 and 100");
       if (isNaN(avgJob) || avgJob <= 0) return setErr("Average job value must be greater than 0");
       if (isNaN(margin) || margin <= 0 || margin > 100) return setErr("Profit margin must be between 0 and 100");
-      patch.goalNationalWinRate = winRate;
-      patch.goalNationalAvgJobValue = avgJob;
-      patch.goalNationalProfitMargin = margin;
+      nationalPatch = { goalNationalWinRate: winRate, goalNationalAvgJobValue: avgJob, goalNationalProfitMargin: margin };
     }
     setBusy(true);
     setErr("");
     try {
-      await onSaveSettings(patch);
+      await onSaveGoal({ monthlyTakeHome: takeHomeNum, monthlyOverhead: overheadNum });
+      if (nationalPatch) await onSaveSettings(nationalPatch);
       setSaved(true);
       setTimeout(() => {
         setSaved(false);
@@ -4303,26 +4360,54 @@ function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, o
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <label style={{ ...modalLabel, marginTop: 0 }}>Win rate (%)</label>
-            <input type="number" inputMode="decimal" value={winRateDraft} onChange={(e) => setWinRateDraft(e.target.value)} style={modalInput} />
+            <input
+              type="number"
+              inputMode="decimal"
+              value={winRateDraft}
+              onChange={(e) => setWinRateDraft(e.target.value)}
+              disabled={!canEditNational}
+              style={{ ...modalInput, opacity: canEditNational ? 1 : 0.7 }}
+            />
           </div>
           <div>
             <label style={{ ...modalLabel, marginTop: 0 }}>Average job value ($)</label>
-            <input type="number" inputMode="decimal" value={avgJobDraft} onChange={(e) => setAvgJobDraft(e.target.value)} style={modalInput} />
+            <input
+              type="number"
+              inputMode="decimal"
+              value={avgJobDraft}
+              onChange={(e) => setAvgJobDraft(e.target.value)}
+              disabled={!canEditNational}
+              style={{ ...modalInput, opacity: canEditNational ? 1 : 0.7 }}
+            />
           </div>
           <div>
             <label style={{ ...modalLabel, marginTop: 0 }}>Profit margin per job (%)</label>
-            <input type="number" inputMode="decimal" value={marginDraft} onChange={(e) => setMarginDraft(e.target.value)} style={modalInput} />
+            <input
+              type="number"
+              inputMode="decimal"
+              value={marginDraft}
+              onChange={(e) => setMarginDraft(e.target.value)}
+              disabled={!canEditNational}
+              style={{ ...modalInput, opacity: canEditNational ? 1 : 0.7 }}
+            />
             <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
               What's left from a typical job after materials, labor, and day-to-day job costs — not your monthly
               overhead above, that's already handled separately.
             </div>
           </div>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
-            Based on published industry benchmarks — ~25% average close rate for renovation contractors, ~$9,500
-            national average roofing job as a stand-in job value, ~24% average gross profit margin for construction
-            businesses (remodeling/specialty trades often run higher — 30–40%+). Edit these to fit your trade and
-            region.
-          </div>
+          {canEditNational ? (
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
+              Based on published industry benchmarks — ~25% average close rate for renovation contractors, ~$9,500
+              national average roofing job as a stand-in job value, ~24% average gross profit margin for construction
+              businesses (remodeling/specialty trades often run higher — 30–40%+). Edit these to fit your trade and
+              region.
+            </div>
+          ) : (
+            <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
+              Set by your admin for the whole team, in Settings. Switch to "My averages" to use your own numbers
+              instead.
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -4382,13 +4467,13 @@ function IncomeGoalEditor({ settings, onSaveSettings, myMetrics, wonThisMonth, o
 // wraps the editor: shows a read-only status view (live meter + breakdown)
 // by default once a goal exists — the main thing to see at a glance — and
 // only reveals the adjustable inputs when "Edit goal" is tapped
-function GoalsView({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
-  const { plan, missing, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
+function GoalsView({ role, goal, settings, onSaveGoal, onSaveSettings, myMetrics, wonThisMonth }) {
+  const { plan, missing, takeHomeNum } = computeGoalPlanFromSettings(goal, settings, myMetrics);
   const hasGoal = takeHomeNum > 0;
   const [editing, setEditing] = useState(!hasGoal);
 
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
       {hasGoal && !editing ? (
         <div style={lookbackPanel}>
           {plan ? (
@@ -4408,7 +4493,10 @@ function GoalsView({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
         </div>
       ) : (
         <IncomeGoalEditor
+          role={role}
+          goal={goal}
           settings={settings}
+          onSaveGoal={onSaveGoal}
           onSaveSettings={onSaveSettings}
           myMetrics={myMetrics}
           wonThisMonth={wonThisMonth}
@@ -4416,6 +4504,64 @@ function GoalsView({ settings, onSaveSettings, myMetrics, wonThisMonth }) {
           onCancel={hasGoal ? () => setEditing(false) : null}
         />
       )}
+      {role === "tenant_admin" && <TeamGoalsSection />}
+    </div>
+  );
+}
+
+// Tenant-admin-only rollup: every PM's (and the admin's own) monthly take-home goal
+// and whether they've confirmed it for the current month.
+function TeamGoalsSection() {
+  const [teamGoals, setTeamGoals] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api
+      .listGoals()
+      .then(setTeamGoals)
+      .catch(() => setErr("Couldn't load the team's goals"));
+  }, []);
+
+  const monthKey = localMonthKey();
+
+  return (
+    <div style={lookbackPanel}>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 10 }}>
+        Team goals this month
+      </div>
+      {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13 }}>{err}</div>}
+      {!err && teamGoals === null && (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>Loading…</div>
+      )}
+      {teamGoals && teamGoals.length === 0 && (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No team members yet.</div>
+      )}
+      {teamGoals &&
+        teamGoals.map((g) => (
+          <div
+            key={g.userId}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              padding: "8px 0",
+              borderBottom: `1px solid ${COLORS.border}`,
+            }}
+          >
+            <div>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                {g.userName} <span style={{ fontWeight: 400, color: COLORS.muted, fontSize: 12 }}>({g.userRole === "tenant_admin" ? "Admin" : "PM"})</span>
+              </div>
+              <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>
+                {g.monthConfirmed === monthKey ? "Confirmed for this month" : "Not set for this month yet"}
+              </div>
+            </div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>
+              {g.monthlyTakeHome ? fmtCurrency(g.monthlyTakeHome) : "—"}
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
@@ -4523,6 +4669,7 @@ function DashboardTile({ onClick, icon, title, children, accent, big }) {
 function DashboardView({
   editable,
   role,
+  goal,
   settings,
   stats,
   counts,
@@ -4536,15 +4683,14 @@ function DashboardView({
   onOpenCalendar,
   onOpenLead,
 }) {
-  const { plan, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
+  const { plan, takeHomeNum } = computeGoalPlanFromSettings(goal, settings, myMetrics);
   const hasGoal = takeHomeNum > 0;
   const pct = plan && plan.requiredRevenuePerMonth > 0 ? (stats.wonMonth / plan.requiredRevenuePerMonth) * 100 : 0;
   const activeLeadsCount = STAGES.reduce((sum, s) => sum + (counts[s.key] || 0), 0);
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      {editable && (
-        <DashboardTile onClick={onOpenGoals} icon={<Target size={16} color={COLORS.accent} />} title="Goals" big>
+      <DashboardTile onClick={onOpenGoals} icon={<Target size={16} color={COLORS.accent} />} title="Goals" big>
           {hasGoal && plan ? (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, flexWrap: "wrap", gap: 4 }}>
@@ -4583,7 +4729,6 @@ function DashboardView({
             </div>
           )}
         </DashboardTile>
-      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <DashboardTile onClick={onOpenBoard} icon={<Grid size={15} color={COLORS.info} />} title="Job Board" accent={COLORS.info}>
@@ -7047,6 +7192,145 @@ function JobManagerModal({ lead, pms, onPick, onSkip }) {
   );
 }
 
+// Checklist for a won job -- admin sets up the item list (full replace), and whoever's
+// running the job (admin, or the assigned PM) checks items off as the crew works
+// through them. The API existed before this rearchitecture but was never wired into
+// the UI; this is that missing UI, adapted to the new admin/PM split.
+function ScopeOfWorkSection({ lead, editable, onToggle, onSave }) {
+  const [showEditor, setShowEditor] = useState(false);
+  const items = lead.scopeOfWork || [];
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>
+          Scope of work{items.length ? ` (${items.filter((i) => i.done).length}/${items.length})` : ""}
+        </span>
+        {editable && (
+          <button
+            onClick={() => setShowEditor(true)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: COLORS.accent,
+              fontFamily: FONT_BODY,
+              fontWeight: 600,
+              fontSize: 12.5,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            {items.length ? "Edit" : "Add items"}
+          </button>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No checklist set up yet.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {items.map((item) => (
+            <label key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={!!item.done} onChange={(e) => onToggle(item.id, e.target.checked)} />
+              <span
+                style={{
+                  fontFamily: FONT_BODY,
+                  fontSize: 13.5,
+                  color: item.done ? COLORS.muted : COLORS.ink,
+                  textDecoration: item.done ? "line-through" : "none",
+                }}
+              >
+                {item.text}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {showEditor && (
+        <ScopeOfWorkEditorModal
+          items={items}
+          onClose={() => setShowEditor(false)}
+          onSave={async (nextItems) => {
+            await onSave(nextItems);
+            setShowEditor(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ScopeOfWorkEditorModal({ items, onClose, onSave }) {
+  useModalBackClose(onClose);
+  const [draftItems, setDraftItems] = useState(() => items.map((i) => ({ ...i })));
+  const [newText, setNewText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const addItem = () => {
+    if (!newText.trim()) return;
+    setDraftItems((prev) => [...prev, { id: `new-${Date.now()}-${prev.length}`, text: newText.trim(), done: false }]);
+    setNewText("");
+  };
+  const removeItem = (id) => setDraftItems((prev) => prev.filter((i) => i.id !== id));
+
+  const submit = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSave(draftItems);
+    } catch (e) {
+      setErr(e.message || "Couldn't save the checklist");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Scope of work</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12, maxHeight: 260, overflowY: "auto" }}>
+          {draftItems.length === 0 && (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No items yet — add some below.</div>
+          )}
+          {draftItems.map((item) => (
+            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ flex: 1, fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink }}>{item.text}</span>
+              <button onClick={() => removeItem(item.id)} style={iconBtnGhost} aria-label="Remove item">
+                <X size={16} color={COLORS.muted} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={newText}
+            onChange={(e) => setNewText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addItem()}
+            placeholder="e.g. Tear off old shingles"
+            style={{ ...modalInput, flex: 1 }}
+          />
+          <button onClick={addItem} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Add item">
+            <Plus size={18} color="#fff" />
+          </button>
+        </div>
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <button
+          onClick={submit}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy ? 0.6 : 1 }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LeadTicket({
   lead,
   onMove,
@@ -7054,6 +7338,8 @@ function LeadTicket({
   onEditStartDate,
   onAssignPm,
   pms,
+  onToggleScopeItem,
+  onSaveScopeOfWork,
   onDelete,
   editable,
   role,
@@ -7893,6 +8179,15 @@ function LeadTicket({
               </>
             )}
           </div>
+        )}
+
+        {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
+          <ScopeOfWorkSection
+            lead={lead}
+            editable={editable}
+            onToggle={(itemId, done) => onToggleScopeItem(lead.id, itemId, done)}
+            onSave={(items) => onSaveScopeOfWork(lead.id, items)}
+          />
         )}
 
         {/* expected work days — how long this specific job is projected to
