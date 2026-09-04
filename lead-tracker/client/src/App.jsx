@@ -1081,22 +1081,6 @@ function fmtRelativeTime(iso) {
   return fmtRangeDate(new Date(iso));
 }
 
-const BACKUP_TIERS = [
-  { key: "5min", label: "Every 5 minutes" },
-  { key: "hourly", label: "Hourly" },
-  { key: "daily", label: "Daily" },
-  { key: "weekly", label: "Weekly" },
-];
-
-function fmtBackupDate(iso) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function fmtCurrency(n) {
   if (!n && n !== 0) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -1182,7 +1166,7 @@ class ErrorBoundary extends React.Component {
 // header hamburger menu — houses Settings (owner-only) and Account, so the
 // primary header actions (Home/History/notifications) can stay prominent
 // without crowding in two more icon buttons
-function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
+function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenTeam, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -1217,6 +1201,17 @@ function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, b
                 Settings
               </button>
             )}
+            {editable && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenTeam();
+                }}
+                style={moreMenuItem}
+              >
+                Team
+              </button>
+            )}
             <button
               onClick={() => {
                 setOpen(false);
@@ -1235,7 +1230,10 @@ function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, b
 
 function App() {
   const [authChecked, setAuthChecked] = useState(false);
-  const [role, setRole] = useState(null); // null = not signed in on this device
+  const [role, setRole] = useState(null); // null = not signed in on this device; else 'tenant_admin' | 'pm' | 'platform_admin'
+  const [userId, setUserId] = useState(null); // effective (impersonated, if any) user id
+  const [viewingAs, setViewingAs] = useState(null); // the real actor {userId, tenantId, role} while impersonating someone, else null
+  const [users, setUsers] = useState([]); // tenant's users (PMs + admins) -- fetched by a tenant_admin, used for the PM picker
   // per-device, not part of the shared settings — "google" | "apple", read
   // from localStorage once at mount and updated in state alongside it so an
   // address link re-renders with the new href the instant it changes
@@ -1251,6 +1249,7 @@ function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [showTeamModal, setShowTeamModal] = useState(false);
   const [showLeadSearch, setShowLeadSearch] = useState(false);
   const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts' | 'calendar'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
@@ -1278,7 +1277,6 @@ function App() {
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
-  const [showBackupsModal, setShowBackupsModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [showGoalPrompt, setShowGoalPrompt] = useState(false);
@@ -1296,6 +1294,10 @@ function App() {
   // land after the edit's own confirmed update and silently overwrite it
   // with pre-edit data
   const leadsVersionRef = useRef(0);
+  const leadsRef = useRef(null); // mirrors `leads` synchronously, for loadLeads' staleness check below
+  useEffect(() => {
+    leadsRef.current = leads;
+  }, [leads]);
   const warrantyVersionRef = useRef(0);
   const lastLeadsJsonRef = useRef("");
   const lastWarrantyJsonRef = useRef("");
@@ -1307,7 +1309,9 @@ function App() {
   const missingInfoAlertShownRef = useRef(false);
   const showPushPromptRef = useRef(false);
   const showGoalPromptRef = useRef(false);
-  const editable = role === "owner";
+  const editable = role === "tenant_admin";
+  const isPm = role === "pm";
+  const isPlatformAdmin = role === "platform_admin";
 
   // installed PWAs get suspended in the background instead of reloading, so
   // a device can sit on a build from days ago until it's force-quit — check
@@ -1346,18 +1350,24 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const me = await api.me();
-        setRole(me.role);
-      } catch {
-        setRole(null);
-      } finally {
-        setAuthChecked(true);
-      }
-    })();
+  const refreshMe = useCallback(async () => {
+    try {
+      const me = await api.me();
+      setRole(me.effective.role);
+      setUserId(me.effective.userId);
+      setViewingAs(me.viewingAs ? me.actor : null);
+      return me;
+    } catch {
+      setRole(null);
+      setUserId(null);
+      setViewingAs(null);
+      return null;
+    }
   }, []);
+
+  useEffect(() => {
+    refreshMe().finally(() => setAuthChecked(true));
+  }, [refreshMe]);
 
   const loadLeads = useCallback(async () => {
     const version = leadsVersionRef.current;
@@ -1368,9 +1378,16 @@ function App() {
       // changed — skip the state update in that case so it doesn't hand
       // every list/card a fresh array/object identity and force a
       // needless re-render (which is what was making the app visibly
-      // "jerk" every 30s while someone was mid-scroll or mid-edit)
+      // "jerk" every 30s while someone was mid-scroll or mid-edit).
+      // leadsRef.current === null overrides that skip: switching identity
+      // (login, logout, view-as start/stop) resets leads to null to show a
+      // loading state, and if the freshly-fetched data happens to be
+      // byte-identical to whatever was cached from before the reset (e.g.
+      // an admin viewing-as a PM who's assigned every one of the same
+      // leads), the "nothing changed" skip would otherwise leave the app
+      // stuck on "Loading board…" forever since setLeads would never fire.
       const json = JSON.stringify(data);
-      if (json !== lastLeadsJsonRef.current) {
+      if (json !== lastLeadsJsonRef.current || leadsRef.current === null) {
         lastLeadsJsonRef.current = json;
         setLeads(data);
       }
@@ -1415,7 +1432,7 @@ function App() {
   // owner-only address book — never fetched for a viewer session, so it
   // never even reaches a device signed in as the project manager
   const loadContacts = useCallback(async () => {
-    if (role !== "owner") return;
+    if (role !== "tenant_admin") return;
     try {
       const data = await api.listContacts();
       setContacts(data);
@@ -1427,6 +1444,21 @@ function App() {
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  // tenant-admin-only: this tenant's users (PMs + any other admins) -- used for the
+  // PM picker (JobManagerModal, the lead-card assignment field) and Account Settings
+  const loadUsers = useCallback(async () => {
+    if (role !== "tenant_admin") return;
+    try {
+      setUsers(await api.listUsers());
+    } catch {
+      // keep whatever was already loaded on a transient failure
+    }
+  }, [role]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -1503,7 +1535,7 @@ function App() {
   useEffect(() => {
     if (goalPromptCheckedRef.current) return;
     if (!role || leads === null || !settingsLoaded) return;
-    if (role !== "owner") return;
+    if (role !== "tenant_admin") return;
     goalPromptCheckedRef.current = true;
     if (!settings.popupGoalEnabled) return;
     const monthKey = localMonthKey();
@@ -1571,7 +1603,7 @@ function App() {
   // missing them — a plain "Close" popup, no other action
   const maybeShowMissingInfoAlert = useCallback(() => {
     if (missingInfoAlertShownRef.current) return;
-    if (role !== "owner" || leads === null || !settingsLoaded) return;
+    if (role !== "tenant_admin" || leads === null || !settingsLoaded) return;
     missingInfoAlertShownRef.current = true;
     if (!settings.popupMissingInfoEnabled) return;
     const missing = leads.filter(
@@ -1699,9 +1731,9 @@ function App() {
     return () => clearTimeout(t);
   }, [highlightedLeadId]);
 
-  const handleLogin = async (passcode) => {
-    const res = await api.login(passcode); // throws on a bad passcode
-    setRole(res.role);
+  const handleLogin = async (email, password) => {
+    await api.login(email, password); // throws on a bad email/password
+    await refreshMe();
     setShowAccountModal(false);
   };
 
@@ -1712,7 +1744,28 @@ function App() {
       // clearing local state below still logs this device out either way
     }
     setRole(null);
+    setUserId(null);
+    setViewingAs(null);
     leadsVersionRef.current++;
+    setLeads(null);
+    setShowAccountModal(false);
+  };
+
+  // tenant admin viewing as one of their PMs, or vice versa stopping
+  const handleViewAs = async (targetUserId) => {
+    await api.viewAsStart(targetUserId);
+    await refreshMe();
+    leadsVersionRef.current++;
+    warrantyVersionRef.current++;
+    setLeads(null);
+    setShowAccountModal(false);
+  };
+
+  const handleStopViewAs = async () => {
+    await api.viewAsStop();
+    await refreshMe();
+    leadsVersionRef.current++;
+    warrantyVersionRef.current++;
     setLeads(null);
     setShowAccountModal(false);
   };
@@ -1745,28 +1798,26 @@ function App() {
       const updated = await api.moveLead(id, stage, date, revert, workDays);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setError("");
-      // just marked won — prompt for who's managing the job (skippable);
-      // also what decides whether Dave gets the "Lead won!" push, see
-      // saveJobManager below
-      if (!revert && stage === "won") setManagerPromptLead(updated);
+      // just marked won — prompt the admin for whether to push it straight to a PM
+      // (skippable, in which case it stays owned by the admin)
+      if (!revert && stage === "won" && editable) setManagerPromptLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
       loadLeads();
     }
   };
 
-  // resolves the job-manager prompt, whether a name was actually picked or
-  // it was skipped
-  const saveJobManager = async (id, manager) => {
+  // resolves the job-assignment prompt, whether a PM was actually picked or it was skipped
+  const saveJobManager = async (id, pmId) => {
     setManagerPromptLead(null);
-    if (!manager) return;
+    if (!pmId) return;
     leadsVersionRef.current++;
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, manager } : l)));
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, assignedPmId: pmId } : l)));
     try {
-      const updated = await api.editLead(id, { manager });
+      const updated = await api.assignLead(id, pmId);
       setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     } catch {
-      setError("Couldn't save the job manager — try again.");
+      setError("Couldn't assign that job — try again.");
       loadLeads();
     }
   };
@@ -1815,6 +1866,22 @@ function App() {
       setError("");
     } catch {
       setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
+  // separate from editField/api.editLead — pushing/retrieving/reassigning a job to a
+  // PM goes through its own endpoint (server-enforced admin-only, and it's the one
+  // action that also fires the "assigned to you" push), not the general field patch
+  const assignPm = async (id, pmId) => {
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, assignedPmId: pmId } : l)));
+    try {
+      const updated = await api.assignLead(id, pmId);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't assign that job — try again.");
       loadLeads();
     }
   };
@@ -2099,6 +2166,10 @@ function App() {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
+  if (isPlatformAdmin) {
+    return <PlatformAdminApp onLogout={handleLogout} />;
+  }
+
   if (leads === null) {
     return (
       <div style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
@@ -2120,6 +2191,40 @@ function App() {
           * { transition: none !important; animation: none !important; }
         }
       `}</style>
+
+      {viewingAs && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            padding: "8px 14px",
+            background: COLORS.accent,
+            color: "#fff",
+          }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600 }}>
+            Viewing as {role === "tenant_admin" ? "Admin" : "PM"}
+          </span>
+          <button
+            onClick={handleStopViewAs}
+            style={{
+              background: "rgba(255,255,255,0.2)",
+              border: "none",
+              borderRadius: 6,
+              color: "#fff",
+              fontFamily: FONT_BODY,
+              fontSize: 12.5,
+              fontWeight: 600,
+              padding: "3px 10px",
+              cursor: "pointer",
+            }}
+          >
+            Stop
+          </button>
+        </div>
+      )}
 
       {updateAvailable && (
         <button
@@ -2155,6 +2260,7 @@ function App() {
             editable={editable}
             onOpenSettings={() => setShowSettingsModal(true)}
             onOpenContacts={() => setView("contacts")}
+            onOpenTeam={() => setShowTeamModal(true)}
             onOpenAccount={() => setShowAccountModal(true)}
             btnStyle={headerCornerBtn}
             iconColor={COLORS.heroRed}
@@ -2286,6 +2392,7 @@ function App() {
           leads={leads}
           allMetrics={allSourcesMetrics}
           role={role}
+          userId={userId}
           warrantyRequests={warrantyRequests}
           onOpenLead={navigateToLead}
           onOpenWarranty={openWarrantyFromCalendar}
@@ -2575,6 +2682,8 @@ function App() {
                   onMove={moveLead}
                   onEditField={editField}
                   onEditStartDate={editStartDate}
+                  onAssignPm={assignPm}
+                  pms={users.filter((u) => u.role === "pm" && !u.disabledAt)}
                   onDelete={deleteLead}
                   editable={editable}
                   role={role}
@@ -2650,20 +2759,25 @@ function App() {
       {managerPromptLead && (
         <JobManagerModal
           lead={managerPromptLead}
-          onPick={(manager) => saveJobManager(managerPromptLead.id, manager)}
+          pms={users.filter((u) => u.role === "pm" && !u.disabledAt)}
+          onPick={(pmId) => saveJobManager(managerPromptLead.id, pmId)}
           onSkip={() => saveJobManager(managerPromptLead.id, null)}
         />
       )}
       {showAccountModal && (
         <AccountModal
           role={role}
-          onSwitch={handleLogin}
+          users={users}
+          viewingAs={viewingAs}
+          onViewAs={handleViewAs}
+          onStopViewAs={handleStopViewAs}
           onLogout={handleLogout}
           onClose={() => setShowAccountModal(false)}
           mapsPreference={mapsPreference}
           onSetMapsPreference={setMapsPreference}
         />
       )}
+      {showTeamModal && <TeamModal users={users} onUsersChanged={loadUsers} onClose={() => setShowTeamModal(false)} />}
       {showLeadSearch && (
         <LeadSearchModal
           leads={leads || []}
@@ -2675,24 +2789,7 @@ function App() {
         />
       )}
       {showSettingsModal && (
-        <SettingsModal
-          settings={settings}
-          onSave={saveSettings}
-          onClose={() => setShowSettingsModal(false)}
-          onOpenBackups={() => {
-            setShowSettingsModal(false);
-            setShowBackupsModal(true);
-          }}
-        />
-      )}
-      {showBackupsModal && (
-        <BackupsModal
-          onClose={() => setShowBackupsModal(false)}
-          onRestored={() => {
-            setShowBackupsModal(false);
-            loadLeads();
-          }}
-        />
+        <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettingsModal(false)} />
       )}
       {reportLead && (
         <FinalReportModal
@@ -2724,19 +2821,201 @@ function App() {
   );
 }
 
+// Platform-admin's whole app: onboard/manage Lead Hammer client accounts (tenants).
+// Deliberately separate from everything above -- a platform admin never touches a
+// tenant's leads/contacts/warranty/goals (the server enforces this at the database
+// layer regardless), so there's no shared UI with the tenant_admin/pm board.
+function PlatformAdminApp({ onLogout }) {
+  const [tenants, setTenants] = useState(null);
+  const [error, setError] = useState("");
+  const [showNew, setShowNew] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setTenants(await api.listTenants());
+    } catch {
+      setError("Couldn't load tenants.");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const toggleSuspend = async (t) => {
+    try {
+      if (t.status === "suspended") await api.reactivateTenant(t.id);
+      else await api.suspendTenant(t.id);
+      load();
+    } catch {
+      setError("Couldn't update that tenant — try again.");
+    }
+  };
+
+  return (
+    <div style={shell}>
+      <div style={header}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 19, color: COLORS.surface }}>
+            Lead Hammer — Platform Admin
+          </div>
+          <button
+            onClick={onLogout}
+            style={{ background: "transparent", border: "none", color: COLORS.surface, fontFamily: FONT_BODY, fontSize: 13, cursor: "pointer" }}
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+      <main style={cardsWrap}>
+        <button onClick={() => setShowNew(true)} style={{ ...addBtn, alignSelf: "flex-start" }}>
+          + Onboard a new client
+        </button>
+        {error && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13 }}>{error}</div>}
+        {tenants === null ? (
+          <div style={{ fontFamily: FONT_UTIL, color: COLORS.muted, fontSize: 13 }}>Loading…</div>
+        ) : tenants.length === 0 ? (
+          <div style={emptyState}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}>
+              No clients yet
+            </div>
+            <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+              Onboard the first one to get them a Lead Hammer account.
+            </div>
+          </div>
+        ) : (
+          tenants.map((t) => (
+            <div
+              key={t.id}
+              style={{
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 10,
+                padding: 14,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{t.name}</div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>
+                  {t.slug} · {t.timezone} · {t.status}
+                </div>
+              </div>
+              <button
+                onClick={() => toggleSuspend(t)}
+                style={{
+                  ...iconBtnGhost,
+                  width: "auto",
+                  padding: "6px 12px",
+                  fontFamily: FONT_BODY,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: t.status === "suspended" ? COLORS.accent : COLORS.rust,
+                }}
+              >
+                {t.status === "suspended" ? "Reactivate" : "Suspend"}
+              </button>
+            </div>
+          ))
+        )}
+      </main>
+      {showNew && <NewTenantModal onClose={() => setShowNew(false)} onCreated={load} />}
+    </div>
+  );
+}
+
+function NewTenantModal({ onClose, onCreated }) {
+  const [tenantName, setTenantName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [timezone, setTimezone] = useState("America/Denver");
+  const [adminName, setAdminName] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useModalBackClose(onClose);
+
+  const slugify = (name) =>
+    name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.createTenant({
+        tenantName: tenantName.trim(),
+        slug: slug.trim() || slugify(tenantName),
+        timezone,
+        adminName: adminName.trim(),
+        adminEmail: adminEmail.trim(),
+        password,
+      });
+      onCreated();
+      onClose();
+    } catch (e) {
+      setErr(e.message || "Couldn't create that client");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const valid = tenantName.trim() && adminName.trim() && adminEmail.trim() && password.length >= 8;
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Onboard a new client
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <label style={modalLabel}>Company name</label>
+        <input value={tenantName} onChange={(e) => setTenantName(e.target.value)} style={modalInput} placeholder="Acme Exteriors" />
+        <label style={{ ...modalLabel, marginTop: 10 }}>URL slug (optional — auto-filled from the name)</label>
+        <input value={slug} onChange={(e) => setSlug(e.target.value)} style={modalInput} placeholder={slugify(tenantName) || "acme-exteriors"} />
+        <label style={{ ...modalLabel, marginTop: 10 }}>Timezone</label>
+        <input value={timezone} onChange={(e) => setTimezone(e.target.value)} style={modalInput} placeholder="America/Denver" />
+        <div style={{ height: 1, background: COLORS.border, margin: "14px 0" }} />
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginBottom: 6 }}>Their first admin account</div>
+        <label style={modalLabel}>Name</label>
+        <input value={adminName} onChange={(e) => setAdminName(e.target.value)} style={modalInput} />
+        <label style={{ ...modalLabel, marginTop: 10 }}>Email</label>
+        <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} style={modalInput} />
+        <label style={{ ...modalLabel, marginTop: 10 }}>Temporary password (8+ characters)</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={modalInput} />
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <button
+          onClick={submit}
+          disabled={busy || !valid}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !valid ? 0.6 : 1 }}
+        >
+          {busy ? "Creating…" : "Create client"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ onLogin }) {
-  const [passcode, setPasscode] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (!passcode || busy) return;
+    if (!email || !password || busy) return;
     setBusy(true);
     setErr("");
     try {
-      await onLogin(passcode);
+      await onLogin(email, password);
     } catch (e) {
-      setErr(e.message || "Incorrect passcode");
+      setErr(e.message || "Incorrect email or password");
     } finally {
       setBusy(false);
     }
@@ -2755,23 +3034,34 @@ function LoginScreen({ onLogin }) {
           alt="Lead Hammer"
           style={{ width: "100%", maxWidth: 260, display: "block", margin: "0 auto 20px", borderRadius: 12 }}
         />
-        <label style={modalLabel}>Passcode</label>
+        <label style={modalLabel}>Email</label>
         <input
-          type="password"
+          type="email"
           autoFocus
-          value={passcode}
-          onChange={(e) => setPasscode(e.target.value)}
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           style={modalInput}
-          placeholder="Enter your passcode"
+          placeholder="you@company.com"
+        />
+        <label style={{ ...modalLabel, marginTop: 12 }}>Password</label>
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          style={modalInput}
+          placeholder="Enter your password"
         />
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
         <button
           onClick={submit}
-          disabled={busy || !passcode}
-          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !passcode ? 0.6 : 1 }}
+          disabled={busy || !email || !password}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, opacity: busy || !email || !password ? 0.6 : 1 }}
         >
-          {busy ? "Checking…" : "Enter"}
+          {busy ? "Signing in…" : "Sign in"}
         </button>
       </div>
     </div>
@@ -3365,11 +3655,11 @@ function MissingInfoAlertModal({ leads, onClose }) {
   );
 }
 
-function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSetMapsPreference }) {
+function AccountModal({ role, users, viewingAs, onViewAs, onStopViewAs, onLogout, onClose, mapsPreference, onSetMapsPreference }) {
   useModalBackClose(onClose);
-  const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const pms = (users || []).filter((u) => u.role === "pm" && !u.disabledAt);
   const [pushStatus, setPushStatus] = useState("checking"); // checking | unsupported | enabled | disabled
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState("");
@@ -3402,14 +3692,27 @@ function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSet
     }
   };
 
-  const submit = async () => {
-    if (!passcode || busy) return;
+  const startViewAs = async (userId) => {
+    if (busy) return;
     setBusy(true);
     setErr("");
     try {
-      await onSwitch(passcode);
+      await onViewAs(userId);
     } catch (e) {
-      setErr(e.message || "Incorrect passcode");
+      setErr(e.message || "Couldn't view as that PM");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopViewAs = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onStopViewAs();
+    } catch (e) {
+      setErr(e.message || "Couldn't stop viewing as");
     } finally {
       setBusy(false);
     }
@@ -3425,7 +3728,7 @@ function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSet
           </button>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          Signed in as <strong style={{ color: COLORS.ink }}>{role === "owner" ? "Editor" : "Viewer"}</strong> on
+          Signed in as <strong style={{ color: COLORS.ink }}>{role === "tenant_admin" ? "Admin" : "PM"}</strong> on
           this device.
         </div>
 
@@ -3485,23 +3788,51 @@ function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSet
           ))}
         </div>
 
-        <label style={modalLabel}>Switch access with a different passcode</label>
-        <input
-          type="password"
-          value={passcode}
-          onChange={(e) => setPasscode(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          style={modalInput}
-          placeholder="Enter passcode"
-        />
+        {viewingAs && (
+          <div
+            style={{
+              marginBottom: 4,
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: `${COLORS.accent}1a`,
+              border: `1px solid ${COLORS.accent}`,
+            }}
+          >
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.ink, marginBottom: 8 }}>
+              You're viewing this app as another user, signed in as{" "}
+              <strong>{viewingAs.role === "tenant_admin" ? "Admin" : "PM"}</strong>.
+            </div>
+            <button onClick={stopViewAs} disabled={busy} style={{ ...addBtn, width: "100%", justifyContent: "center" }}>
+              Stop viewing as
+            </button>
+          </div>
+        )}
+        {role === "tenant_admin" && !viewingAs && (
+          <>
+            <label style={modalLabel}>View the app as one of your PMs</label>
+            {pms.length === 0 ? (
+              <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+                Add a PM in Account Settings first.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {pms.map((pm) => (
+                  <button
+                    key={pm.id}
+                    onClick={() => startViewAs(pm.id)}
+                    disabled={busy}
+                    style={{ ...roleOption, justifyContent: "flex-start", cursor: "pointer" }}
+                  >
+                    <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                      {pm.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
-        <button
-          onClick={submit}
-          disabled={busy || !passcode}
-          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 12, opacity: busy || !passcode ? 0.6 : 1 }}
-        >
-          Switch
-        </button>
         <button
           onClick={onLogout}
           style={{ ...roleOption, marginTop: 16, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
@@ -3509,6 +3840,176 @@ function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSet
           <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
             Log out on this device
           </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Tenant-admin-only account settings: add a PM (or a second admin), disable/re-enable
+// one, reset a password. This is the "add a user, like I have with a PM" screen.
+function TeamModal({ users, onUsersChanged, onClose }) {
+  useModalBackClose(onClose);
+  const [showAdd, setShowAdd] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState("");
+
+  const toggleDisabled = async (u) => {
+    setBusyId(u.id);
+    setErr("");
+    try {
+      if (u.disabledAt) await api.enableUser(u.id);
+      else await api.disableUser(u.id);
+      onUsersChanged();
+    } catch (e) {
+      setErr(e.message || "Couldn't update that user");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Team</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
+          Add PMs to sell and manage their own jobs, or another admin. Each person gets their own login.
+        </div>
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {users.length === 0 && (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>No team members yet.</div>
+          )}
+          {users.map((u) => (
+            <div
+              key={u.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "8px 0",
+                borderBottom: `1px solid ${COLORS.border}`,
+                opacity: u.disabledAt ? 0.55 : 1,
+              }}
+            >
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                  {u.name} <span style={{ fontWeight: 400, color: COLORS.muted, fontSize: 12 }}>({u.role === "tenant_admin" ? "Admin" : "PM"})</span>
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>{u.email}</div>
+              </div>
+              <button
+                onClick={() => toggleDisabled(u)}
+                disabled={busyId === u.id}
+                style={{
+                  ...iconBtnGhost,
+                  width: "auto",
+                  padding: "6px 12px",
+                  fontFamily: FONT_BODY,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: u.disabledAt ? COLORS.accent : COLORS.rust,
+                }}
+              >
+                {u.disabledAt ? "Re-enable" : "Disable"}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {showAdd ? (
+          <AddUserForm
+            onDone={() => {
+              setShowAdd(false);
+              onUsersChanged();
+            }}
+            onCancel={() => setShowAdd(false)}
+          />
+        ) : (
+          <button onClick={() => setShowAdd(true)} style={{ ...addBtn, width: "100%", justifyContent: "center" }}>
+            + Add a user
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddUserForm({ onDone, onCancel }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("pm");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const valid = name.trim() && email.trim() && password.length >= 8;
+
+  const submit = async () => {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.addUser({ name: name.trim(), email: email.trim(), password, role });
+      onDone();
+    } catch (e) {
+      setErr(e.message || "Couldn't add that user");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {[
+          { key: "pm", label: "PM" },
+          { key: "tenant_admin", label: "Admin" },
+        ].map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => setRole(opt.key)}
+            style={{
+              ...roleOption,
+              flex: 1,
+              justifyContent: "center",
+              borderColor: role === opt.key ? COLORS.accent : COLORS.border,
+              background: role === opt.key ? `${COLORS.accent}1a` : COLORS.surfaceMuted,
+              cursor: "pointer",
+            }}
+          >
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 13.5 }}>{opt.label}</span>
+          </button>
+        ))}
+      </div>
+      <label style={modalLabel}>Name</label>
+      <input value={name} onChange={(e) => setName(e.target.value)} style={modalInput} />
+      <label style={{ ...modalLabel, marginTop: 10 }}>Email</label>
+      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={modalInput} />
+      <label style={{ ...modalLabel, marginTop: 10 }}>Temporary password (8+ characters)</label>
+      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={modalInput} />
+      {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, flex: 1, justifyContent: "center", cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+        <button
+          onClick={submit}
+          disabled={busy || !valid}
+          style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: busy || !valid ? 0.6 : 1 }}
+        >
+          {busy ? "Adding…" : "Add"}
         </button>
       </div>
     </div>
@@ -3536,10 +4037,7 @@ function ActivityFeed({ role }) {
       .catch(() => setErr("Couldn't load recent activity"));
   }, []);
 
-  const actorLabel = (entryRole) => {
-    if (entryRole === role) return "You";
-    return entryRole === "owner" ? "The owner" : "Project manager";
-  };
+  const actorLabel = (actorName) => actorName || "Someone";
 
   return (
     <div style={{ ...statCard, marginTop: 4 }}>
@@ -3564,10 +4062,19 @@ function ActivityFeed({ role }) {
             e.kind === "access" ? (
               <div key={e.id} style={{ padding: "9px 0", borderTop: `1px solid ${COLORS.border}` }}>
                 <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink }}>
-                  Project manager opened the app
+                  {actorLabel(e.actorName)} opened the app
                 </div>
                 <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: "#8A8478" }}>
                   {fmtRelativeTime(e.createdAt)}
+                </div>
+              </div>
+            ) : e.type === "assignment" ? (
+              <div key={e.id} style={{ padding: "9px 0", borderTop: `1px solid ${COLORS.border}` }}>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink }}>
+                  <strong>{e.entityName}</strong> {e.toStage === "unassigned" ? "was unassigned" : "was assigned"}
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: "#8A8478" }}>
+                  {actorLabel(e.actorName)} · {fmtRelativeTime(e.createdAt)}
                 </div>
               </div>
             ) : (
@@ -3577,7 +4084,7 @@ function ActivityFeed({ role }) {
                   {e.fromStage ? ` ${stageLabel(e.type, e.fromStage)} →` : ""} {stageLabel(e.type, e.toStage)}
                 </div>
                 <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: "#8A8478" }}>
-                  {actorLabel(e.role)} · {fmtRelativeTime(e.createdAt)}
+                  {actorLabel(e.actorName)} · {fmtRelativeTime(e.createdAt)}
                 </div>
               </div>
             )
@@ -4168,18 +4675,16 @@ function DashboardView({
 // spanning startDate through either its actual completion date or (while
 // still scheduled/in progress) a build-pace-projected end date. Visible to
 // both roles, same as the leads data it's drawn from.
-// "mine" maps directly onto this app's two fixed people: the owner role is
-// always Sean, the viewer role is always Dave (see VALID_MANAGERS on the
-// server). A job with no manager tagged yet defaults into the owner's
-// "My Jobs" (someone has to own it until it's explicitly handed off) but
-// never into the viewer's — Dave only sees what he's actually been tagged
-// on, same principle the "Lead won!" push gating already uses.
-function isMyJob(lead, role) {
-  if (role === "owner") return lead.manager === "Sean" || !lead.manager;
-  return lead.manager === "Dave";
+// "mine" for a tenant admin means "not pushed to a PM yet" (unassigned jobs default to
+// the admin owning them directly until explicitly handed off); for a PM the server
+// already only ever hands them their own assigned leads (see GET /api/leads), so this is
+// trivially true for everything a PM session can see.
+function isMyJob(lead, role, userId) {
+  if (role === "tenant_admin") return !lead.assignedPmId;
+  return lead.assignedPmId === userId;
 }
 
-function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, onOpenWarranty }) {
+function CalendarView({ leads, allMetrics, role, userId, warrantyRequests, onOpenLead, onOpenWarranty }) {
   const [monthStart, setMonthStart] = useState(() => {
     const d = new Date();
     d.setUTCDate(1);
@@ -4238,8 +4743,8 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
     const leadSpans = (leads || [])
       .filter((l) => l.startDate && CALENDAR_STAGES.has(l.stage))
       .filter((l) => {
-        if (calFilter === "mine") return isMyJob(l, role);
-        if (calFilter === "pm") return l.manager === "Dave";
+        if (calFilter === "mine") return isMyJob(l, role, userId);
+        if (calFilter === "pm") return !!l.assignedPmId;
         return true;
       })
       .map((l) => {
@@ -4294,7 +4799,7 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
       }
     }
     return spans;
-  }, [leads, allMetrics, gridStart, gridEndKey, calFilter, role, warrantyRequests]);
+  }, [leads, allMetrics, gridStart, gridEndKey, calFilter, role, userId, warrantyRequests]);
 
   const BAR_H = 20;
   const BAR_GAP = 4;
@@ -4340,7 +4845,7 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
         {[
           { key: "all", label: "All Jobs" },
           { key: "mine", label: "My Jobs" },
-          ...(role === "owner" ? [{ key: "pm", label: "PM's Jobs" }] : []),
+          ...(role === "tenant_admin" ? [{ key: "pm", label: "Assigned to a PM" }] : []),
         ].map((tab) => (
           <button
             key={tab.key}
@@ -4359,11 +4864,11 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
 
       <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>
         {calFilter === "mine"
-          ? role === "owner"
+          ? role === "tenant_admin"
             ? "Just what's tagged to you, plus anything unassigned. "
             : "Just the jobs tagged to you. "
           : calFilter === "pm"
-            ? "Just what's tagged to your PM. "
+            ? "Everything currently pushed out to a PM. "
             : "One bar per won job, a different color for each — solid once it's actually in progress or done, softer while it's just scheduled and the length is a build-pace estimate. Scheduled warranty repairs show up in rust. "}
         Tap a bar to open it.
       </div>
@@ -4677,15 +5182,28 @@ const POPUP_TOGGLES = [
   },
 ];
 
-function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
+function SettingsModal({ settings, onSave, onClose }) {
   useModalBackClose(onClose);
   const [draft, setDraft] = useState(String(settings.overheadPercent));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [appLinkCopied, setAppLinkCopied] = useState(false);
   const [popupErr, setPopupErr] = useState("");
   const [togglingKey, setTogglingKey] = useState(null);
+
+  const appUrl = window.location.origin;
+  const copyAppLink = async () => {
+    try {
+      await navigator.clipboard.writeText(appUrl);
+      setAppLinkCopied(true);
+      setTimeout(() => setAppLinkCopied(false), 2000);
+    } catch {
+      // clipboard API can be unavailable (e.g. non-HTTPS) — the link is still
+      // selectable/copyable by hand from the input below
+    }
+  };
 
   const togglePopup = async (key, value) => {
     setTogglingKey(key);
@@ -4847,161 +5365,49 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
           )}
         </div>
 
-        <button
-          onClick={onOpenBackups}
-          style={{
-            ...roleOption,
-            marginTop: 20,
-            justifyContent: "center",
-            borderColor: COLORS.border,
-            cursor: "pointer",
-          }}
-        >
-          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
-            Manage backups
-          </span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function BackupsModal({ onClose, onRestored }) {
-  useModalBackClose(onClose);
-  const [backups, setBackups] = useState(null);
-  const [loadErr, setLoadErr] = useState("");
-  const [confirmTarget, setConfirmTarget] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    api
-      .listBackups()
-      .then((data) => setBackups(data.backups))
-      .catch((e) => setLoadErr(e.message || "Couldn't load backups"));
-  }, []);
-
-  const grouped = useMemo(() => {
-    const map = {};
-    for (const b of backups || []) {
-      (map[b.tier] = map[b.tier] || []).push(b);
-    }
-    return map;
-  }, [backups]);
-
-  const doRestore = async () => {
-    if (!confirmTarget) return;
-    setBusy(true);
-    setErr("");
-    try {
-      await api.restoreBackup(confirmTarget.filename);
-      onRestored();
-    } catch (e) {
-      setErr(e.message || "Restore failed");
-      setBusy(false);
-    }
-  };
-
-  if (confirmTarget) {
-    return (
-      <div style={modalOverlay} onClick={busy ? undefined : () => setConfirmTarget(null)}>
-        <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
-              Restore this backup?
-            </div>
-            {!busy && (
-              <button onClick={() => setConfirmTarget(null)} style={iconBtnGhost} aria-label="Cancel">
-                <X size={18} color={COLORS.muted} />
-              </button>
-            )}
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${COLORS.border}` }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 4 }}>
+            Install this app
           </div>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.ink, marginBottom: 12 }}>
-            This replaces <strong>all current leads</strong> — names, stages, revenue, reports, everything — with
-            the snapshot from <strong>{fmtBackupDate(confirmTarget.takenAt)}</strong> (
-            {fmtRelativeTime(confirmTarget.takenAt)})
-            {confirmTarget.leadCount != null ? `, ${confirmTarget.leadCount} leads` : ""}.
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 10 }}>
+            Copy this link and send it to anyone on your team — opening it and adding it to their home screen puts
+            Lead Hammer on their phone like any other app.
           </div>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-            Your current data is safety-backed-up first, so this can be undone by restoring again afterward.
-          </div>
-          {err && (
-            <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 12 }}>{err}</div>
-          )}
           <div style={{ display: "flex", gap: 8 }}>
+            <input readOnly value={appUrl} style={{ ...modalInput, flex: 1, fontSize: 12 }} onClick={(e) => e.target.select()} />
             <button
-              onClick={() => setConfirmTarget(null)}
-              disabled={busy}
-              style={{ ...roleOption, flex: 1, justifyContent: "center", cursor: "pointer", opacity: busy ? 0.6 : 1 }}
+              onClick={copyAppLink}
+              style={{ ...iconBtn, background: COLORS.accent, flexShrink: 0 }}
+              aria-label="Copy app link"
             >
-              <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
-            </button>
-            <button
-              onClick={doRestore}
-              disabled={busy}
-              style={{ ...addBtn, flex: 1, justifyContent: "center", background: COLORS.rust, opacity: busy ? 0.6 : 1 }}
-            >
-              {busy ? "Restoring…" : "Yes, restore"}
+              <Check size={18} color="#fff" />
             </button>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={modalOverlay} onClick={onClose}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Backups</div>
-          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
-            <X size={18} color={COLORS.muted} />
-          </button>
-        </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          Snapshots of your leads, taken automatically. Restoring replaces all current leads with the chosen
-          snapshot.
-        </div>
-
-        {loadErr && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13 }}>{loadErr}</div>}
-        {!loadErr && backups === null && (
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>Loading…</div>
-        )}
-        {!loadErr && backups && backups.length === 0 && (
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
-            No backups yet — the first one is taken within a few minutes of the app starting.
+          {appLinkCopied && (
+            <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 6 }}>
+              Link copied.
+            </div>
+          )}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 13, marginBottom: 3 }}>
+              On iPhone (Safari)
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
+              Open the link → tap the Share icon → "Add to Home Screen".
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 13, marginBottom: 3 }}>
+              On Android (Chrome)
+            </div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.muted }}>
+              Open the link → tap the ⋮ menu → "Add to Home screen" (or "Install app").
+            </div>
           </div>
-        )}
-
-        {BACKUP_TIERS.map(
-          (tier) =>
-            grouped[tier.key] &&
-            grouped[tier.key].length > 0 && (
-              <div key={tier.key} style={{ marginBottom: 16 }}>
-                <div style={reportSectionLabel}>{tier.label}</div>
-                {grouped[tier.key].map((b) => (
-                  <div key={b.filename} style={backupRow}>
-                    <div>
-                      <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.ink, fontWeight: 600 }}>
-                        {fmtRelativeTime(b.takenAt)}
-                      </div>
-                      <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>
-                        {fmtBackupDate(b.takenAt)}
-                        {b.leadCount != null ? ` · ${b.leadCount} leads` : ""}
-                      </div>
-                    </div>
-                    <button onClick={() => setConfirmTarget(b)} style={backupRestoreBtn}>
-                      Restore
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )
-        )}
+        </div>
       </div>
     </div>
   );
 }
+
 
 const WARRANTY_STAGES = [
   { key: "reported", label: "Reported", actionLabel: "Schedule", color: COLORS.rust },
@@ -6585,34 +6991,40 @@ function WorkDaysPromptModal({ leadName, onSave, onSkip }) {
 // anyway, so this is just a quick way to tag it when convenient, not a
 // gate on winning the job. Picking Dave here is also what triggers the
 // "Lead won!" push to him (see saveJobManager/routes/leads.js PATCH /:id).
-function JobManagerModal({ lead, onPick, onSkip }) {
+function JobManagerModal({ lead, pms, onPick, onSkip }) {
   useModalBackClose(onSkip);
   return (
     <div style={modalOverlay} onClick={onSkip}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
-            Who is managing this job?
+            Push this job to a PM?
           </div>
           <button onClick={onSkip} style={iconBtnGhost} aria-label="Skip">
             <X size={18} color={COLORS.muted} />
           </button>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 16 }}>
-          {lead.name} was just marked won. Tag who's running it day-to-day — Dave gets notified only when he's the
-          one tagged.
+          {lead.name} was just marked won. Push it to a PM to run day-to-day — they're notified the moment they're
+          assigned — or skip to keep running it yourself.
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {["Sean", "Dave"].map((name) => (
-            <button
-              key={name}
-              onClick={() => onPick(name)}
-              style={{ ...addBtn, width: "100%", justifyContent: "center" }}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
+        {pms.length === 0 ? (
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 4 }}>
+            You don't have any PMs added yet. Add one from Account Settings.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {pms.map((pm) => (
+              <button
+                key={pm.id}
+                onClick={() => onPick(pm.id)}
+                style={{ ...addBtn, width: "100%", justifyContent: "center" }}
+              >
+                {pm.name}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           onClick={onSkip}
           style={{
@@ -6640,6 +7052,8 @@ function LeadTicket({
   onMove,
   onEditField,
   onEditStartDate,
+  onAssignPm,
+  pms,
   onDelete,
   editable,
   role,
@@ -6675,7 +7089,7 @@ function LeadTicket({
   const [editingAppointment, setEditingAppointment] = useState(false);
   const [appointmentDraft, setAppointmentDraft] = useState(isoToDateTimeLocal(lead.appointmentAt));
   const [editingManager, setEditingManager] = useState(false);
-  const [managerDraft, setManagerDraft] = useState(lead.manager || "");
+  const [managerDraft, setManagerDraft] = useState(lead.assignedPmId || "");
   const [editingWorkDaysEst, setEditingWorkDaysEst] = useState(false);
   const [workDaysEstDraft, setWorkDaysEstDraft] = useState(lead.actualWorkDays != null ? String(lead.actualWorkDays) : "");
   const [confirmDel, setConfirmDel] = useState(false);
@@ -6726,7 +7140,7 @@ function LeadTicket({
   // role only has access to the dedicated start-date endpoint (server-
   // enforced — see routes/leads.js PATCH /:id/start-date)
   const saveStart = () => {
-    if (role === "owner") {
+    if (role === "tenant_admin") {
       onEditField(lead.id, "startDate", startDraft);
     } else {
       onEditStartDate(lead.id, startDraft);
@@ -6738,7 +7152,7 @@ function LeadTicket({
   };
 
   const saveWorkDaysEstimate = (days) => {
-    if (role === "owner") {
+    if (role === "tenant_admin") {
       onEditField(lead.id, "actualWorkDays", days);
     } else {
       // viewer's endpoint is start-date-scoped, so resend the (unchanged)
@@ -6788,12 +7202,12 @@ function LeadTicket({
   };
 
   const openManagerEdit = () => {
-    setManagerDraft(lead.manager || "");
+    setManagerDraft(lead.assignedPmId || "");
     setEditingManager(true);
   };
 
   const saveManager = () => {
-    onEditField(lead.id, "manager", managerDraft || null);
+    onAssignPm(lead.id, managerDraft || null);
     setEditingManager(false);
   };
 
@@ -6811,7 +7225,7 @@ function LeadTicket({
   const saveWorkDaysEst = () => {
     const n = parseFloat(workDaysEstDraft);
     const value = !isNaN(n) && n > 0 ? n : null;
-    if (role === "owner") {
+    if (role === "tenant_admin") {
       onEditField(lead.id, "actualWorkDays", value);
     } else {
       onEditStartDate(lead.id, lead.startDate || "", value);
@@ -7397,7 +7811,7 @@ function LeadTicket({
         {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
           <div
             onClick={
-              !editingStart && (editable || role === "viewer")
+              !editingStart && (editable || role === "pm")
                 ? () => {
                     setStartDraft(lead.startDate || "");
                     setEditingStart(true);
@@ -7409,7 +7823,7 @@ function LeadTicket({
               display: "flex",
               alignItems: "center",
               gap: 6,
-              cursor: !editingStart && (editable || role === "viewer") ? "pointer" : "default",
+              cursor: !editingStart && (editable || role === "pm") ? "pointer" : "default",
             }}
           >
             <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Start date</span>
@@ -7431,10 +7845,10 @@ function LeadTicket({
           </div>
         )}
 
-        {/* who's managing the job day-to-day — first picked via the job-manager
-            prompt right after the win; visible to both roles, editable by the
-            owner only. Changing it to Dave here (not just from that prompt)
-            also fires the "Lead won!" push if the job is still at "won" */}
+        {/* who's running the job day-to-day — first picked via the push-to-a-PM
+            prompt right after the win; visible to both roles, reassignable by the
+            admin only, at any point (not just right after the win) — this is the
+            "push/retrieve/reassign" control */}
         {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
           <div
             onClick={!editingManager && editable ? openManagerEdit : undefined}
@@ -7446,10 +7860,10 @@ function LeadTicket({
               cursor: !editingManager && editable ? "pointer" : "default",
             }}
           >
-            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Managed by</span>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Assigned to</span>
             {!editingManager ? (
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.manager ? "#4A463D" : "#B8B0A0" }}>
-                {lead.manager || "not set"}
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: lead.assignedPmId ? "#4A463D" : "#B8B0A0" }}>
+                {lead.assignedPmId ? pms.find((p) => p.id === lead.assignedPmId)?.name || "a PM" : "you (unassigned)"}
               </span>
             ) : (
               <>
@@ -7459,17 +7873,20 @@ function LeadTicket({
                   onChange={(e) => setManagerDraft(e.target.value)}
                   style={{ ...inlineInput, appearance: "auto" }}
                 >
-                  <option value="">Not set</option>
-                  <option value="Sean">Sean</option>
-                  <option value="Dave">Dave</option>
+                  <option value="">You (unassigned)</option>
+                  {pms.map((pm) => (
+                    <option key={pm.id} value={pm.id}>
+                      {pm.name}
+                    </option>
+                  ))}
                 </select>
-                <button onClick={saveManager} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save manager">
+                <button onClick={saveManager} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save assignment">
                   <Check size={18} color="#fff" />
                 </button>
                 <button
                   onClick={() => setEditingManager(false)}
                   style={{ ...iconBtn, background: "#B8B0A0" }}
-                  aria-label="Cancel manager edit"
+                  aria-label="Cancel assignment edit"
                 >
                   <X size={18} color="#fff" />
                 </button>
@@ -7585,7 +8002,7 @@ function LeadTicket({
             (viewer) only gets to advance a job from in-progress to
             completed, which ActionRow's per-stage switch already limits to
             just the "Mark complete" button once lead.stage is "progress" */}
-        {(editable || (role === "viewer" && lead.stage === "progress")) && (
+        {(editable || (role === "pm" && lead.stage === "progress")) && (
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
@@ -8736,28 +9153,6 @@ const stepperBtn = {
   alignItems: "center",
   justifyContent: "center",
   flexShrink: 0,
-};
-
-const backupRow = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 10,
-  padding: "8px 0",
-  borderBottom: `1px solid ${COLORS.border}`,
-};
-
-const backupRestoreBtn = {
-  flex: "0 0 auto",
-  padding: "6px 12px",
-  borderRadius: 6,
-  border: `1px solid ${COLORS.accent}`,
-  background: "transparent",
-  color: COLORS.accent,
-  fontSize: 12.5,
-  fontFamily: FONT_BODY,
-  fontWeight: 600,
-  cursor: "pointer",
 };
 
 const modalOverlay = {

@@ -27,6 +27,7 @@ router.get("/feed", requireAuth("tenant_admin", "pm"), async (req, res, next) =>
             );
       const { rows: moves } = await movesQuery;
       let entries = moves.map((row) => ({
+        id: row.id,
         kind: "move",
         type: row.type,
         entityId: row.entity_id,
@@ -44,7 +45,7 @@ router.get("/feed", requireAuth("tenant_admin", "pm"), async (req, res, next) =>
           [effective.tenantId, FEED_LIMIT]
         );
         entries = entries.concat(
-          access.map((row) => ({ kind: "access", actorName: row.actor_name, createdAt: row.created_at }))
+          access.map((row) => ({ id: row.id, kind: "access", actorName: row.actor_name, createdAt: row.created_at }))
         );
       }
 
