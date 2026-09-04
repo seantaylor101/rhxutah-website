@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { db } from "./db.js";
+import { withTenant } from "./db/pool.js";
 
-export function createNotification({ leadId, title, body }) {
-  const notification = {
-    id: randomUUID(),
-    leadId: leadId || null,
-    title,
-    body,
-    createdAt: new Date().toISOString(),
-    readAt: null,
-  };
-  db.prepare(
-    `INSERT INTO notifications (id, leadId, title, body, createdAt, readAt)
-     VALUES (@id, @leadId, @title, @body, @createdAt, @readAt)`
-  ).run(notification);
-  return notification;
+export async function createNotification(tenantId, { leadId, title, body }) {
+  const id = randomUUID();
+  await withTenant(tenantId, (client) =>
+    client.query(
+      `INSERT INTO notifications (id, tenant_id, lead_id, title, body) VALUES ($1, $2, $3, $4, $5)`,
+      [id, tenantId, leadId || null, title, body]
+    )
+  );
+  return { id, tenantId, leadId: leadId || null, title, body };
 }

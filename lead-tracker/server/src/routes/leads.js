@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { db } from "../db.js";
-import { requireAuth } from "../middleware/requireAuth.js";
+import { withTenant } from "../db/pool.js";
+import { requireAuth } from "../auth/middleware.js";
 import { sendDueReportReminders } from "../reportReminders.js";
-import { sendPushToRole } from "../pushService.js";
+import { sendPushToUser, sendPushToTenantAdmins } from "../pushService.js";
 import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
@@ -13,25 +13,10 @@ const router = Router();
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "website", "other"]);
 const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
 const EDITABLE_FIELDS = new Set([
-  "createdAt",
-  "startDate",
-  "completedAt",
-  "revenue",
-  "name",
-  "job",
-  "phone",
-  "email",
-  "address",
-  "source",
-  "sourceOther",
-  "appointmentAt",
-  "manager",
-  "actualWorkDays",
+  "createdAt", "startDate", "completedAt", "revenue", "name", "job", "phone", "email",
+  "address", "source", "sourceOther", "appointmentAt", "actualWorkDays",
 ]);
 
-// a positive number of (fractional, quarter-day-ish) work days, or empty/
-// null to clear — shared between the owner's general-purpose PATCH /:id
-// below and the viewer-level PATCH /:id/start-date's optional estimate
 function parseWorkDays(value) {
   if (value === null || value === undefined || value === "") return { ok: true, value: null };
   const n = Number(value);
@@ -39,478 +24,542 @@ function parseWorkDays(value) {
   return { ok: true, value: n };
 }
 
-const VALID_MANAGERS = new Set(["Sean", "Dave"]);
+// camelCase field name -> snake_case column name, for the general PATCH /:id route.
+const FIELD_COLUMN = {
+  createdAt: "created_at", startDate: "start_date", completedAt: "completed_at",
+  revenue: "revenue", name: "name", job: "job", phone: "phone", email: "email",
+  address: "address", source: "source", sourceOther: "source_other",
+  appointmentAt: "appointment_at", actualWorkDays: "actual_work_days",
+};
 
 function rowToLead(row) {
-  let scopeOfWork = [];
-  if (row.scopeOfWork) {
-    try {
-      scopeOfWork = JSON.parse(row.scopeOfWork);
-    } catch {
-      scopeOfWork = [];
-    }
-  }
-  let followUps = [];
-  if (row.followUps) {
-    try {
-      followUps = JSON.parse(row.followUps);
-    } catch {
-      followUps = [];
-    }
-  }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps };
+  if (!row) return null;
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    assignedPmId: row.assigned_pm_id,
+    contactId: row.contact_id,
+    name: row.name,
+    stage: row.stage,
+    createdAt: row.created_at,
+    startDate: row.start_date,
+    revenue: row.revenue === null ? null : Number(row.revenue),
+    wonAt: row.won_at,
+    paidAt: row.paid_at,
+    source: row.source,
+    sourceOther: row.source_other,
+    archived: row.archived,
+    archivedAt: row.archived_at,
+    job: row.job,
+    phone: row.phone,
+    email: row.email,
+    address: row.address,
+    bidSentAt: row.bid_sent_at,
+    completedAt: row.completed_at,
+    materialCost: row.material_cost === null ? null : Number(row.material_cost),
+    laborCost: row.labor_cost === null ? null : Number(row.labor_cost),
+    commission: row.commission === null ? null : Number(row.commission),
+    reportCompletedAt: row.report_completed_at,
+    lastReportReminderAt: row.last_report_reminder_at,
+    wentWell: row.went_well,
+    wentWrong: row.went_wrong,
+    actualWorkDays: row.actual_work_days === null ? null : Number(row.actual_work_days),
+    appointmentAt: row.appointment_at,
+    appointmentReminderSentAt: row.appointment_reminder_sent_at,
+    lostAt: row.lost_at,
+    scopeOfWork: row.scope_of_work || [],
+    followUps: row.follow_ups || [],
+  };
 }
 
-// shared by the authenticated create route and the public website-intake route
-export function insertLead(db, { name, job, phone, email, source, sourceOther }) {
-  const lead = {
-    id: randomUUID(),
-    name: String(name).trim(),
-    job: String(job || "").trim(),
-    phone: String(phone || "").trim(),
-    email: String(email || "").trim(),
-    address: "",
-    stage: "new",
-    createdAt: new Date().toISOString(),
-    startDate: "",
-    revenue: null,
-    bidSentAt: null,
-    wonAt: null,
-    completedAt: null,
-    paidAt: null,
-    source,
-    sourceOther: source === "other" || source === "website" ? String(sourceOther || "").trim() : "",
-    archived: 0,
-    archivedAt: null,
-    scopeOfWork: "",
-    contactId: null,
-  };
+// A PM only ever sees/acts on jobs assigned to them; a tenant admin sees everything in
+// their tenant. This is the "PM's own book of business" boundary the whole route file
+// enforces on top of the tenant_id scoping withTenant() already gives for free.
+function canAccessLead(effective, row) {
+  return effective.role === "tenant_admin" || row.assigned_pm_id === effective.userId;
+}
 
-  // keeps the owner's contacts list current regardless of whether the lead
-  // came from the authenticated form or the public website-intake endpoint
-  lead.contactId = upsertContactFromLead(
-    db,
-    { name: lead.name, phone: lead.phone, email: lead.email, address: lead.address },
+// Shared by the authenticated create route and the public website-intake route.
+// assignedPmId is null unless a PM is creating their own lead (they own what they sell).
+export async function insertLead(client, tenantId, { name, job, phone, email, source, sourceOther, assignedPmId }) {
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  const cleanName = String(name).trim();
+  const cleanPhone = String(phone || "").trim();
+  const cleanEmail = String(email || "").trim();
+  const cleanJob = String(job || "").trim();
+  const cleanSourceOther = source === "other" || source === "website" ? String(sourceOther || "").trim() : "";
+
+  const contactId = await upsertContactFromLead(
+    client,
+    tenantId,
+    { name: cleanName, phone: cleanPhone, email: cleanEmail, address: "" },
     { isNewLead: true }
   );
 
-  db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork, contactId)
-     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork, @contactId)`
-  ).run(lead);
-
-  return lead;
+  const { rows } = await client.query(
+    `INSERT INTO leads (id, tenant_id, assigned_pm_id, contact_id, name, job, phone, email, address, stage, created_at, source, source_other)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', 'new', $9, $10, $11) RETURNING *`,
+    [id, tenantId, assignedPmId || null, contactId, cleanName, cleanJob, cleanPhone, cleanEmail, createdAt, source, cleanSourceOther]
+  );
+  return rows[0];
 }
 
 export { SOURCES };
 
-// Mirrors the old client-side sweep: paid leads roll into the archive once the
-// calendar month they were paid in has passed — in business-local time, so a
-// job paid earlier today doesn't get swept while it's still today just
-// because UTC has already ticked into the next month.
-function sweepArchive() {
-  const thisMonth = localMonthKey();
-  const rows = db
-    .prepare(`SELECT * FROM leads WHERE stage = 'paid' AND archived = 0 AND paidAt IS NOT NULL`)
-    .all();
-  const toSweep = rows.filter((row) => localMonthKey(new Date(row.paidAt)) !== thisMonth);
+// Mirrors the old client-side sweep: paid leads roll into the archive once the calendar
+// month they were paid in has passed, in tenant-local time.
+async function sweepArchive(client, timezone) {
+  const thisMonth = localMonthKey(new Date(), timezone);
+  const { rows } = await client.query(
+    `SELECT id, paid_at FROM leads WHERE stage = 'paid' AND archived = false AND paid_at IS NOT NULL`
+  );
+  const toSweep = rows.filter((row) => localMonthKey(new Date(row.paid_at), timezone) !== thisMonth);
   if (!toSweep.length) return;
-
   const now = new Date().toISOString();
-  const stmt = db.prepare(`UPDATE leads SET archived = 1, archivedAt = ? WHERE id = ?`);
-  const tx = db.transaction((leads) => {
-    for (const row of leads) stmt.run(now, row.id);
-  });
-  tx(toSweep);
+  for (const row of toSweep) {
+    await client.query(`UPDATE leads SET archived = true, archived_at = $2 WHERE id = $1`, [row.id, now]);
+  }
 }
 
-function getLeadOr404(id, res) {
-  const row = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
-  if (!row) {
-    res.status(404).json({ error: "Lead not found" });
-    return null;
-  }
-  return row;
+async function getLead(client, id) {
+  const { rows } = await client.query(`SELECT * FROM leads WHERE id = $1`, [id]);
+  return rows[0] || null;
 }
 
-router.get("/", requireAuth("viewer"), (req, res) => {
-  sweepArchive();
-  const rows = db.prepare(`SELECT * FROM leads ORDER BY createdAt DESC`).all();
-  const leads = rows.map(rowToLead);
-  // profit is owner-only: strip the cost inputs at the API layer too, not
-  // just in the UI, so a viewer can't recover them by inspecting the response
-  if (req.role !== "owner") {
-    for (const lead of leads) {
-      lead.materialCost = null;
-      lead.laborCost = null;
-      lead.commission = null;
-    }
+router.get("/", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const { rows: tenantRows } = await client.query(`SELECT timezone FROM tenants WHERE id = $1`, [effective.tenantId]);
+      await sweepArchive(client, tenantRows[0]?.timezone);
+      const { rows } =
+        effective.role === "tenant_admin"
+          ? await client.query(`SELECT * FROM leads ORDER BY created_at DESC`)
+          : await client.query(
+              `SELECT * FROM leads WHERE assigned_pm_id = $1 ORDER BY created_at DESC`,
+              [effective.userId]
+            );
+      const leads = rows.map(rowToLead);
+      // profit is admin-only: strip the cost inputs at the API layer too, not just in
+      // the UI, so a PM can't recover them by inspecting the response.
+      if (effective.role !== "tenant_admin") {
+        for (const lead of leads) {
+          lead.materialCost = null;
+          lead.laborCost = null;
+          lead.commission = null;
+        }
+      }
+      res.json(leads);
+    });
+  } catch (err) {
+    next(err);
   }
-  res.json(leads);
 });
 
-router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, job, phone, email, source, sourceOther } = req.body || {};
-  if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
-  if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
+// Both a tenant admin and a PM can sell/create a job -- a PM-created lead is
+// auto-assigned to that PM (they own what they sell); a tenant-admin-created lead is
+// unassigned until pushed to a PM via POST /:id/assign.
+router.post("/", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { name, job, phone, email, source, sourceOther } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
+    if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
-  const lead = insertLead(db, { name, job, phone, email, source, sourceOther });
-  res.status(201).json(rowToLead(lead));
+    const assignedPmId = req.effective.role === "pm" ? req.effective.userId : null;
+    const row = await withTenant(req.effective.tenantId, (client) =>
+      insertLead(client, req.effective.tenantId, { name, job, phone, email, source, sourceOther, assignedPmId })
+    );
+    res.status(201).json(rowToLead(row));
+  } catch (err) {
+    next(err);
+  }
 });
 
-// Stage transitions carry the same bidSentAt/wonAt/completedAt/paidAt side
-// effects the original client applied — these timestamps double as the raw
-// data for the performance-metrics breakdowns (time in each stage, etc).
 const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
-// viewer-level so the project manager can advance a job from "in progress"
-// to "completed" — every other transition (including reverts) stays
-// owner-only, enforced below since requireAuth only checks the floor
-router.post("/:id/move", requireAuth("viewer"), (req, res) => {
-  const { stage, date, revert, workDays } = req.body || {};
-  if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
-
-  if (req.role !== "owner") {
-    const viewerAllowed = !revert && row.stage === "progress" && stage === "completed";
-    if (!viewerAllowed) return res.status(403).json({ error: "Editor access required" });
-  }
-
-  let ts = new Date().toISOString();
-  if (date) {
-    // build the UTC-midnight timestamp directly instead of parsing
-    // `${date}T00:00:00` (no zone) through Date, which is interpreted in
-    // whatever timezone this process happens to run in — explicit UTC
-    // keeps backdated stage timestamps consistent regardless of that
-    const parsed = new Date(`${date}T00:00:00.000Z`);
-    if (isNaN(parsed.getTime())) return res.status(400).json({ error: "Invalid date" });
-    ts = parsed.toISOString();
-  }
-
-  const patch = { stage };
-  // lostAt only ever applies to the "lost" stage itself — any move to
-  // anything else (including a revert) means the lead isn't lost anymore
-  if (stage !== "lost") patch.lostAt = null;
-  if (revert) {
-    // moving a lead backward: never stamp a fresh date, only clear ones that
-    // no longer apply so stats don't stay wrong after the revert
-    if (!AT_OR_AFTER_BID.has(stage)) {
-      patch.bidSentAt = null;
-    }
-    if (!AT_OR_AFTER_WON.has(stage)) {
-      patch.wonAt = null;
-      patch.paidAt = null;
-    } else if (stage !== "paid") {
-      patch.paidAt = null;
-    }
-    if (!AT_OR_AFTER_COMPLETED.has(stage)) {
-      patch.completedAt = null;
-      patch.actualWorkDays = null;
-    }
-  } else if (stage === "bid") {
-    patch.bidSentAt = ts;
-  } else if (stage === "won") {
-    patch.wonAt = ts;
-    patch.paidAt = null;
-  } else if (stage === "completed") {
-    patch.completedAt = ts;
-    patch.paidAt = null;
-    if (workDays !== undefined && workDays !== null && workDays !== "") {
-      const n = Number(workDays);
-      if (!isNaN(n) && n > 0) patch.actualWorkDays = n;
-    }
-  } else if (stage === "paid") {
-    patch.paidAt = ts;
-  } else if (stage === "progress") {
-    patch.paidAt = null;
-  } else if (stage === "lost") {
-    // a lead can be marked lost from any point in the process (a won job
-    // can still fall through before it starts, a job in progress can get
-    // cancelled, etc) — clear every later-stage timestamp so stats keep
-    // reading this as "not won" regardless of how far it got. bidSentAt is
-    // deliberately kept: the bid was still genuinely sent
-    patch.wonAt = null;
-    patch.paidAt = null;
-    patch.completedAt = null;
-    patch.actualWorkDays = null;
-    patch.lostAt = ts;
-  } else {
-    // new (reopen)
-    patch.wonAt = null;
-    patch.paidAt = null;
-    patch.bidSentAt = null;
-  }
-
-  const fields = Object.keys(patch);
-  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
-    ...patch,
-    id: row.id,
-  });
-
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
-
-  logMove({
-    type: "lead",
-    entityId: row.id,
-    entityName: row.name,
-    fromStage: row.stage,
-    toStage: stage,
-    role: req.role,
-  });
-
-  // a lead just landed in "completed" — send the first "complete final
-  // report" reminder right away instead of waiting for the next hourly sweep
-  if (!revert && stage === "completed") {
-    sendDueReportReminders().catch((err) => console.error("report reminder sweep failed:", err.message));
-  }
-
-  // no push here anymore on a fresh win — the client prompts for who's
-  // managing the job right after this move resolves, and that's what
-  // actually triggers the "Lead won!" push (see PATCH /:id below), so Dave
-  // only hears about it when he's the one tagged on it
-});
-
-router.patch("/:id", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
-
-  const updates = {};
-  for (const [key, value] of Object.entries(req.body || {})) {
-    if (EDITABLE_FIELDS.has(key)) updates[key] = value;
-  }
-  if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ error: "No editable fields given" });
-  }
-  if ("name" in updates) {
-    updates.name = String(updates.name).trim();
-    if (!updates.name) return res.status(400).json({ error: "Name can't be empty" });
-  }
-  if ("job" in updates) {
-    updates.job = String(updates.job || "").trim();
-  }
-  if ("source" in updates) {
-    if (!SOURCES.has(updates.source)) return res.status(400).json({ error: "Invalid source" });
-  }
-  if ("sourceOther" in updates) {
-    updates.sourceOther = String(updates.sourceOther || "").trim();
-  }
-  if ("appointmentAt" in updates) {
-    updates.appointmentAt = updates.appointmentAt || null;
-    // a changed/cleared appointment needs its own fresh 7am reminder, not the
-    // old appointment's already-sent flag silently suppressing it
-    updates.appointmentReminderSentAt = null;
-  }
-  if ("manager" in updates) {
-    updates.manager = updates.manager || null;
-    if (updates.manager && !VALID_MANAGERS.has(updates.manager)) {
-      return res.status(400).json({ error: "manager must be 'Sean' or 'Dave'" });
-    }
-  }
-  if ("actualWorkDays" in updates) {
-    const parsed = parseWorkDays(updates.actualWorkDays);
-    if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
-    updates.actualWorkDays = parsed.value;
-  }
-
-  const fields = Object.keys(updates);
-  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
-    ...updates,
-    id: row.id,
-  });
-
-  // the "Lead won!" push only fires once Dave is actually tagged as the
-  // manager on a job that's still sitting at "won" (not, say, a manager
-  // correction made weeks later once the job's already in progress) — see
-  // routes/leads.js POST /:id/move, which used to send this unconditionally
-  if (updates.manager === "Dave" && row.stage === "won") {
-    sendPushToRole("viewer", {
-      title: "Lead won!",
-      body: `${row.name} has been won and tagged to you. Please contact the salesman and the customer and schedule the work ASAP.`,
-      leadId: row.id,
-    }).catch((err) => console.error("won push notify failed:", err.message));
-  }
-
-  if (["name", "phone", "email", "address"].some((f) => f in updates)) {
-    const merged = { ...row, ...updates };
-    const contactInfo = { name: merged.name, phone: merged.phone, email: merged.email, address: merged.address };
-    if (row.contactId) {
-      updateContact(db, row.contactId, contactInfo);
-    } else {
-      // pre-migration lead with no link yet — match-or-create once, then
-      // remember it so every future edit goes straight to updateContact
-      const contactId = upsertContactFromLead(db, contactInfo, { isNewLead: false });
-      db.prepare(`UPDATE leads SET contactId = ? WHERE id = ?`).run(contactId, row.id);
-    }
-  }
-
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
-});
-
-// viewer-level so the project manager can schedule/reschedule a won job's
-// start date without needing owner access — restricted to jobs that have
-// actually been won (not e.g. a still-open bid) and to just this one field,
-// unlike the owner-only general-purpose PATCH /:id above
-router.patch("/:id/start-date", requireAuth("viewer"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
-
-  if (!AT_OR_AFTER_WON.has(row.stage)) {
-    return res.status(403).json({ error: "Start date can only be set on a won job" });
-  }
-
-  const { startDate, actualWorkDays } = req.body || {};
-  if (startDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(startDate || "")) {
-    return res.status(400).json({ error: "startDate must be YYYY-MM-DD or empty" });
-  }
-
-  const updates = { startDate };
-  // optional owner-or-viewer "how many days do you expect this to take"
-  // estimate, entered right after setting a start date — same column the
-  // Mark Complete/Final Report flows fill in with the real elapsed days
-  // once the job finishes, so this is only ever a placeholder until then
-  if (actualWorkDays !== undefined) {
-    const parsed = parseWorkDays(actualWorkDays);
-    if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
-    updates.actualWorkDays = parsed.value;
-  }
-
-  const fields = Object.keys(updates);
-  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
-    ...updates,
-    id: row.id,
-  });
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
-});
-
-router.patch("/:id/report", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
-
-  const { materialCost, laborCost, commission, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
-  const patch = {};
-  if (materialCost !== undefined) {
-    patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
-  }
-  if (laborCost !== undefined) {
-    patch.laborCost = laborCost === null || laborCost === "" ? null : Number(laborCost);
-  }
-  if (commission !== undefined) {
-    patch.commission = commission === null || commission === "" ? null : Number(commission);
-  }
-  if (actualWorkDays !== undefined) {
-    patch.actualWorkDays = actualWorkDays === null || actualWorkDays === "" ? null : Number(actualWorkDays);
-  }
-  if (wentWell !== undefined) patch.wentWell = String(wentWell || "").trim();
-  if (wentWrong !== undefined) patch.wentWrong = String(wentWrong || "").trim();
-  if (markComplete === true) patch.reportCompletedAt = new Date().toISOString();
-  if (markComplete === false) patch.reportCompletedAt = null;
-
-  if (Object.keys(patch).length === 0) {
-    return res.status(400).json({ error: "No editable fields given" });
-  }
-
-  const fields = Object.keys(patch);
-  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
-    ...patch,
-    id: row.id,
-  });
-
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
-});
-
-function readScopeOfWork(row) {
-  if (!row.scopeOfWork) return [];
+// PM-level so a project manager can advance their own job from "in progress" to
+// "completed" -- this IS the "push a completed job to the admin for payment" workflow.
+// Every other transition (including reverts) stays tenant-admin-only.
+router.post("/:id/move", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
   try {
-    return JSON.parse(row.scopeOfWork);
-  } catch {
-    return [];
-  }
-}
+    const { effective } = req;
+    const { stage, date, revert, workDays } = req.body || {};
+    if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
 
-// full replace of the scope-of-work checklist — owner-only, used both for
-// the initial fill-out right after marking a lead won and for later edits
-// to the item list
-router.put("/:id/scope-of-work", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      if (!canAccessLead(effective, row)) return res.status(403).json({ error: "Not your job" });
 
-  const items = Array.isArray(req.body?.items) ? req.body.items : null;
-  if (!items) return res.status(400).json({ error: "items array is required" });
+      if (effective.role !== "tenant_admin") {
+        const pmAllowed = !revert && row.stage === "progress" && stage === "completed";
+        if (!pmAllowed) return res.status(403).json({ error: "Admin access required" });
+      }
 
-  const cleaned = [];
-  for (const item of items) {
-    const text = String(item?.text || "").trim();
-    if (!text) continue;
-    cleaned.push({
-      id: typeof item?.id === "string" && item.id ? item.id : randomUUID(),
-      text,
-      done: !!item?.done,
+      let ts = new Date().toISOString();
+      if (date) {
+        const parsed = new Date(`${date}T00:00:00.000Z`);
+        if (isNaN(parsed.getTime())) return res.status(400).json({ error: "Invalid date" });
+        ts = parsed.toISOString();
+      }
+
+      const patch = { stage };
+      if (stage !== "lost") patch.lostAt = null;
+      if (revert) {
+        if (!AT_OR_AFTER_BID.has(stage)) patch.bidSentAt = null;
+        if (!AT_OR_AFTER_WON.has(stage)) {
+          patch.wonAt = null;
+          patch.paidAt = null;
+        } else if (stage !== "paid") {
+          patch.paidAt = null;
+        }
+        if (!AT_OR_AFTER_COMPLETED.has(stage)) {
+          patch.completedAt = null;
+          patch.actualWorkDays = null;
+        }
+      } else if (stage === "bid") {
+        patch.bidSentAt = ts;
+      } else if (stage === "won") {
+        patch.wonAt = ts;
+        patch.paidAt = null;
+      } else if (stage === "completed") {
+        patch.completedAt = ts;
+        patch.paidAt = null;
+        if (workDays !== undefined && workDays !== null && workDays !== "") {
+          const n = Number(workDays);
+          if (!isNaN(n) && n > 0) patch.actualWorkDays = n;
+        }
+      } else if (stage === "paid") {
+        patch.paidAt = ts;
+      } else if (stage === "progress") {
+        patch.paidAt = null;
+      } else if (stage === "lost") {
+        patch.wonAt = null;
+        patch.paidAt = null;
+        patch.completedAt = null;
+        patch.actualWorkDays = null;
+        patch.lostAt = ts;
+      } else {
+        patch.wonAt = null;
+        patch.paidAt = null;
+        patch.bidSentAt = null;
+      }
+
+      await applyLeadPatch(client, row.id, patch);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+
+      await logMove({
+        tenantId: effective.tenantId,
+        type: "lead",
+        entityId: row.id,
+        entityName: row.name,
+        fromStage: row.stage,
+        toStage: stage,
+        actorUserId: effective.userId,
+      });
+
+      if (!revert && stage === "completed") {
+        // a job just landed in "completed" -- tell the tenant admin it's ready to be
+        // reviewed/pushed toward payment, and kick the report-reminder sweep now
+        // instead of waiting for the next hourly pass.
+        sendPushToTenantAdmins(effective.tenantId, {
+          title: "Job completed",
+          body: `${row.name} was marked complete and is ready for your final report/payment review.`,
+          leadId: row.id,
+        }).catch((err) => console.error("completed push notify failed:", err.message));
+        sendDueReportReminders(effective.tenantId).catch((err) =>
+          console.error("report reminder sweep failed:", err.message)
+        );
+      }
     });
+  } catch (err) {
+    next(err);
   }
-
-  db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(cleaned), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
-// toggling a single item's done state — viewer-level so the project
-// manager can check items off as the crew works through them
-router.patch("/:id/scope-of-work", requireAuth("viewer"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
+// snake_case column names for the fields applyLeadPatch may receive, keyed by the
+// camelCase patch keys used throughout this file.
+const PATCH_COLUMN = {
+  stage: "stage", lostAt: "lost_at", bidSentAt: "bid_sent_at", wonAt: "won_at",
+  paidAt: "paid_at", completedAt: "completed_at", actualWorkDays: "actual_work_days",
+};
 
-  const { itemId, done } = req.body || {};
-  if (!itemId) return res.status(400).json({ error: "itemId is required" });
-
-  const items = readScopeOfWork(row);
-  const item = items.find((i) => i.id === itemId);
-  if (!item) return res.status(404).json({ error: "Checklist item not found" });
-  item.done = !!done;
-
-  db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
-});
-
-function readFollowUps(row) {
-  if (!row.followUps) return [];
-  try {
-    return JSON.parse(row.followUps);
-  } catch {
-    return [];
-  }
+async function applyLeadPatch(client, id, patch) {
+  const keys = Object.keys(patch);
+  if (!keys.length) return;
+  const setClauses = keys.map((k, i) => `${PATCH_COLUMN[k] || FIELD_COLUMN[k] || k} = $${i + 2}`);
+  await client.query(`UPDATE leads SET ${setClauses.join(", ")} WHERE id = $1`, [id, ...keys.map((k) => patch[k])]);
 }
 
-// logs one follow-up touch (call/text/email) — owner-only, same as every
-// other sales-side action on a lead
-router.post("/:id/followups", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
+// Tenant-admin-only: push a job to a PM, retrieve it back (pmId: null), or reassign it
+// to a different PM. This is the "push jobs to them" / "retrieve jobs and reassign"
+// workflow from the admin side.
+router.post("/:id/assign", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    const { pmId } = req.body || {};
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
 
-  const followUps = readFollowUps(row);
-  followUps.push({ id: randomUUID(), createdAt: new Date().toISOString() });
+      if (pmId) {
+        const { rows } = await client.query(
+          `SELECT id, name FROM users WHERE id = $1 AND tenant_id = $2 AND role = 'pm' AND disabled_at IS NULL`,
+          [pmId, effective.tenantId]
+        );
+        if (!rows.length) return res.status(400).json({ error: "PM not found in this tenant" });
+      }
 
-  db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+      await client.query(`UPDATE leads SET assigned_pm_id = $2 WHERE id = $1`, [row.id, pmId || null]);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+
+      await logMove({
+        tenantId: effective.tenantId,
+        type: "assignment",
+        entityId: row.id,
+        entityName: row.name,
+        fromStage: row.assigned_pm_id,
+        toStage: pmId || "unassigned",
+        actorUserId: effective.userId,
+      });
+
+      if (pmId) {
+        sendPushToUser(effective.tenantId, pmId, {
+          title: "Job assigned to you",
+          body: `${row.name} has been assigned to you. Contact the customer and schedule the work.`,
+          leadId: row.id,
+        }).catch((err) => console.error("assign push notify failed:", err.message));
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
-// undo an accidental log
-router.delete("/:id/followups/:followupId", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
+router.patch("/:id", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
 
-  const followUps = readFollowUps(row).filter((f) => f.id !== req.params.followupId);
+      const updates = {};
+      for (const [key, value] of Object.entries(req.body || {})) {
+        if (EDITABLE_FIELDS.has(key)) updates[key] = value;
+      }
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No editable fields given" });
+      if ("name" in updates) {
+        updates.name = String(updates.name).trim();
+        if (!updates.name) return res.status(400).json({ error: "Name can't be empty" });
+      }
+      if ("job" in updates) updates.job = String(updates.job || "").trim();
+      if ("source" in updates && !SOURCES.has(updates.source)) {
+        return res.status(400).json({ error: "Invalid source" });
+      }
+      if ("sourceOther" in updates) updates.sourceOther = String(updates.sourceOther || "").trim();
+      if ("appointmentAt" in updates) {
+        updates.appointmentAt = updates.appointmentAt || null;
+        updates.appointmentReminderSentAt = null;
+      }
+      if ("actualWorkDays" in updates) {
+        const parsed = parseWorkDays(updates.actualWorkDays);
+        if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
+        updates.actualWorkDays = parsed.value;
+      }
 
-  db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+      await applyLeadPatch(client, row.id, updates);
+
+      if (["name", "phone", "email", "address"].some((f) => f in updates)) {
+        const merged = { ...row, ...updates };
+        const contactInfo = { name: merged.name, phone: merged.phone, email: merged.email, address: merged.address };
+        if (row.contact_id) {
+          await updateContact(client, effective.tenantId, row.contact_id, contactInfo);
+        } else {
+          const contactId = await upsertContactFromLead(client, effective.tenantId, contactInfo, { isNewLead: false });
+          await client.query(`UPDATE leads SET contact_id = $2 WHERE id = $1`, [row.id, contactId]);
+        }
+      }
+
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.delete("/:id", requireAuth("owner"), (req, res) => {
-  const row = getLeadOr404(req.params.id, res);
-  if (!row) return;
-  db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);
-  res.status(204).end();
+// PM-level so a project manager can schedule/reschedule their own won job's start date
+// without needing admin access -- restricted to jobs that have actually been won.
+router.patch("/:id/start-date", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      if (!canAccessLead(effective, row)) return res.status(403).json({ error: "Not your job" });
+      if (!AT_OR_AFTER_WON.has(row.stage)) {
+        return res.status(403).json({ error: "Start date can only be set on a won job" });
+      }
+
+      const { startDate, actualWorkDays } = req.body || {};
+      if (startDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(startDate || "")) {
+        return res.status(400).json({ error: "startDate must be YYYY-MM-DD or empty" });
+      }
+      const updates = { startDate: startDate || null };
+      if (actualWorkDays !== undefined) {
+        const parsed = parseWorkDays(actualWorkDays);
+        if (!parsed.ok) return res.status(400).json({ error: "actualWorkDays must be a positive number" });
+        updates.actualWorkDays = parsed.value;
+      }
+
+      await applyLeadPatch(client, row.id, updates);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/:id/report", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+
+      const { materialCost, laborCost, commission, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
+      const patch = {};
+      const num = (v) => (v === null || v === "" ? null : Number(v));
+      if (materialCost !== undefined) patch.material_cost = num(materialCost);
+      if (laborCost !== undefined) patch.labor_cost = num(laborCost);
+      if (commission !== undefined) patch.commission = num(commission);
+      if (actualWorkDays !== undefined) patch.actual_work_days = num(actualWorkDays);
+      if (wentWell !== undefined) patch.went_well = String(wentWell || "").trim();
+      if (wentWrong !== undefined) patch.went_wrong = String(wentWrong || "").trim();
+      if (markComplete === true) patch.report_completed_at = new Date().toISOString();
+      if (markComplete === false) patch.report_completed_at = null;
+
+      const keys = Object.keys(patch);
+      if (!keys.length) return res.status(400).json({ error: "No editable fields given" });
+      const setClauses = keys.map((k, i) => `${k} = $${i + 2}`);
+      await client.query(`UPDATE leads SET ${setClauses.join(", ")} WHERE id = $1`, [row.id, ...keys.map((k) => patch[k])]);
+
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Full replace of the scope-of-work checklist -- tenant-admin-only.
+router.put("/:id/scope-of-work", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    const items = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!items) return res.status(400).json({ error: "items array is required" });
+    const cleaned = [];
+    for (const item of items) {
+      const text = String(item?.text || "").trim();
+      if (!text) continue;
+      cleaned.push({ id: typeof item?.id === "string" && item.id ? item.id : randomUUID(), text, done: !!item?.done });
+    }
+
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      await client.query(`UPDATE leads SET scope_of_work = $2 WHERE id = $1`, [row.id, JSON.stringify(cleaned)]);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Toggling a single item -- PM-level (their own job) so the crew can check items off.
+router.patch("/:id/scope-of-work", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    const { itemId, done } = req.body || {};
+    if (!itemId) return res.status(400).json({ error: "itemId is required" });
+
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      if (!canAccessLead(effective, row)) return res.status(403).json({ error: "Not your job" });
+
+      const items = row.scope_of_work || [];
+      const item = items.find((i) => i.id === itemId);
+      if (!item) return res.status(404).json({ error: "Checklist item not found" });
+      item.done = !!done;
+
+      await client.query(`UPDATE leads SET scope_of_work = $2 WHERE id = $1`, [row.id, JSON.stringify(items)]);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Logging a follow-up touch -- tenant admin (any job) or a PM on their own job, since
+// PMs sell and manage their own leads too.
+router.post("/:id/followups", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      if (!canAccessLead(effective, row)) return res.status(403).json({ error: "Not your job" });
+
+      const followUps = row.follow_ups || [];
+      followUps.push({ id: randomUUID(), createdAt: new Date().toISOString() });
+      await client.query(`UPDATE leads SET follow_ups = $2 WHERE id = $1`, [row.id, JSON.stringify(followUps)]);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/:id/followups/:followupId", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      if (!canAccessLead(effective, row)) return res.status(403).json({ error: "Not your job" });
+
+      const followUps = (row.follow_ups || []).filter((f) => f.id !== req.params.followupId);
+      await client.query(`UPDATE leads SET follow_ups = $2 WHERE id = $1`, [row.id, JSON.stringify(followUps)]);
+      const updated = await getLead(client, row.id);
+      res.json(rowToLead(updated));
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/:id", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { effective } = req;
+    await withTenant(effective.tenantId, async (client) => {
+      const row = await getLead(client, req.params.id);
+      if (!row) return res.status(404).json({ error: "Lead not found" });
+      await client.query(`DELETE FROM leads WHERE id = $1`, [row.id]);
+      res.status(204).end();
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

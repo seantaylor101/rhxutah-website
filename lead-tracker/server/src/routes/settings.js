@@ -1,162 +1,104 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
-import { db } from "../db.js";
-import { requireAuth } from "../middleware/requireAuth.js";
-import { localMonthKey } from "../businessTime.js";
+import { withTenant } from "../db/pool.js";
+import { requireAuth } from "../auth/middleware.js";
 
 const router = Router();
 
-// opaque token gating the public, unauthenticated calendar-subscription feed
-// (Apple Calendar's fetcher can't carry the app's session cookie) — generated
-// once on first use and persisted like any other setting
-export function getOrCreateCalendarFeedToken() {
-  const existing = db.prepare(`SELECT value FROM settings WHERE key = 'calendarFeedToken'`).get();
-  if (existing) return existing.value;
+// Opaque token gating the public, unauthenticated per-tenant calendar-subscription feed
+// (Apple Calendar's fetcher can't carry the app's session cookie) -- generated once per
+// tenant on first use.
+export async function getOrCreateCalendarFeedToken(client, tenantId) {
+  const { rows } = await client.query(`SELECT token FROM calendar_feed_tokens WHERE tenant_id = $1`, [tenantId]);
+  if (rows[0]?.token) return rows[0].token;
   const token = randomBytes(24).toString("hex");
-  db.prepare(`INSERT INTO settings (key, value) VALUES ('calendarFeedToken', ?)`).run(token);
-  return token;
+  await client.query(
+    `INSERT INTO calendar_feed_tokens (tenant_id, token) VALUES ($1, $2)
+     ON CONFLICT (tenant_id) DO UPDATE SET token = calendar_feed_tokens.token RETURNING token`,
+    [tenantId, token]
+  );
+  const { rows: after } = await client.query(`SELECT token FROM calendar_feed_tokens WHERE tenant_id = $1`, [tenantId]);
+  return after[0].token;
 }
 
-function readSettings() {
-  const rows = db.prepare(`SELECT key, value FROM settings`).all();
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+function rowToSettings(row, calendarFeedToken) {
   return {
-    overheadPercent: Number(map.overheadPercent ?? 13),
-    goalMonthlyTakeHome: Number(map.goalMonthlyTakeHome ?? 0),
-    // fixed monthly business overhead (bills, salaried staff like a project
-    // manager) that has to be covered before any job profit becomes the
-    // owner's take-home — separate from overheadPercent above, which is a
-    // per-job allocation used in job costing, not a flat recurring cost
-    goalMonthlyOverhead: Number(map.goalMonthlyOverhead ?? 0),
-    goalDataSource: map.goalDataSource === "mine" ? "mine" : "national",
-    // starting assumptions for the income-goal calculator's "national
-    // averages" mode, meant to be edited to fit whatever business is
-    // actually using this. Sourced (Aug 2026): ~20-30% average close rate
-    // for renovation/home-improvement contractors (Hook Agency, home
-    // services industry benchmarks); ~$9,500 national average roof
-    // replacement cost, as a representative exterior-trades job value
-    // (HomeGuide, RoofingCalc); ~24% average GROSS profit margin for
-    // construction businesses (ServiceTitan, Procore) — deliberately the
-    // gross figure (revenue minus materials/labor/typical per-job costs),
-    // not the ~7-8% bottom-line net figure, since goalMonthlyOverhead
-    // above is subtracted separately in the plan math rather than baked
-    // into this percentage. Remodeling/specialty trades commonly run
-    // higher (30-40%+) than the all-construction average — edit to match
-    goalNationalWinRate: Number(map.goalNationalWinRate ?? 25),
-    goalNationalAvgJobValue: Number(map.goalNationalAvgJobValue ?? 9500),
-    goalNationalProfitMargin: Number(map.goalNationalProfitMargin ?? 24),
-    // which calendar month (YYYY-MM) the take-home goal was last touched —
-    // stamped automatically below whenever goalMonthlyTakeHome is saved, so
-    // the client can tell "still carrying last month's number" apart from
-    // "actually confirmed for the month I'm in right now" without relying
-    // on per-device localStorage
-    goalMonthConfirmed: map.goalMonthConfirmed || "",
-    // visible to both roles — same as the leads/appointments data it exposes,
-    // just handed to Apple Calendar instead of rendered in the app
-    calendarFeedToken: getOrCreateCalendarFeedToken(),
-    // owner-controlled on/off switches for the app's auto-popups. Visible to
-    // both roles (unlike the goal figures above) since the warranty alert
-    // popup shows to the viewer too, and the client needs these to decide
-    // whether to show it — default on (map value only ever set to "0" to
-    // turn one off, so anything else, including unset, means enabled
-    popupPushEnabled: map.popupPushEnabled !== "0",
-    popupGoalEnabled: map.popupGoalEnabled !== "0",
-    popupWarrantyEnabled: map.popupWarrantyEnabled !== "0",
-    popupMissingInfoEnabled: map.popupMissingInfoEnabled !== "0",
-    popupMapsEnabled: map.popupMapsEnabled !== "0",
+    overheadPercent: Number(row.overhead_percent),
+    calendarFeedToken,
+    popupPushEnabled: row.popup_push_enabled,
+    popupGoalEnabled: row.popup_goal_enabled,
+    popupWarrantyEnabled: row.popup_warranty_enabled,
+    popupMissingInfoEnabled: row.popup_missing_info_enabled,
+    popupMapsEnabled: row.popup_maps_enabled,
+    // Starting assumptions for the income-goal calculator's "national averages" mode --
+    // tenant-editable, not proprietary per-user data, so visible to every tenant user.
+    goalNationalWinRate: Number(row.goal_national_win_rate ?? 25),
+    goalNationalAvgJobValue: Number(row.goal_national_avg_job_value ?? 9500),
+    goalNationalProfitMargin: Number(row.goal_national_profit_margin ?? 24),
   };
 }
 
-router.get("/", requireAuth("viewer"), (req, res) => {
-  const settings = readSettings();
-  // the income-goal figures are the owner's personal take-home target —
-  // keep them out of the viewer-role response, same as job cost/profit
-  // fields are stripped on the leads API
-  if (req.role !== "owner") {
-    settings.goalMonthlyTakeHome = null;
-    settings.goalMonthlyOverhead = null;
-    settings.goalDataSource = null;
-    settings.goalNationalWinRate = null;
-    settings.goalNationalAvgJobValue = null;
-    settings.goalNationalProfitMargin = null;
-    settings.goalMonthConfirmed = null;
+router.get("/", requireAuth("tenant_admin", "pm"), async (req, res, next) => {
+  try {
+    const { tenantId } = req.effective;
+    await withTenant(tenantId, async (client) => {
+      const token = await getOrCreateCalendarFeedToken(client, tenantId);
+      const { rows } = await client.query(`SELECT * FROM tenant_settings WHERE tenant_id = $1`, [tenantId]);
+      res.json(rowToSettings(rows[0], token));
+    });
+  } catch (err) {
+    next(err);
   }
-  res.json(settings);
 });
 
-const GOAL_NUMBER_FIELDS = {
-  goalMonthlyTakeHome: (n) => Number.isFinite(n) && n >= 0,
-  goalMonthlyOverhead: (n) => Number.isFinite(n) && n >= 0,
-  goalNationalWinRate: (n) => Number.isFinite(n) && n > 0 && n <= 100,
-  goalNationalAvgJobValue: (n) => Number.isFinite(n) && n > 0,
-  goalNationalProfitMargin: (n) => Number.isFinite(n) && n > 0 && n <= 100,
+const NUMBER_FIELDS = {
+  overheadPercent: { column: "overhead_percent", isValid: (n) => Number.isFinite(n) && n >= 0 },
+  goalNationalWinRate: { column: "goal_national_win_rate", isValid: (n) => Number.isFinite(n) && n > 0 && n <= 100 },
+  goalNationalAvgJobValue: { column: "goal_national_avg_job_value", isValid: (n) => Number.isFinite(n) && n > 0 },
+  goalNationalProfitMargin: { column: "goal_national_profit_margin", isValid: (n) => Number.isFinite(n) && n > 0 && n <= 100 },
 };
 
-const POPUP_TOGGLE_FIELDS = [
-  "popupPushEnabled",
-  "popupGoalEnabled",
-  "popupWarrantyEnabled",
-  "popupMissingInfoEnabled",
-  "popupMapsEnabled",
-];
+const POPUP_FIELDS = {
+  popupPushEnabled: "popup_push_enabled",
+  popupGoalEnabled: "popup_goal_enabled",
+  popupWarrantyEnabled: "popup_warranty_enabled",
+  popupMissingInfoEnabled: "popup_missing_info_enabled",
+  popupMapsEnabled: "popup_maps_enabled",
+};
 
-router.patch("/", requireAuth("owner"), (req, res) => {
-  const body = req.body || {};
-  const updates = {};
+router.patch("/", requireAuth("tenant_admin"), async (req, res, next) => {
+  try {
+    const { tenantId } = req.effective;
+    const body = req.body || {};
+    const updates = {};
 
-  if (body.overheadPercent !== undefined) {
-    const n = Number(body.overheadPercent);
-    if (!Number.isFinite(n) || n < 0) {
-      return res.status(400).json({ error: "overheadPercent must be a non-negative number" });
+    for (const [key, { column, isValid }] of Object.entries(NUMBER_FIELDS)) {
+      if (body[key] === undefined) continue;
+      const n = Number(body[key]);
+      if (!isValid(n)) return res.status(400).json({ error: `${key} is out of range` });
+      updates[column] = n;
     }
-    updates.overheadPercent = n;
-  }
-
-  for (const [key, isValid] of Object.entries(GOAL_NUMBER_FIELDS)) {
-    if (body[key] === undefined) continue;
-    const n = Number(body[key]);
-    if (!isValid(n)) {
-      return res.status(400).json({ error: `${key} is out of range` });
+    for (const [key, column] of Object.entries(POPUP_FIELDS)) {
+      if (body[key] === undefined) continue;
+      updates[column] = !!body[key];
     }
-    updates[key] = n;
+
+    const keys = Object.keys(updates);
+    if (!keys.length) return res.status(400).json({ error: "No editable fields given" });
+
+    await withTenant(tenantId, async (client) => {
+      const setClauses = keys.map((k, i) => `${k} = $${i + 2}`);
+      await client.query(`UPDATE tenant_settings SET ${setClauses.join(", ")} WHERE tenant_id = $1`, [
+        tenantId,
+        ...keys.map((k) => updates[k]),
+      ]);
+      const token = await getOrCreateCalendarFeedToken(client, tenantId);
+      const { rows } = await client.query(`SELECT * FROM tenant_settings WHERE tenant_id = $1`, [tenantId]);
+      res.json(rowToSettings(rows[0], token));
+    });
+  } catch (err) {
+    next(err);
   }
-
-  // touching the take-home goal — from either the monthly prompt or the
-  // regular Income Goal panel — counts as confirming it for whichever
-  // month that happens in, computed server-side rather than trusted from
-  // the client
-  if (body.goalMonthlyTakeHome !== undefined) {
-    updates.goalMonthConfirmed = localMonthKey();
-  }
-
-  if (body.goalDataSource !== undefined) {
-    if (body.goalDataSource !== "national" && body.goalDataSource !== "mine") {
-      return res.status(400).json({ error: "goalDataSource must be 'national' or 'mine'" });
-    }
-    updates.goalDataSource = body.goalDataSource;
-  }
-
-  for (const key of POPUP_TOGGLE_FIELDS) {
-    if (body[key] === undefined) continue;
-    // stored as "0"/"1" like every other setting (String(value) below) —
-    // readSettings() treats anything but "0" as enabled
-    updates[key] = body[key] ? "1" : "0";
-  }
-
-  if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ error: "No editable fields given" });
-  }
-
-  const stmt = db.prepare(
-    `INSERT INTO settings (key, value) VALUES (@key, @value)
-     ON CONFLICT(key) DO UPDATE SET value = @value`
-  );
-  const tx = db.transaction((entries) => {
-    for (const [key, value] of entries) stmt.run({ key, value: String(value) });
-  });
-  tx(Object.entries(updates));
-
-  res.json(readSettings());
 });
 
 export default router;

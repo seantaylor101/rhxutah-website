@@ -1,38 +1,28 @@
 import { randomUUID } from "node:crypto";
-import { db } from "./db.js";
+import { withTenant } from "./db/pool.js";
 
-const insertActivity = db.prepare(
-  `INSERT INTO activity_log (id, type, entityId, entityName, fromStage, toStage, role, createdAt)
-   VALUES (@id, @type, @entityId, @entityName, @fromStage, @toStage, @role, @createdAt)`
-);
-
-// records a lead/warranty-request stage move for the owner's activity log
-export function logMove({ type, entityId, entityName, fromStage, toStage, role }) {
-  insertActivity.run({
-    id: randomUUID(),
-    type,
-    entityId,
-    entityName,
-    fromStage: fromStage || null,
-    toStage,
-    role,
-    createdAt: new Date().toISOString(),
-  });
+// Throttled to 1 row/min per (tenant, actor) via the NOT EXISTS guard, same intent as the
+// old in-memory throttle -- this is the "PM/admin opened the app" signal shown to admins.
+export async function logAccess(tenantId, actorUserId) {
+  await withTenant(tenantId, (client) =>
+    client.query(
+      `INSERT INTO access_log (id, tenant_id, actor_user_id, created_at)
+       SELECT $1, $2, $3, now()
+       WHERE NOT EXISTS (
+         SELECT 1 FROM access_log
+         WHERE tenant_id = $2 AND actor_user_id = $3 AND created_at > now() - interval '1 minute'
+       )`,
+      [randomUUID(), tenantId, actorUserId]
+    )
+  );
 }
 
-const insertAccess = db.prepare(`INSERT INTO access_log (id, role, createdAt) VALUES (?, ?, ?)`);
-const lastAccessForRole = db.prepare(
-  `SELECT createdAt FROM access_log WHERE role = ? ORDER BY createdAt DESC LIMIT 1`
-);
-
-// throttle window so a single app open (which can trigger more than one
-// authenticated request in quick succession) doesn't log several rows
-const ACCESS_LOG_THROTTLE_MS = 60 * 1000;
-
-// records the viewer (project manager) opening the app — throttled so a
-// burst of requests from one app-open only produces one row
-export function logAccess(role) {
-  const last = lastAccessForRole.get(role);
-  if (last && Date.now() - new Date(last.createdAt).getTime() < ACCESS_LOG_THROTTLE_MS) return;
-  insertAccess.run(randomUUID(), role, new Date().toISOString());
+export async function logMove({ tenantId, type, entityId, entityName, fromStage, toStage, actorUserId }) {
+  await withTenant(tenantId, (client) =>
+    client.query(
+      `INSERT INTO activity_log (id, tenant_id, type, entity_id, entity_name, from_stage, to_stage, actor_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [randomUUID(), tenantId, type, entityId, entityName, fromStage || null, toStage, actorUserId || null]
+    )
+  );
 }

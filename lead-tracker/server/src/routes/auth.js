@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { createHash, timingSafeEqual } from "crypto";
-import { COOKIE_NAME, signSession } from "../auth.js";
-import { requireAuth } from "../middleware/requireAuth.js";
+import { COOKIE_NAME, signSession } from "../auth/session.js";
+import { requireAuth } from "../auth/middleware.js";
+import { findUserForLogin } from "../auth/users.js";
+import { verifyPassword } from "../auth/passwords.js";
+import { startViewAs, stopViewAs } from "../auth/impersonation.js";
 import { logAccess } from "../activityLog.js";
 
 const router = Router();
@@ -14,19 +16,9 @@ const cookieOptions = {
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
 
-// Constant-time compare: hash both sides to a fixed-length digest first so
-// timingSafeEqual (which requires equal-length buffers) never short-circuits
-// on the attacker-controlled input's length, and never throws on a mismatch.
-function safeCompare(a, b) {
-  const hashA = createHash("sha256").update(String(a)).digest();
-  const hashB = createHash("sha256").update(String(b)).digest();
-  return timingSafeEqual(hashA, hashB);
-}
-
-// Small in-memory per-IP limiter — the passcodes are the entire auth model
-// here, so the login endpoint is the actual front door and needs its own
-// throttle independent of anything downstream. Resets on redeploy, which is
-// fine for this purpose (mirrors the limiter on the public intake route).
+// Small in-memory per-IP limiter -- the login endpoint is the actual front door, so it
+// needs its own throttle independent of anything downstream (mirrors the limiter on the
+// public intake route).
 const attempts = new Map();
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 8;
@@ -39,8 +31,6 @@ function isRateLimited(ip) {
   return recent.length > MAX_PER_WINDOW;
 }
 
-// Sweep out IPs with no recent attempts so `attempts` doesn't grow unbounded
-// over a long-running process.
 setInterval(() => {
   const now = Date.now();
   for (const [ip, timestamps] of attempts) {
@@ -48,24 +38,31 @@ setInterval(() => {
   }
 }, WINDOW_MS).unref();
 
-router.post("/login", (req, res) => {
-  if (isRateLimited(req.ip)) {
-    return res.status(429).json({ error: "Too many attempts — try again later" });
+function publicUser(row) {
+  return { id: row.id, tenantId: row.tenant_id, email: row.email, name: row.name, role: row.role };
+}
+
+router.post("/login", async (req, res, next) => {
+  try {
+    if (isRateLimited(req.ip)) {
+      return res.status(429).json({ error: "Too many attempts — try again later" });
+    }
+
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+
+    const row = await findUserForLogin(email);
+    const ok = row && (await verifyPassword(password, row.password_hash));
+    if (!ok) return res.status(401).json({ error: "Incorrect email or password" });
+
+    if (row.role === "pm") await logAccess(row.tenant_id, row.id);
+
+    const token = signSession({ userId: row.id, tenantId: row.tenant_id, role: row.role });
+    res.cookie(COOKIE_NAME, token, cookieOptions);
+    res.json({ user: publicUser(row) });
+  } catch (err) {
+    next(err);
   }
-
-  const { passcode } = req.body || {};
-  if (!passcode) return res.status(400).json({ error: "Passcode required" });
-
-  let role = null;
-  if (process.env.OWNER_PASSCODE && safeCompare(passcode, process.env.OWNER_PASSCODE)) role = "owner";
-  else if (process.env.VIEWER_PASSCODE && safeCompare(passcode, process.env.VIEWER_PASSCODE)) role = "viewer";
-
-  if (!role) return res.status(401).json({ error: "Incorrect passcode" });
-
-  if (role === "viewer") logAccess("viewer");
-
-  res.cookie(COOKIE_NAME, signSession(role), cookieOptions);
-  res.json({ role });
 });
 
 router.post("/logout", (req, res) => {
@@ -73,11 +70,52 @@ router.post("/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/me", requireAuth("viewer"), (req, res) => {
-  // the client checks this once every time the app opens — the natural
-  // point to log a project-manager "opened the app" event
-  if (req.role === "viewer") logAccess("viewer");
-  res.json({ role: req.role });
+router.get("/me", requireAuth(), async (req, res, next) => {
+  try {
+    if (req.effective.role === "pm") await logAccess(req.effective.tenantId, req.effective.userId);
+    res.json({
+      actor: req.actor,
+      effective: req.effective,
+      viewingAs: Boolean(req.session.actingAs),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Registered before the /:userId route below -- Express matches routes in registration
+// order, and "stop" would otherwise be captured as :userId and hit the wrong handler.
+// requireAuth() here deliberately checks the real actor's session validity only (no role
+// restriction), since req.effective.role is whatever's being impersonated right now, not
+// the actor's own authority -- gating this on req.effective.role would make it
+// impossible to stop viewing as someone whose role isn't tenant_admin/platform_admin.
+router.post("/view-as/stop", requireAuth(), async (req, res, next) => {
+  try {
+    if (!req.session.actingAs) return res.status(400).json({ error: "Not currently viewing as anyone" });
+    const token = await stopViewAs({
+      actor: req.actor,
+      tenantId: req.actor.tenantId,
+      actingAsUserId: req.session.actingAs.userId,
+      actingAsRole: req.session.actingAs.role,
+    });
+    res.cookie(COOKIE_NAME, token, cookieOptions);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Tenant admin viewing as one of their own PMs, or platform admin viewing as a
+// tenant_admin for support. Every start/stop is written to audit_log.
+router.post("/view-as/:userId", requireAuth("tenant_admin", "platform_admin"), async (req, res, next) => {
+  try {
+    const { token, target } = await startViewAs({ actor: req.actor, targetUserId: req.params.userId });
+    res.cookie(COOKIE_NAME, token, cookieOptions);
+    res.json({ viewingAs: target });
+  } catch (err) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    next(err);
+  }
 });
 
 export default router;

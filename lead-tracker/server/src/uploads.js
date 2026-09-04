@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
-import { DB_PATH } from "./db.js";
 
-// lives next to the sqlite file so it sits on the same persistent Render
-// disk — photos survive deploys the same way the database already does
-export const WARRANTY_PHOTOS_DIR = path.join(path.dirname(DB_PATH), "warranty-photos");
+// A flat directory shared by every tenant -- filenames are randomUUID()+extension
+// (unguessable), and the serve route (routes/warranty.js GET /photos/:filename) checks
+// the requesting tenant actually owns a warranty_photos row for that filename before
+// streaming it back, so a flat directory doesn't weaken tenant isolation.
+const UPLOADS_ROOT = process.env.UPLOADS_DIR || path.join(process.cwd(), "data", "uploads");
+export const WARRANTY_PHOTOS_DIR = path.join(UPLOADS_ROOT, "warranty-photos");
 fs.mkdirSync(WARRANTY_PHOTOS_DIR, { recursive: true });
 
 const EXT_BY_MIME = {
@@ -25,12 +27,7 @@ const storage = multer.diskStorage({
 export const warrantyPhotoUpload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024, files: 6 },
-  // silently drop non-image files rather than erroring the whole request —
-  // the route handler 400s if that leaves nothing to save
   fileFilter: (req, file, cb) => cb(null, Object.prototype.hasOwnProperty.call(EXT_BY_MIME, file.mimetype)),
 });
 
-// every stored filename is our own randomUUID() + a known extension, so a
-// strict match here doubles as the path-traversal guard for the serve and
-// delete routes
 export const SAFE_FILENAME = /^[0-9a-f-]+\.(jpg|jpeg|png|webp|heic|heif)$/i;

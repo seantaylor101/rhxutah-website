@@ -1,46 +1,47 @@
-import { db } from "./db.js";
-import { sendPushToRole } from "./pushService.js";
+import { withTenant } from "./db/pool.js";
+import { listTenants } from "./auth/users.js";
+import { sendPushToUser } from "./pushService.js";
 import { localMonthKey } from "./businessTime.js";
 
-function readGoalMonthFields() {
-  const rows = db
-    .prepare(`SELECT key, value FROM settings WHERE key IN ('goalMonthConfirmed', 'goalMonthPushSentMonth')`)
-    .all();
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { confirmed: map.goalMonthConfirmed || "", pushSent: map.goalMonthPushSentMonth || "" };
+// Nudges each tenant user (admin or PM) once at the start of a new month if that month's
+// income goal hasn't been (re)confirmed yet -- mirrors the in-app monthly prompt, but as
+// a push so it reaches them even before they next open the app. Goals are per-user now
+// (user_goals), so this reminder is per-user too, not one global nag.
+async function sweepTenant(tenant) {
+  await withTenant(tenant.id, async (client) => {
+    const monthKey = localMonthKey(new Date(), tenant.timezone);
+    const { rows } = await client.query(
+      `SELECT g.user_id, g.month_confirmed, g.month_push_sent_month FROM user_goals g
+       JOIN users u ON u.id = g.user_id WHERE g.tenant_id = $1 AND u.disabled_at IS NULL`
+    , [tenant.id]);
+
+    for (const row of rows) {
+      if (row.month_confirmed === monthKey) continue;
+      if (row.month_push_sent_month === monthKey) continue;
+
+      await client.query(
+        `UPDATE user_goals SET month_push_sent_month = $2 WHERE tenant_id = $1 AND user_id = $3`,
+        [tenant.id, monthKey, row.user_id]
+      );
+      await sendPushToUser(tenant.id, row.user_id, {
+        title: "New month, new goal",
+        body: "How much do you want to make this month? Set your income goal in the app.",
+      }).catch((err) => console.error("goal reminder push failed:", err.message));
+    }
+  });
 }
 
-function markPushSent(monthKey) {
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES ('goalMonthPushSentMonth', @value)
-     ON CONFLICT(key) DO UPDATE SET value = @value`
-  ).run({ value: monthKey });
-}
-
-// nudges the owner once at the start of a new month if that month's income
-// goal hasn't been (re)confirmed yet — mirrors the in-app monthly prompt,
-// but as a push so it reaches them even before they next open the app.
-// goalMonthPushSentMonth is internal bookkeeping (not part of the public
-// settings API) purely to keep this to one push per month, not one per
-// hourly sweep.
-export async function sendDueGoalReminder() {
-  const monthKey = localMonthKey();
-  const { confirmed, pushSent } = readGoalMonthFields();
-  if (confirmed === monthKey) return;
-  if (pushSent === monthKey) return;
-
-  // mark first, before the async send, so a second sweep landing mid-flight
-  // can't fire a duplicate
-  markPushSent(monthKey);
-  await sendPushToRole("owner", {
-    title: "New month, new goal",
-    body: "How much do you want to make this month? Set your income goal in the app.",
-  }).catch((err) => console.error("goal reminder push failed:", err.message));
+export async function sendDueGoalReminders() {
+  const tenants = await listTenants();
+  for (const tenant of tenants) {
+    if (tenant.status !== "active") continue;
+    await sweepTenant(tenant).catch((err) => console.error(`goal reminder sweep failed for tenant ${tenant.id}:`, err.message));
+  }
 }
 
 export function startGoalReminderScheduler() {
-  sendDueGoalReminder().catch((err) => console.error("goal reminder sweep failed:", err.message));
+  sendDueGoalReminders().catch((err) => console.error("goal reminder sweep failed:", err.message));
   setInterval(() => {
-    sendDueGoalReminder().catch((err) => console.error("goal reminder sweep failed:", err.message));
-  }, 60 * 60 * 1000);
+    sendDueGoalReminders().catch((err) => console.error("goal reminder sweep failed:", err.message));
+  }, 60 * 60 * 1000).unref();
 }
