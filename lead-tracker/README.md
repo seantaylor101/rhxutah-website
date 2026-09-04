@@ -102,20 +102,28 @@ migrating an existing single-tenant SQLite deployment (the pre-multi-tenant vers
 this app) to this Postgres version, read the whole thing before running anything against
 production; several steps are one-way.
 
+**Sequencing matters**: everything through step 5 below happens against production
+Postgres directly (via one-off scripts), with the *old* app still live and completely
+unaffected -- it doesn't read any of these new env vars or tables. Only step 6 (merging
+this branch to the branch Render deploys) actually changes what's running. Doing it in
+this order means that merge is a clean code swap onto already-correct, already-verified
+data, not a race to finish setup before someone hits a broken login page.
+
 ### 1. Provision Postgres
 
-The `render.yaml` Blueprint at the repo root now includes a `databases:` block
-(`rhx-lead-tracker-db`, starter plan). In the Render dashboard: **New +** → **Blueprint**,
-connect this repo, and apply. This creates the Postgres instance and wires its connection
-string into the web service as `DATABASE_URL` automatically. **This is a new paid
-resource (Render Postgres starter plan) in addition to the existing web service** — check
-the pricing before applying if that matters.
+`render.yaml` now includes a `databases:` block (`rhx-lead-tracker-db`, starter plan).
+Merge **just that file** (not the rest of this branch yet) to the branch your Render
+Blueprint tracks, or add the database by hand as a separate resource in the Render
+dashboard (**New +** → **PostgreSQL**) -- either way you end up with a Postgres instance
+and its owner connection string. **This is a new paid resource in addition to the
+existing web service** (roughly $6-7/month on the starter tier at time of writing --
+confirm the current price in the Render dashboard before applying).
 
 ### 2. Create the two application roles
 
-`DATABASE_URL` (from step 1) is the database *owner* connection — the running app never
-uses it directly. From your own machine (or Render's shell), with that `DATABASE_URL` and
-two passwords you choose:
+The connection string from step 1 is the database *owner* connection -- the running app
+never uses it directly. From your own machine, with that connection string as
+`DATABASE_URL` and two passwords you choose:
 
 ```bash
 DATABASE_URL='<from Render dashboard>' \
@@ -125,25 +133,34 @@ DATABASE_URL='<from Render dashboard>' \
 DATABASE_URL='<same>' npm --prefix lead-tracker/server run migrate
 ```
 
-Then, in the Render dashboard, set `APP_DATABASE_URL` and `PLATFORM_DATABASE_URL` env
-vars on the web service: take `DATABASE_URL`'s host/port/database name and swap in
+Construct `APP_DATABASE_URL`/`PLATFORM_DATABASE_URL` yourself: same host/port/database
+name as `DATABASE_URL`, with the username/password swapped for
 `leadhammer_app`/`APP_DB_PASSWORD` and `leadhammer_platform`/`PLATFORM_DB_PASSWORD`
-respectively. (Render's Blueprint can't derive these automatically -- they're custom
-roles this app creates, not Render's own managed database user.)
+respectively. Set all three (plus `SESSION_SECRET`, generated for you if using the
+Blueprint) as env vars on the web service in the Render dashboard now -- the still-old
+app ignores them, so this is a no-op until step 6.
 
-### 3. Create your platform admin account and onboard your tenant
+### 3. Onboard your tenant and its PMs directly against the database
 
-Once the service is deployed with the env vars above:
+No need to wait for the new code to be live -- these scripts talk to Postgres directly:
 
 ```bash
-DATABASE_URL='<Render DATABASE_URL>' APP_DATABASE_URL='<Render APP_DATABASE_URL>' \
-  PLATFORM_DATABASE_URL='<Render PLATFORM_DATABASE_URL>' \
+# your own platform_admin account (Lead Hammer, the product -- not a business tenant)
+DATABASE_URL='...' APP_DATABASE_URL='...' PLATFORM_DATABASE_URL='...' \
   npm --prefix lead-tracker/server run create-platform-admin -- you@example.com "Your Name" a-real-password
+
+# your own business as the first tenant, with you as its tenant_admin
+DATABASE_URL='...' APP_DATABASE_URL='...' PLATFORM_DATABASE_URL='...' \
+  npm --prefix lead-tracker/server run onboard-tenant -- "RHX Utah" rhx-utah America/Denver sean@rhxutah.com Sean a-real-password
+# -> prints the new tenant id; keep it for steps 4 and 5
+
+# each real PM, so their user id exists for PM_MANAGER_MAP below
+DATABASE_URL='...' APP_DATABASE_URL='...' PLATFORM_DATABASE_URL='...' \
+  npm --prefix lead-tracker/server run add-user -- <tenantId> dave@rhxutah.com Dave a-real-password pm
 ```
 
-Sign in at the live URL as that platform admin, and use "Onboard a new client" to create
-your own business as the first tenant (e.g. "RHX Utah"). Note the tenant id it returns --
-you'll need it in step 5.
+If you're not hiring PMs yet, skip the `add-user` calls -- you (the tenant admin) own
+every job directly until you push one to a PM.
 
 ### 4. Migrate existing SQLite data (skip if starting fresh)
 
@@ -151,36 +168,40 @@ If there's an existing single-tenant deployment with real leads in `leads.db`:
 
 1. Download that file off the old deployment's persistent disk (Render's dashboard shell,
    or however you access that service's disk).
-2. Add each real PM as a user in your new tenant first (Team, in the app), and note their
-   user ids.
-3. Run the migration script **against a local copy of the Postgres database first** to
+2. Run the migration script **against a local copy of the Postgres database first** to
    verify it before touching production -- see the script's own header comment
    (`scripts/migrate-sqlite-to-postgres.js`) for the full usage and exactly what it does
    and doesn't migrate (it does not copy warranty photo files themselves -- copy those
    separately into the new deployment's `UPLOADS_DIR`).
-4. Once verified, run it for real:
+3. Once verified, run it for real, using the tenant/PM ids from step 3:
    ```bash
    SQLITE_PATH=/path/to/downloaded/leads.db \
      TARGET_TENANT_ID='<from step 3>' \
-     PM_MANAGER_MAP='{"Dave":"<daves-new-user-id>"}' \
-     DATABASE_URL='<Render DATABASE_URL>' APP_DATABASE_URL='<Render APP_DATABASE_URL>' \
-     PLATFORM_DATABASE_URL='<Render PLATFORM_DATABASE_URL>' \
+     PM_MANAGER_MAP='{"Dave":"<daves-new-user-id-from-step-3>"}' \
+     DATABASE_URL='...' APP_DATABASE_URL='...' PLATFORM_DATABASE_URL='...' \
      npm --prefix lead-tracker/server run migrate:sqlite
    ```
-5. Spot-check the migrated leads/contacts/warranty tickets against the old app before
-   relying on this being the system of record.
+4. Spot-check the migrated leads/contacts/warranty tickets directly in Postgres (`psql`,
+   or any DB client) against the old app before relying on this being the system of
+   record.
 
 ### 5. Wire up the public website intake form
 
-Set `PUBLIC_INTAKE_TENANT_ID` (Render env var) to your tenant's id from step 3, and
-`FORM_INTAKE_KEY` to whatever secret the public site's form already sends. Without this
-set, `/api/public/leads` returns 503 rather than silently dropping leads.
+Set `PUBLIC_INTAKE_TENANT_ID` (Render env var, on the web service) to your tenant's id
+from step 3, and `FORM_INTAKE_KEY` to whatever secret the public site's form already
+sends. Without this set, `/api/public/leads` returns 503 rather than silently dropping
+leads -- and since it's just an env var, it's already safe to set now.
 
 ### 6. Go live
 
 Merge this branch to whichever branch Render's web service tracks for auto-deploy (`main`,
 typically) -- that triggers the actual production deploy. The disk at `/app/data` persists
 across deploys, same as before, now holding warranty photo uploads instead of `leads.db`.
+
+Once it's live, sign in with the email/password accounts created in step 3 -- the old
+shared `OWNER_PASSCODE`/`VIEWER_PASSCODE` no longer work at all (there's no code path
+left that checks them). Let everyone who used to share those two passcodes know their new
+individual login before they try the old one and get confused.
 
 ## API summary
 
