@@ -28,6 +28,15 @@ export async function findUserForLogin(email) {
   });
 }
 
+// Stamped on every successful login -- the one activity signal a platform_admin can see
+// per tenant (via the platform pool's unconditional access to `users`) without any
+// grant on business tables. Best-effort: never let a timestamp update block a login.
+export async function markLoggedIn(userId) {
+  await withPlatform((client) => client.query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [userId])).catch(
+    () => {}
+  );
+}
+
 export async function getUserById(effectiveTenantId, userId) {
   return withTenant(effectiveTenantId, async (client) => {
     const { rows } = await client.query("SELECT * FROM users WHERE id = $1", [userId]);

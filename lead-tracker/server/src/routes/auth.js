@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { COOKIE_NAME, signSession } from "../auth/session.js";
 import { requireAuth } from "../auth/middleware.js";
-import { findUserForLogin } from "../auth/users.js";
+import { findUserForLogin, markLoggedIn } from "../auth/users.js";
 import { verifyPassword } from "../auth/passwords.js";
 import { startViewAs, stopViewAs } from "../auth/impersonation.js";
 import { logAccess } from "../activityLog.js";
@@ -56,6 +56,7 @@ router.post("/login", async (req, res, next) => {
     if (!ok) return res.status(401).json({ error: "Incorrect email or password" });
 
     if (row.role === "pm") await logAccess(row.tenant_id, row.id);
+    markLoggedIn(row.id).catch(() => {});
 
     const token = signSession({ userId: row.id, tenantId: row.tenant_id, role: row.role });
     res.cookie(COOKIE_NAME, token, cookieOptions);

@@ -1,16 +1,43 @@
 import { Router } from "express";
 import { requireAuth } from "../auth/middleware.js";
 import { withPlatform } from "../db/pool.js";
-import { listTenants, createTenantWithAdmin } from "../auth/users.js";
+import { createTenantWithAdmin } from "../auth/users.js";
 
 const router = Router();
 
-// Platform-admin-only: onboard/list/suspend tenants. Deliberately thin -- it only ever
-// touches tenants/users/audit_log (via the platform pool, which has no grant on any
-// business table), never a tenant's leads/contacts/warranty/goals/settings.
+// Platform-admin-only: onboard/list/suspend tenants, plus a basic health signal for
+// each (user counts, most recent login). Deliberately thin -- it only ever touches
+// tenants/users/audit_log (via the platform pool, which has no grant on any business
+// table), never a tenant's leads/contacts/warranty/goals/settings. last_login_at on
+// `users` is the one activity signal available without crossing that boundary.
 router.get("/tenants", requireAuth("platform_admin"), async (req, res, next) => {
   try {
-    res.json(await listTenants());
+    const { rows } = await withPlatform((client) =>
+      client.query(`
+        SELECT
+          t.*,
+          COUNT(u.id) FILTER (WHERE u.disabled_at IS NULL) AS active_user_count,
+          COUNT(u.id) FILTER (WHERE u.role = 'pm' AND u.disabled_at IS NULL) AS active_pm_count,
+          MAX(u.last_login_at) AS last_active_at
+        FROM tenants t
+        LEFT JOIN users u ON u.tenant_id = t.id
+        GROUP BY t.id
+        ORDER BY t.created_at DESC
+      `)
+    );
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        timezone: r.timezone,
+        status: r.status,
+        createdAt: r.created_at,
+        activeUserCount: Number(r.active_user_count),
+        activePmCount: Number(r.active_pm_count),
+        lastActiveAt: r.last_active_at,
+      }))
+    );
   } catch (err) {
     next(err);
   }

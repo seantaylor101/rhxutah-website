@@ -2956,6 +2956,10 @@ function PlatformAdminApp({ onLogout }) {
                 <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}>
                   {t.slug} · {t.timezone} · {t.status}
                 </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: t.lastActiveAt ? COLORS.muted : COLORS.rust, marginTop: 2 }}>
+                  {t.activeUserCount} user{t.activeUserCount === 1 ? "" : "s"} ({t.activePmCount} PM{t.activePmCount === 1 ? "" : "s"}) ·{" "}
+                  {t.lastActiveAt ? `last active ${fmtRelativeTime(t.lastActiveAt)}` : "no one has logged in yet"}
+                </div>
               </div>
               <button
                 onClick={() => toggleSuspend(t)}
