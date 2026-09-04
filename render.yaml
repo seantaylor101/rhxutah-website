@@ -1,3 +1,13 @@
+databases:
+  # Render-managed Postgres. Its own connection string (below, as DATABASE_URL) is the
+  # DB-owner connection used only for one-time setup (creating the leadhammer_app /
+  # leadhammer_platform roles and running migrations) -- the running app never connects
+  # as this user. See lead-tracker/README.md's "Production cutover" section.
+  - name: rhx-lead-tracker-db
+    databaseName: leadhammer
+    user: leadhammer
+    plan: starter
+
 services:
   - type: web
     name: rhx-lead-tracker
@@ -11,15 +21,23 @@ services:
         value: production
       - key: PORT
         value: 4000
-      - key: DB_PATH
-        value: /app/data/leads.db
       - key: SESSION_SECRET
         generateValue: true
-      - key: OWNER_PASSCODE
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rhx-lead-tracker-db
+          property: connectionString
+      # APP_DATABASE_URL / PLATFORM_DATABASE_URL can't be derived automatically by
+      # Render (they're custom roles this app creates inside the same database, not
+      # Render's own managed user) -- set both by hand after running
+      # `npm run setup-db-roles` once, per lead-tracker/README.md.
+      - key: APP_DATABASE_URL
         sync: false
-      - key: VIEWER_PASSCODE
+      - key: PLATFORM_DATABASE_URL
         sync: false
       - key: FORM_INTAKE_KEY
+        sync: false
+      - key: PUBLIC_INTAKE_TENANT_ID
         sync: false
       - key: WEB3FORMS_ACCESS_KEY
         sync: false

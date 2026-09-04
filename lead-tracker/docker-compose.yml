@@ -1,15 +1,45 @@
 services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: leadhammer
+      POSTGRES_USER: leadhammer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadhammer_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   app:
     build: .
+    depends_on:
+      - db
     ports:
       - "4000:4000"
     environment:
       NODE_ENV: production
       PORT: 4000
       SESSION_SECRET: ${SESSION_SECRET}
-      OWNER_PASSCODE: ${OWNER_PASSCODE}
-      VIEWER_PASSCODE: ${VIEWER_PASSCODE}
-      DB_PATH: /app/data/leads.db
+      # DB owner connection -- only used for the one-time setup-db-roles/migrate
+      # commands below, not by the running app.
+      DATABASE_URL: postgresql://leadhammer:${POSTGRES_PASSWORD:-leadhammer_dev}@db:5432/leadhammer
+      APP_DATABASE_URL: postgresql://leadhammer_app:${APP_DB_PASSWORD:-app_dev_pw}@db:5432/leadhammer
+      PLATFORM_DATABASE_URL: postgresql://leadhammer_platform:${PLATFORM_DB_PASSWORD:-platform_dev_pw}@db:5432/leadhammer
+      FORM_INTAKE_KEY: ${FORM_INTAKE_KEY}
+      PUBLIC_INTAKE_TENANT_ID: ${PUBLIC_INTAKE_TENANT_ID}
+      WEB3FORMS_ACCESS_KEY: ${WEB3FORMS_ACCESS_KEY}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+volumes:
+  pgdata:
+
+# First run, once the `db` service is up:
+#   docker compose run --rm \
+#     -e APP_DB_PASSWORD=${APP_DB_PASSWORD:-app_dev_pw} -e PLATFORM_DB_PASSWORD=${PLATFORM_DB_PASSWORD:-platform_dev_pw} \
+#     app npm run setup-db-roles
+#   docker compose run --rm app npm run migrate
+#   docker compose run --rm app npm run create-platform-admin -- you@example.com "Your Name" a-real-password
