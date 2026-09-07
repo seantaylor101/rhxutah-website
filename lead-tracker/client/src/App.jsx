@@ -6910,20 +6910,9 @@ function LeadTicket({
           {editable && !editingName && (
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <LeadMoreMenu lead={lead} onMove={onMove} />
-              {!confirmDel ? (
-                <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
-                  <Trash2 size={18} color="#9A9184" />
-                </button>
-              ) : (
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button onClick={() => onDelete(lead.id)} style={{ ...iconBtn, background: COLORS.rust }} aria-label="Confirm delete">
-                    <Check size={18} color="#fff" />
-                  </button>
-                  <button onClick={() => setConfirmDel(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel delete">
-                    <X size={18} color="#fff" />
-                  </button>
-                </div>
-              )}
+              <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
+                <Trash2 size={18} color="#9A9184" />
+              </button>
             </div>
           )}
         </div>
@@ -7606,7 +7595,46 @@ function LeadTicket({
         onSkip={() => setShowWorkDaysPrompt(false)}
       />
     )}
+    {confirmDel && (
+      <DeleteConfirmModal
+        label="lead"
+        itemName={lead.name}
+        onConfirm={() => {
+          setConfirmDel(false);
+          onDelete(lead.id);
+        }}
+        onCancel={() => setConfirmDel(false)}
+      />
+    )}
     </>
+  );
+}
+
+function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
+  return (
+    <div style={{ ...modalOverlay, alignItems: "center", padding: 20, boxSizing: "border-box" }} onClick={onCancel}>
+      <div style={{ ...modalCard, borderRadius: 20, border: `1px solid ${COLORS.border}`, maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          Delete {label} "{itemName}"?
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+          This can't be undone from here.
+        </div>
+        <button
+          onClick={onConfirm}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, background: COLORS.rust }}
+        >
+          Delete
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
+    </div>
   );
 }
 
