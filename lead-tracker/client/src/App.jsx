@@ -1082,7 +1082,8 @@ function fmtRelativeTime(iso) {
 }
 
 const BACKUP_TIERS = [
-  { key: "5min", label: "Every 5 minutes" },
+  { key: "active", label: "While app is in use (every 2 min)" },
+  { key: "fixed", label: "Morning & evening (6:55am / 11pm)" },
   { key: "hourly", label: "Hourly" },
   { key: "daily", label: "Daily" },
   { key: "weekly", label: "Weekly" },

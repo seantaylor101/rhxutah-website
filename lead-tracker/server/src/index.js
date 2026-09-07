@@ -16,7 +16,7 @@ import calendarRoutes from "./routes/calendar.js";
 import activityRoutes from "./routes/activity.js";
 import contactsRoutes from "./routes/contacts.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
-import { startBackupScheduler } from "./backupService.js";
+import { startBackupScheduler, recordActivity } from "./backupService.js";
 import { startGoalReminderScheduler } from "./goalReminders.js";
 import { startAppointmentReminderScheduler } from "./appointmentReminders.js";
 import { startAppointmentDigestScheduler } from "./appointmentDigest.js";
@@ -30,6 +30,13 @@ app.set("trust proxy", true);
 
 app.use(express.json());
 app.use(cookieParser());
+
+// any request — the board loading, an API call, a new lead posted from the
+// public site form — counts as "the app is in use" for backup cadence
+app.use((req, res, next) => {
+  recordActivity();
+  next();
+});
 
 const ALLOWED_PUBLIC_ORIGINS = new Set(["https://rhxutah.com", "https://www.rhxutah.com"]);
 const publicCors = cors({
