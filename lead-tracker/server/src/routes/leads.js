@@ -11,7 +11,7 @@ import { localMonthKey } from "../businessTime.js";
 const router = Router();
 
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "website", "other"]);
-const STAGES = new Set(["new", "bid", "lost", "won", "progress", "completed", "paid"]);
+const STAGES = new Set(["new", "bid", "lost", "won", "scheduled", "progress", "completed", "paid"]);
 const EDITABLE_FIELDS = new Set([
   "createdAt",
   "startDate",
@@ -161,8 +161,9 @@ router.post("/", requireAuth("owner"), (req, res) => {
 // Stage transitions carry the same bidSentAt/wonAt/completedAt/paidAt side
 // effects the original client applied — these timestamps double as the raw
 // data for the performance-metrics breakdowns (time in each stage, etc).
-const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "progress", "completed", "paid"]);
-const AT_OR_AFTER_WON = new Set(["won", "progress", "completed", "paid"]);
+const AT_OR_AFTER_BID = new Set(["bid", "lost", "won", "scheduled", "progress", "completed", "paid"]);
+const AT_OR_AFTER_WON = new Set(["won", "scheduled", "progress", "completed", "paid"]);
+const AT_OR_AFTER_SCHEDULED = new Set(["scheduled", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
 // viewer-level so the project manager can advance a job from "in progress"
@@ -206,6 +207,9 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     } else if (stage !== "paid") {
       patch.paidAt = null;
     }
+    if (!AT_OR_AFTER_SCHEDULED.has(stage)) {
+      patch.scheduledAt = null;
+    }
     if (!AT_OR_AFTER_COMPLETED.has(stage)) {
       patch.completedAt = null;
       patch.actualWorkDays = null;
@@ -214,6 +218,10 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     patch.bidSentAt = ts;
   } else if (stage === "won") {
     patch.wonAt = ts;
+    patch.scheduledAt = null;
+    patch.paidAt = null;
+  } else if (stage === "scheduled") {
+    patch.scheduledAt = ts;
     patch.paidAt = null;
   } else if (stage === "completed") {
     patch.completedAt = ts;
@@ -233,6 +241,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     // reading this as "not won" regardless of how far it got. bidSentAt is
     // deliberately kept: the bid was still genuinely sent
     patch.wonAt = null;
+    patch.scheduledAt = null;
     patch.paidAt = null;
     patch.completedAt = null;
     patch.actualWorkDays = null;
@@ -240,6 +249,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   } else {
     // new (reopen)
     patch.wonAt = null;
+    patch.scheduledAt = null;
     patch.paidAt = null;
     patch.bidSentAt = null;
   }

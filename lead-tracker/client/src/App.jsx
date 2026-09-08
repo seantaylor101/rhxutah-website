@@ -232,6 +232,7 @@ const COLORS = {
   amber: "#C79A3D",
   lost: "#9B9686",
   progress: "#BD7238",
+  scheduled: "#4A7C8C",
   info: "#6E8CA0",
   // vivid red/orange used for the header's icon tiles and hero CTA —
   // sampled from the reference mockup, distinct from the app-wide rust/
@@ -245,6 +246,7 @@ const STAGES = [
   { key: "bid", label: "Bid Complete / Waiting", short: "Bid Sent", color: COLORS.amber },
   { key: "lost", label: "Lost", short: "Lost", color: COLORS.lost },
   { key: "won", label: "Job Won — Not Started", short: "Won", color: COLORS.accent },
+  { key: "scheduled", label: "Scheduled — Ready to Start", short: "Scheduled", color: COLORS.scheduled },
   { key: "progress", label: "Jobs In Progress", short: "In Progress", color: COLORS.progress },
   { key: "completed", label: "Completed This Month", short: "Completed", color: COLORS.info },
   { key: "paid", label: "Paid", short: "Paid", color: COLORS.accent },
@@ -256,7 +258,8 @@ const PREVIOUS_STAGE = {
   bid: "new",
   lost: "bid",
   won: "bid",
-  progress: "won",
+  scheduled: "won",
+  progress: "scheduled",
   completed: "progress",
   paid: "completed",
 };
@@ -429,7 +432,7 @@ function laneColor(lane) {
 // set — same "AT_OR_AFTER_WON" scope the server enforces for who can edit
 // startDate, so a lead that's since been marked lost (which leaves
 // startDate in place but no longer means anything) never shows up
-const CALENDAR_STAGES = new Set(["won", "progress", "completed", "paid"]);
+const CALENDAR_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
 
 function computeMetrics(subset, overheadPercent = 13) {
   const days = (fromIso, toIso) => (new Date(toIso) - new Date(fromIso)) / 86400000;
@@ -2596,7 +2599,7 @@ function App() {
         </>
       )}
 
-      {view === "board" && activeStage === "won" && (
+      {view === "board" && (activeStage === "won" || activeStage === "scheduled") && (
         <CalendarSlideOver
           leads={leads}
           allMetrics={allSourcesMetrics}
@@ -4086,7 +4089,7 @@ function DashboardView({
             <span style={{ fontFamily: FONT_BODY, fontWeight: 400, fontSize: 13, color: COLORS.muted }}> active</span>
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
-            {counts.new || 0} new · {counts.won || 0} won · {counts.progress || 0} in progress
+            {counts.new || 0} new · {counts.won || 0} won · {counts.scheduled || 0} scheduled · {counts.progress || 0} in progress
           </div>
         </DashboardTile>
 
@@ -7384,7 +7387,7 @@ function LeadTicket({
         editable by the viewer role too (not just editable/owner) since
         scheduling a won job's start date is a project-manager task; the
         server enforces the same "won or later" restriction independently */}
-        {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
+        {(lead.stage === "won" || lead.stage === "scheduled" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
           <div
             onClick={
               !editingStart && (editable || role === "viewer")
@@ -7425,7 +7428,7 @@ function LeadTicket({
             prompt right after the win; visible to both roles, editable by the
             owner only. Changing it to Dave here (not just from that prompt)
             also fires the "Lead won!" push if the job is still at "won" */}
-        {(lead.stage === "won" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
+        {(lead.stage === "won" || lead.stage === "scheduled" || lead.stage === "progress" || lead.stage === "completed" || lead.stage === "paid") && (
           <div
             onClick={!editingManager && editable ? openManagerEdit : undefined}
             style={{
@@ -7476,7 +7479,7 @@ function LeadTicket({
             to set on jobs that never got a start date yet or revise later.
             Once completed, the real number lives in the Final Report
             instead, so this field steps aside then. */}
-        {(lead.stage === "won" || lead.stage === "progress") && (
+        {(lead.stage === "won" || lead.stage === "scheduled" || lead.stage === "progress") && (
           <div
             onClick={!editingWorkDaysEst ? openWorkDaysEstEdit : undefined}
             style={{
@@ -7817,6 +7820,9 @@ function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {
       actions = [btn("Reopen as new", "new", "secondary")];
       break;
     case "won":
+      actions = [btn("Scheduled", "scheduled")];
+      break;
+    case "scheduled":
       actions = [btn("Start job", "progress")];
       break;
     case "progress":

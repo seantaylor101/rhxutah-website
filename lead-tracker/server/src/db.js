@@ -81,6 +81,12 @@ if (!existingColumns.has("lostAt")) {
   // to a month for reporting the way every other stage transition can
   db.exec(`ALTER TABLE leads ADD COLUMN lostAt TEXT`);
 }
+if (!existingColumns.has("scheduledAt")) {
+  // when a won job moved into the new "scheduled" stage (between "won" and
+  // "progress") — a PM has actually set a start date and is ready to
+  // begin, vs. a job that's won but still sitting unscheduled
+  db.exec(`ALTER TABLE leads ADD COLUMN scheduledAt TEXT`);
+}
 if (!existingColumns.has("scopeOfWork")) {
   // JSON-encoded array of { id, text, done } checklist items, filled out
   // right after a lead is marked won so the project manager knows exactly
