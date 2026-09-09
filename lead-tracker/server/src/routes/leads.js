@@ -166,9 +166,11 @@ const AT_OR_AFTER_WON = new Set(["won", "scheduled", "progress", "completed", "p
 const AT_OR_AFTER_SCHEDULED = new Set(["scheduled", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED = new Set(["completed", "paid"]);
 
-// viewer-level so the project manager can advance a job from "in progress"
-// to "completed" — every other transition (including reverts) stays
-// owner-only, enforced below since requireAuth only checks the floor
+// viewer-level so the project manager can schedule a won job, start a
+// scheduled job, and advance an in-progress job to completed — every other
+// transition (including reverts) stays owner-only, enforced below since
+// requireAuth only checks the floor
+const VIEWER_MOVE_TRANSITIONS = new Set(["won:scheduled", "scheduled:progress", "progress:completed"]);
 router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   const { stage, date, revert, workDays } = req.body || {};
   if (!STAGES.has(stage)) return res.status(400).json({ error: "Invalid stage" });
@@ -176,7 +178,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
   if (!row) return;
 
   if (req.role !== "owner") {
-    const viewerAllowed = !revert && row.stage === "progress" && stage === "completed";
+    const viewerAllowed = !revert && VIEWER_MOVE_TRANSITIONS.has(`${row.stage}:${stage}`);
     if (!viewerAllowed) return res.status(403).json({ error: "Editor access required" });
   }
 

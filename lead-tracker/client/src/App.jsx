@@ -4197,6 +4197,10 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
   const [calFilter, setCalFilter] = useState("all");
 
   const toKey = (d) => d.toISOString().slice(0, 10);
+  // same UTC-based key the whole grid uses (see toKey/gridStart/gridEnd
+  // above), so "today" lines up with whichever cell the grid itself
+  // considers today rather than introducing a separate local-time notion
+  const todayKey = toKey(new Date());
   const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(
     monthStart
   );
@@ -4411,9 +4415,33 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
                 {days.map((dayKey) => {
                   const dayNum = Number(dayKey.slice(8, 10));
+                  const isToday = dayKey === todayKey;
                   return (
-                    <div key={dayKey} style={{ borderRight: `1px solid ${COLORS.border}`, height: DAY_LABEL_H, padding: "4px 0 0 4px" }}>
-                      <span style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted }}>{dayNum}</span>
+                    <div
+                      key={dayKey}
+                      style={{
+                        borderRight: `1px solid ${COLORS.border}`,
+                        height: DAY_LABEL_H,
+                        padding: "4px 0 0 4px",
+                        background: isToday ? "rgba(71,147,107,0.12)" : "transparent",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: FONT_UTIL,
+                          fontSize: 11,
+                          fontWeight: isToday ? 800 : 400,
+                          color: isToday ? COLORS.accent : COLORS.muted,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          ...(isToday
+                            ? { width: 16, height: 16, borderRadius: "50%", background: COLORS.accent, color: "#fff" }
+                            : {}),
+                        }}
+                      >
+                        {dayNum}
+                      </span>
                     </div>
                   );
                 })}
@@ -7575,10 +7603,13 @@ function LeadTicket({
         )}
 
         {/* actions — owners get the full stage-move row; the project manager
-            (viewer) only gets to advance a job from in-progress to
-            completed, which ActionRow's per-stage switch already limits to
-            just the "Mark complete" button once lead.stage is "progress" */}
-        {(editable || (role === "viewer" && lead.stage === "progress")) && (
+            (viewer) also gets to schedule a won job, start a scheduled job,
+            and advance an in-progress job to completed — ActionRow's
+            per-stage switch already limits each of those to just the one
+            relevant button for that stage */}
+        {(editable ||
+          (role === "viewer" &&
+            (lead.stage === "won" || lead.stage === "scheduled" || lead.stage === "progress"))) && (
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
