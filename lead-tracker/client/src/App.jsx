@@ -7582,7 +7582,7 @@ function LeadTicket({
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
-        {editable && lead.stage === "bid" && (
+        {editable && (lead.stage === "new" || lead.stage === "bid") && (
           <FollowUpSection
             lead={lead}
             onLog={() => onLogFollowup(lead.id)}
@@ -7686,9 +7686,9 @@ function priorDateFor(lead, stage) {
   return null;
 }
 
-// logs a touch (call/text/email) while a lead sits in "bid" — a running
-// tally rather than a fixed checklist, since there's no set number of
-// follow-ups; each tap just adds one more dated entry. Expandable so a
+// logs a touch (call/text/email) while a lead sits in "new" or "bid" — a
+// running tally rather than a fixed checklist, since there's no set number
+// of follow-ups; each tap just adds one more dated entry. Expandable so a
 // misclick can be undone without losing the rest of the count.
 function FollowUpSection({ lead, onLog, onRemove }) {
   const [expanded, setExpanded] = useState(false);
