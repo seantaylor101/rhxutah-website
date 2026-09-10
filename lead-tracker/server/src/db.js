@@ -142,10 +142,20 @@ db.exec(`
     leadId TEXT,
     title TEXT NOT NULL,
     body TEXT NOT NULL,
+    role TEXT,
     createdAt TEXT NOT NULL,
     readAt TEXT
   );
 `);
+
+// who this alert is for — "owner", "viewer", or NULL for the handful of
+// legacy rows written before alerts were scoped by role. Without this every
+// notification (a new lead came in, a final report is due) showed up for
+// whichever role opened the panel, including ones the PM has no way to act
+// on.
+if (!db.prepare(`PRAGMA table_info(notifications)`).all().some((c) => c.name === "role")) {
+  db.exec(`ALTER TABLE notifications ADD COLUMN role TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
