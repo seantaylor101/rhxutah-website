@@ -267,6 +267,11 @@
           <textarea name="message" id="lp_message"></textarea>
         </div>
 
+        <div class="gfield" style="position:absolute; left:-9999px; top:-9999px; height:0; overflow:hidden;" aria-hidden="true">
+          <label for="lp_company">Company</label>
+          <input type="text" name="company" id="lp_company" tabindex="-1" autocomplete="off" />
+        </div>
+
         <button type="submit" class="lp-submit">Get My Free Quote</button>
       </form>
       <div class="lp-alt">or call/text us directly at <a href="tel:+18019003362">(801) 900-3362</a></div>
@@ -298,6 +303,14 @@ document.getElementById('lp-quote-form').addEventListener('submit', function (e)
   e.preventDefault();
   var form = e.target;
   var data = new FormData(form);
+
+  if (data.get('company')) {
+    // honeypot tripped — a real visitor never sees or fills this field,
+    // so pretend success and don't submit anywhere
+    document.getElementById('lp-form-wrap').style.display = 'none';
+    document.getElementById('lp-success').style.display = 'block';
+    return;
+  }
 
   notifyJobBoard({
     name: data.get('name') || '',

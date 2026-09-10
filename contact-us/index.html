@@ -384,6 +384,7 @@ var gform_gravityforms = {"strings":{"invalid_file_extension":"This type of file
                         <div class="gfield gfield--width-half"><label class='gfield_label gform-field-label' for='input_email'>Email</label><div class='ginput_container ginput_container_email'><input type='email' name='email' id='input_email' class='large' required /></div></div>
                         <div class="gfield gfield--width-half"><label class='gfield_label gform-field-label' for='input_phone'>Phone</label><div class='ginput_container ginput_container_phone'><input type='tel' name='phone' id='input_phone' class='large' /></div></div>
                         <div class="gfield"><label class='gfield_label gform-field-label' for='input_message'>Message</label><div class='ginput_container ginput_container_textarea'><textarea name='message' id='input_message' class='textarea large' rows='10' cols='50'></textarea></div></div>
+                        <div class="gfield" style="position:absolute; left:-9999px; top:-9999px; height:0; overflow:hidden;" aria-hidden="true"><label for='input_company'>Company</label><div class='ginput_container'><input type='text' name='company' id='input_company' tabindex='-1' autocomplete='off' /></div></div>
                         </div></div>
                         <div class='gform-footer gform_footer top_label'><input type='submit' class='gform_button button' value='Get My Free Quote' /></div>
                     </form>
@@ -405,6 +406,14 @@ var gform_gravityforms = {"strings":{"invalid_file_extension":"This type of file
                       form.addEventListener('submit', function (e) {
                         e.preventDefault();
                         var data = new FormData(form);
+
+                        if (data.get('company')) {
+                          // honeypot tripped — a real visitor never sees or fills this field,
+                          // so pretend success and don't submit anywhere
+                          form.style.display = 'none';
+                          document.getElementById('gform_1_success').style.display = 'block';
+                          return;
+                        }
 
                         notifyJobBoard({
                           name: data.get('name') || '',
