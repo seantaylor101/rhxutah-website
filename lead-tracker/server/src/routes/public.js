@@ -99,7 +99,7 @@ router.post("/leads", (req, res) => {
   // in-app notification log — persists regardless of whether push/email
   // actually land, so there's always somewhere to see what came in
   try {
-    createNotification({ leadId: lead.id, title, body });
+    createNotification({ leadId: lead.id, title, body, role: "owner" });
   } catch (err) {
     console.error("failed to log notification:", err.message);
   }

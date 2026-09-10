@@ -22,7 +22,7 @@ export async function sendDueReportReminders() {
     const title = "Complete final report";
     const body = `${lead.name}${lead.job ? " — " + lead.job : ""}`;
     try {
-      createNotification({ leadId: lead.id, title, body });
+      createNotification({ leadId: lead.id, title, body, role: "owner" });
     } catch (err) {
       console.error("failed to log report reminder notification:", err.message);
     }
