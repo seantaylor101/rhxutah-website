@@ -8089,7 +8089,7 @@ function LeadProfileModal({
           )}
         </ProfileSection>
 
-        <ProfileSection title="Photos & video">
+        <ProfileSection title="Job instruction photo and video references">
           <JobMediaGallery
             lead={lead}
             editable={editable}
@@ -8117,10 +8117,10 @@ function LeadProfileModal({
           </CheckRow>
         </ProfileSection>
 
-        {/* pick-ups on the way */}
-        <ProfileSection title="Pick up on the way">
+        {/* shopping list — items to grab on the way */}
+        <ProfileSection title="Shopping list">
           {details.pickups.length === 0 && !editable && (
-            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>Nothing to pick up.</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>Nothing on the list.</div>
           )}
           {details.pickups.map((p) => (
             <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -8164,7 +8164,7 @@ function LeadProfileModal({
                   onClick={addPickup}
                   disabled={!pickupText.trim()}
                   style={{ ...addBtn, opacity: pickupText.trim() ? 1 : 0.5 }}
-                  aria-label="Add pick-up"
+                  aria-label="Add to shopping list"
                 >
                   <Plus size={16} color="#fff" /> Add
                 </button>
@@ -8197,7 +8197,8 @@ function LeadProfileModal({
   );
 }
 
-// thumbnails + "Add photos/video" for the job profile. Either role can add
+// thumbnails + "Add photos/video" for the job instruction photo and video
+// references. Either role can add
 // (the PM may be the one on site); only the owner can delete, same as the
 // warranty photos. Opens full-size in a lightbox that plays video inline.
 function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
@@ -8304,7 +8305,7 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
         }}
       >
         <Camera size={14} color={COLORS.accent} />
-        {busy ? "Uploading…" : "Add photos / video"}
+        {busy ? "Uploading…" : "Add photo or video reference"}
       </button>
       {err && <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
 
@@ -8347,9 +8348,9 @@ function JobProfileButton({ lead, onOpen }) {
   }
   if (details.instructions) chips.push({ text: "Instructions", color: COLORS.muted });
   const mediaCount = (lead.media || []).length;
-  if (mediaCount) chips.push({ text: `${mediaCount} photo${mediaCount === 1 ? "" : "s"}/video`, color: COLORS.muted });
+  if (mediaCount) chips.push({ text: `${mediaCount} reference photo${mediaCount === 1 ? "" : "s"}/video`, color: COLORS.muted });
   const openPickups = details.pickups.filter((p) => !p.done).length;
-  if (openPickups) chips.push({ text: `${openPickups} pick-up${openPickups === 1 ? "" : "s"}`, color: COLORS.amber });
+  if (openPickups) chips.push({ text: `${openPickups} to pick up`, color: COLORS.amber });
   if (details.equipment.length) chips.push({ text: `${details.equipment.length} equipment`, color: COLORS.muted });
 
   return (

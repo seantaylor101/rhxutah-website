@@ -68,7 +68,7 @@ function startingJobLine(lead, dateKey) {
     notes.push(`materials from ${m.supplier} not ready until ${fmtShortDate(m.availableDate)}`);
   } else notes.push(`materials: ${m.supplier}`);
   const pickups = details.pickups.filter((p) => !p.done);
-  if (pickups.length) notes.push(`pick up: ${pickups.map((p) => (p.where ? `${p.text} @ ${p.where}` : p.text)).join(", ")}`);
+  if (pickups.length) notes.push(`shopping list: ${pickups.map((p) => (p.where ? `${p.text} @ ${p.where}` : p.text)).join(", ")}`);
   const equipment = details.equipment.map((k) => JOB_EQUIPMENT[k]).filter(Boolean);
   if (equipment.length) notes.push(`bring: ${equipment.join(", ")}`);
   return `• ${jobLabel(lead)}${notes.length ? ` — ${notes.join("; ")}` : ""}`;
