@@ -6004,6 +6004,7 @@ function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
 }
 
 function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen }) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
       {photos.map((p) => (
@@ -6024,7 +6025,7 @@ function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen 
           />
           {editable && (
             <button
-              onClick={() => onDeletePhoto(requestId, p.id)}
+              onClick={() => setConfirmDeleteId(p.id)}
               aria-label="Delete photo"
               style={{
                 position: "absolute",
@@ -6047,6 +6048,16 @@ function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen 
           )}
         </div>
       ))}
+      {confirmDeleteId && (
+        <DeleteMediaConfirmModal
+          kind="photo"
+          onConfirm={() => {
+            onDeletePhoto(requestId, confirmDeleteId);
+            setConfirmDeleteId(null);
+          }}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -9162,7 +9173,9 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
   const busy = !!upload;
   const [err, setErr] = useState("");
   const [viewing, setViewing] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const media = lead.media || [];
+  const confirmDeleteMedia = media.find((m) => m.id === confirmDeleteId);
 
   const handleFiles = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -9222,7 +9235,7 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
               </button>
               {editable && (
                 <button
-                  onClick={() => onDelete(m.id)}
+                  onClick={() => setConfirmDeleteId(m.id)}
                   aria-label="Delete file"
                   style={{
                     position: "absolute",
@@ -9287,6 +9300,17 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
           )}
         </div>
       )}
+
+      {confirmDeleteMedia && (
+        <DeleteMediaConfirmModal
+          kind={confirmDeleteMedia.kind === "video" ? "video" : "photo"}
+          onConfirm={() => {
+            onDelete(confirmDeleteMedia.id);
+            setConfirmDeleteId(null);
+          }}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -9344,6 +9368,37 @@ function JobProfileButton({ lead, onOpen }) {
 
 const AT_OR_AFTER_WON_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
 const AT_OR_AFTER_SCHEDULED_STAGES = new Set(["scheduled", "progress", "completed", "paid"]);
+
+// same shape as DeleteConfirmModal, but photos/videos have no meaningful
+// name to quote — used by both the job-profile media gallery and warranty
+// photos, so deleting either always requires a confirm tap first
+function DeleteMediaConfirmModal({ kind, onConfirm, onCancel }) {
+  useModalBackClose(onCancel);
+  return (
+    <div style={{ ...modalOverlay, alignItems: "center", padding: 20, boxSizing: "border-box" }} onClick={onCancel}>
+      <div style={{ ...modalCard, borderRadius: 20, border: `1px solid ${COLORS.border}`, maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
+          Delete this {kind}?
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
+          This can't be undone from here.
+        </div>
+        <button
+          onClick={onConfirm}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 14, background: COLORS.rust }}
+        >
+          Delete
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ ...roleOption, marginTop: 10, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}
+        >
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Cancel</span>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
