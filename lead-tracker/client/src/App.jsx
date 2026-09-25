@@ -9272,7 +9272,8 @@ const GALLERY_DEFAULT_COLUMNS = 3;
 
 function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
   useModalBackClose(onClose);
-  const gridRef = useRef(null);
+  const gridRef = useRef(null); // the scrolling container (touch/wheel listeners)
+  const gridInnerRef = useRef(null); // the actual CSS grid (gets the live transform)
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [columns, setColumns] = useState(GALLERY_DEFAULT_COLUMNS);
@@ -9282,45 +9283,90 @@ function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
   const [sharing, setSharing] = useState(false);
   const [shareErr, setShareErr] = useState("");
 
-  // pinch-to-zoom (touch) and ctrl+wheel (trackpad/mouse) resize the grid —
-  // attached as native listeners rather than React's onTouchMove so
-  // preventDefault actually stops the page from scrolling/zooming during a
-  // real two-finger pinch
+  // While this page is open, stop the browser's own page-zoom from grabbing
+  // the pinch gesture — without this, a two-finger pinch could zoom the
+  // whole viewport (including whatever's behind this fixed-position page)
+  // instead of just resizing the grid. touchmove's preventDefault alone
+  // isn't reliable enough for this on every mobile browser, so the viewport
+  // meta tag is temporarily locked too, restored the moment this page
+  // closes.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    const original = meta?.getAttribute("content");
+    if (meta) meta.setAttribute("content", `${original}, maximum-scale=1, user-scalable=no`);
+
+    // Safari fires its own gesturestart/gesturechange for pinch, separate
+    // from touch events, and ignores touchmove's preventDefault for it
+    const preventGesture = (e) => e.preventDefault();
+    document.addEventListener("gesturestart", preventGesture);
+    document.addEventListener("gesturechange", preventGesture);
+
+    return () => {
+      if (meta && original) meta.setAttribute("content", original);
+      document.removeEventListener("gesturestart", preventGesture);
+      document.removeEventListener("gesturechange", preventGesture);
+    };
+  }, []);
+
+  // Pinch-to-zoom (touch) and ctrl+wheel (trackpad/mouse) resize the grid.
+  // The live gesture only applies a CSS transform directly via the DOM ref
+  // (no React re-render, no grid-template-columns relayout mid-gesture) so
+  // resizing tracks your fingers smoothly frame by frame; only once you let
+  // go does it commit the new column count and the grid actually relays out
+  // — same two-step feel as the iPhone Photos app's own pinch zoom.
   useEffect(() => {
     const el = gridRef.current;
-    if (!el) return;
-    let pinch = null; // { startDist, startColumns } | null
+    const inner = gridInnerRef.current;
+    if (!el || !inner) return;
+    let pinch = null; // { startDist, startColumns, liveScale } | null
 
     const dist = (touches) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
 
     const onTouchStart = (e) => {
-      if (e.touches.length === 2) pinch = { startDist: dist(e.touches), startColumns: columns };
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        inner.style.transition = "none";
+        pinch = { startDist: dist(e.touches), startColumns: columns, liveScale: 1 };
+      }
     };
     const onTouchMove = (e) => {
       if (!pinch || e.touches.length !== 2) return;
       e.preventDefault();
       const scale = dist(e.touches) / pinch.startDist;
-      // fingers spreading apart (scale > 1) = zoom in = fewer, bigger tiles
-      const next = Math.round(pinch.startColumns / scale);
-      setColumns(Math.min(GALLERY_MAX_COLUMNS, Math.max(GALLERY_MIN_COLUMNS, next)));
+      pinch.liveScale = scale;
+      // fingers spreading apart (scale > 1) = zoom in = bigger tiles; clamp
+      // the visual stretch so it can't be dragged into something absurd
+      inner.style.transform = `scale(${Math.min(2.2, Math.max(0.5, scale))})`;
+    };
+    const settle = () => {
+      if (!pinch) return;
+      const finalScale = pinch.liveScale;
+      const next = Math.min(GALLERY_MAX_COLUMNS, Math.max(GALLERY_MIN_COLUMNS, Math.round(pinch.startColumns / finalScale)));
+      inner.style.transition = "transform 180ms ease-out";
+      inner.style.transform = "scale(1)";
+      setColumns(next);
+      pinch = null;
     };
     const onTouchEnd = (e) => {
-      if (e.touches.length < 2) pinch = null;
+      if (e.touches.length < 2) settle();
     };
     const onWheel = (e) => {
       if (!e.ctrlKey) return; // trackpad pinch and ctrl+scroll both arrive as this
       e.preventDefault();
+      inner.style.transition = "transform 120ms ease-out";
       setColumns((c) => Math.min(GALLERY_MAX_COLUMNS, Math.max(GALLERY_MIN_COLUMNS, c + (e.deltaY > 0 ? 1 : -1))));
     };
 
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("wheel", onWheel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9435,7 +9481,10 @@ function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
             No photos or video yet.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, 1fr)`, gap: 2 }}>
+          <div
+            ref={gridInnerRef}
+            style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, 1fr)`, gap: 2, transformOrigin: "center top" }}
+          >
             {items.map((m, i) => {
               const isSelected = selectedIds.has(m.id);
               return (
