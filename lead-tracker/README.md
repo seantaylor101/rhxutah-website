@@ -114,6 +114,9 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | PATCH  | /api/leads/:id/job-details | viewer (instructions + adding/removing pick-ups are owner-only) | job profile: instructions, materials ordered, pick-ups, special equipment |
 | POST   | /api/leads/:id/media | viewer | upload job-profile photos/videos (multipart `media`, 100MB/file) |
 | DELETE | /api/leads/:id/media/:mediaId | owner | delete one job-profile photo/video |
+| POST   | /api/leads/:id/share | owner | create/regenerate a public no-login share link for a job |
+| DELETE | /api/leads/:id/share | owner | turn off a job's share link |
+| GET    | /api/share/:token | public | a share link's job instructions, photo/video references, and special equipment |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |
 | GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
 | GET    | /api/activity/access | owner | project-manager (viewer) app-open history |

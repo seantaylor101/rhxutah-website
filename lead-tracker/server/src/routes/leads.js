@@ -1,7 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { sendDueReportReminders } from "../reportReminders.js";
@@ -45,6 +45,11 @@ function parseWorkDays(value) {
 
 const VALID_MANAGERS = new Set(["Sean", "Dave"]);
 
+function shareTokenFor(leadId) {
+  const row = db.prepare(`SELECT token FROM lead_shares WHERE leadId = ?`).get(leadId);
+  return row ? row.token : null;
+}
+
 function mediaFor(leadId) {
   return db
     .prepare(`SELECT id, filename, kind, createdAt FROM lead_media WHERE leadId = ? ORDER BY createdAt ASC`)
@@ -69,7 +74,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -594,11 +599,34 @@ router.get("/media/:filename", requireAuth("viewer"), (req, res) => {
   });
 });
 
+// public share link for a job's instructions + photo/video references —
+// owner-only to issue/revoke; a subcontractor with the resulting link never
+// needs an app login (see routes/shareView.js, which serves the token side
+// unauthenticated)
+router.post("/:id/share", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const token = randomBytes(16).toString("hex");
+  db.prepare(
+    `INSERT INTO lead_shares (leadId, token, createdAt) VALUES (@leadId, @token, @createdAt)
+     ON CONFLICT(leadId) DO UPDATE SET token = excluded.token, createdAt = excluded.createdAt`
+  ).run({ leadId: row.id, token, createdAt: new Date().toISOString() });
+  res.status(201).json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+router.delete("/:id/share", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  db.prepare(`DELETE FROM lead_shares WHERE leadId = ?`).run(row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
 router.delete("/:id", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
   const media = db.prepare(`SELECT filename FROM lead_media WHERE leadId = ?`).all(row.id);
   db.prepare(`DELETE FROM lead_media WHERE leadId = ?`).run(row.id);
+  db.prepare(`DELETE FROM lead_shares WHERE leadId = ?`).run(row.id);
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);
   res.status(204).end();
 
