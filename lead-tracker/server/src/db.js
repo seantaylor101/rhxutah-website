@@ -117,6 +117,14 @@ if (!existingColumns.has("contactId")) {
   db.exec(`ALTER TABLE leads ADD COLUMN contactId TEXT`);
 }
 
+if (!existingColumns.has("jobDetails")) {
+  // JSON-encoded job-profile info the PM works from, kept off the board's
+  // lead cards so they stay scannable: { instructions, materials: { ordered,
+  // supplier, availability, availableDate }, pickups: [{ id, text, where,
+  // done }], equipment: [keys] } — see routes/leads.js normalizeJobDetails
+  db.exec(`ALTER TABLE leads ADD COLUMN jobDetails TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,

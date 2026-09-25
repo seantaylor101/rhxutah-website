@@ -7,6 +7,7 @@ import { sendPushToRole } from "../pushService.js";
 import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
+import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
 
 const router = Router();
 
@@ -58,7 +59,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -482,6 +483,21 @@ router.patch("/:id/scope-of-work", requireAuth("viewer"), (req, res) => {
   item.done = !!done;
 
   db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+});
+
+// job profile (instructions, materials ordered, pick-ups on the way,
+// special equipment) — viewer-level so the project manager can check things
+// off, with the owner-only parts enforced in applyJobDetailsPatch
+router.patch("/:id/job-details", requireAuth("viewer"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const patch = req.body && typeof req.body === "object" ? req.body : {};
+  const result = applyJobDetailsPatch(parseJobDetails(row.jobDetails), patch, req.role);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  db.prepare(`UPDATE leads SET jobDetails = ? WHERE id = ?`).run(JSON.stringify(result.value), row.id);
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
