@@ -29,6 +29,40 @@ async function requestForm(path, formData) {
   return data;
 }
 
+// same job as requestForm, but via XMLHttpRequest instead of fetch() — fetch
+// has no upload-progress event, so a multi-hundred-MB video would just show
+// "Uploading…" with no sense of how far along it is. onProgress gets called
+// with { loaded, total } as the browser reports bytes sent.
+function requestFormWithProgress(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}${path}`);
+    xhr.withCredentials = true;
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress({ loaded: e.loaded, total: e.total });
+      };
+    }
+    xhr.onload = () => {
+      let data = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        // non-JSON response falls through to the status check below
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        const err = new Error((data && data.error) || `Request failed (${xhr.status})`);
+        err.status = xhr.status;
+        reject(err);
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error — check your connection and try again"));
+    xhr.send(formData);
+  });
+}
+
 export const api = {
   me: () => request("/auth/me"),
   login: (passcode) => request("/auth/login", { method: "POST", body: JSON.stringify({ passcode }) }),
@@ -76,11 +110,11 @@ export const api = {
     }),
   editWarrantyRequest: (id, patch) => request(`/warranty/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteWarrantyRequest: (id) => request(`/warranty/${id}`, { method: "DELETE" }),
-  uploadWarrantyPhotos: (id, files, type) => {
+  uploadWarrantyPhotos: (id, files, type, onProgress) => {
     const form = new FormData();
     if (type) form.append("type", type);
     for (const file of files) form.append("photos", file);
-    return requestForm(`/warranty/${id}/photos`, form);
+    return requestFormWithProgress(`/warranty/${id}/photos`, form, onProgress);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
   addPayee: (id, payee) => request(`/leads/${id}/payees`, { method: "POST", body: JSON.stringify(payee) }),
@@ -94,10 +128,10 @@ export const api = {
   createLeadShare: (id) => request(`/leads/${id}/share`, { method: "POST" }),
   revokeLeadShare: (id) => request(`/leads/${id}/share`, { method: "DELETE" }),
   getShare: (token) => request(`/share/${token}`),
-  uploadLeadMedia: (id, files) => {
+  uploadLeadMedia: (id, files, onProgress) => {
     const form = new FormData();
     for (const file of files) form.append("media", file);
-    return requestForm(`/leads/${id}/media`, form);
+    return requestFormWithProgress(`/leads/${id}/media`, form, onProgress);
   },
   deleteLeadMedia: (id, mediaId) => request(`/leads/${id}/media/${mediaId}`, { method: "DELETE" }),
   listActivityFeed: () => request("/activity/feed"),
