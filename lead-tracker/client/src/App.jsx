@@ -1263,6 +1263,7 @@ function App() {
   const [lookbackStart, setLookbackStart] = useState("");
   const [lookbackEnd, setLookbackEnd] = useState("");
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
+  const [profileLeadId, setProfileLeadId] = useState(null);
   const [drilldown, setDrilldown] = useState(null); // { title, range: [start, end] } | null
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState({
@@ -1677,6 +1678,7 @@ function App() {
     const leadId = params.get("lead");
     if (leadId && leads) {
       navigateToLead(leadId);
+      if (leads.some((l) => l.id === leadId)) setProfileLeadId(leadId);
       params.delete("lead");
       const rest = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : ""));
@@ -1689,6 +1691,7 @@ function App() {
     const onMessage = (event) => {
       if (event.data && event.data.type === "OPEN_LEAD" && event.data.leadId) {
         navigateToLead(event.data.leadId);
+        setProfileLeadId(event.data.leadId);
       }
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
@@ -1837,6 +1840,47 @@ function App() {
       setError("");
     } catch {
       setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
+  // job-profile edits (instructions, materials, pick-ups, equipment) — merged
+  // optimistically so check-offs feel instant, then replaced by the server's
+  // copy, which also enforces what the viewer role is allowed to change
+  const saveJobDetails = async (id, patch) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, jobDetails: { ...jobDetailsOf(l), ...patch } } : l))
+    );
+    try {
+      const updated = await api.updateJobDetails(id, patch);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
+  // throws on failure so the profile can show the server's message inline
+  // (e.g. "File is too large") instead of the generic banner
+  const uploadLeadMedia = async (id, files) => {
+    const updated = await api.uploadLeadMedia(id, files);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const deleteLeadMedia = async (id, mediaId) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, media: (l.media || []).filter((m) => m.id !== mediaId) } : l))
+    );
+    try {
+      const updated = await api.deleteLeadMedia(id, mediaId);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't delete that file — try again.");
       loadLeads();
     }
   };
@@ -2588,6 +2632,7 @@ function App() {
                   onRemoveFollowup={removeFollowup}
                   settings={settings}
                   mapsPreference={mapsPreference}
+                  onOpenProfile={setProfileLeadId}
                 />
               </div>
             ))}
@@ -2696,6 +2741,20 @@ function App() {
             setShowBackupsModal(false);
             loadLeads();
           }}
+        />
+      )}
+      {profileLeadId && leads && leads.some((l) => l.id === profileLeadId) && (
+        <LeadProfileModal
+          lead={leads.find((l) => l.id === profileLeadId)}
+          role={role}
+          editable={editable}
+          mapsPreference={mapsPreference}
+          onClose={() => setProfileLeadId(null)}
+          onEditField={editField}
+          onEditStartDate={editStartDate}
+          onSaveJobDetails={saveJobDetails}
+          onUploadMedia={uploadLeadMedia}
+          onDeleteMedia={deleteLeadMedia}
         />
       )}
       {reportLead && (
@@ -6681,9 +6740,8 @@ function LeadTicket({
   onRemoveFollowup,
   settings,
   mapsPreference,
+  onOpenProfile,
 }) {
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(lead.name);
   const [editingJob, setEditingJob] = useState(false);
   const [jobDraft, setJobDraft] = useState(lead.job || "");
   const [editingPhone, setEditingPhone] = useState(false);
@@ -6713,13 +6771,6 @@ function LeadTicket({
   const [confirmDel, setConfirmDel] = useState(false);
 
   const stage = STAGES.find((s) => s.key === lead.stage);
-
-  const saveName = () => {
-    const trimmed = nameDraft.trim();
-    if (trimmed) onEditField(lead.id, "name", trimmed);
-    else setNameDraft(lead.name);
-    setEditingName(false);
-  };
 
   const saveJob = () => {
     onEditField(lead.id, "job", jobDraft.trim());
@@ -6882,64 +6933,33 @@ function LeadTicket({
       <div style={{ ...ticketStub, background: stage?.color || COLORS.info }} />
       <div style={{ flex: 1, padding: "16px 18px 16px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-          {!editingName ? (
+          <div
+            onClick={() => onOpenProfile(lead.id)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              minWidth: 0,
+              flex: 1,
+              cursor: "pointer",
+            }}
+          >
             <div
-              onClick={
-                editable
-                  ? () => {
-                      setNameDraft(lead.name);
-                      setEditingName(true);
-                    }
-                  : undefined
-              }
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                minWidth: 0,
-                flex: 1,
-                cursor: editable ? "pointer" : "default",
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 700,
+                fontSize: 16,
+                color: COLORS.ink,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
-              <div
-                style={{
-                  fontFamily: FONT_DISPLAY,
-                  fontWeight: 700,
-                  fontSize: 16,
-                  color: COLORS.ink,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {lead.name}
-              </div>
+              {lead.name}
             </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveName()}
-                style={{ ...inlineInput, fontFamily: FONT_DISPLAY, fontSize: 16, flex: 1 }}
-              />
-              <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
-                <Check size={18} color="#fff" />
-              </button>
-              <button
-                onClick={() => {
-                  setNameDraft(lead.name);
-                  setEditingName(false);
-                }}
-                style={{ ...iconBtn, background: "#B8B0A0" }}
-                aria-label="Cancel name edit"
-              >
-                <X size={18} color="#fff" />
-              </button>
-            </div>
-          )}
-          {editable && !editingName && (
+            <ChevronRight size={16} color={COLORS.muted} style={{ flexShrink: 0 }} />
+          </div>
+          {editable && (
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <LeadMoreMenu lead={lead} onMove={onMove} />
               <button onClick={() => setConfirmDel(true)} style={iconBtnGhost} aria-label="Delete lead">
@@ -7621,6 +7641,7 @@ function LeadTicket({
           />
         )}
 
+        <JobProfileButton lead={lead} onOpen={() => onOpenProfile(lead.id)} />
       </div>
     </div>
     {showWorkDaysPrompt && (
@@ -7644,6 +7665,771 @@ function LeadTicket({
     </>
   );
 }
+
+// Keep in sync with MATERIAL_SUPPLIERS / JOB_EQUIPMENT in server/src/jobDetails.js
+const MATERIAL_SUPPLIERS = [
+  "Lansing Sandy",
+  "Lansing PG",
+  "Alside Orem",
+  "Alside West Jordan",
+  "Timberline Exteriors",
+  "LKL West Jordan",
+  "LKL Spanish Fork",
+];
+
+const JOB_EQUIPMENT = [
+  { key: "brake", label: "Brake and sawhorses" },
+  { key: "ladder32", label: "32' ladder" },
+  { key: "scaffoldPlanks", label: "Scaffold planks" },
+  { key: "miterSaw", label: "Miter saw and stand" },
+  { key: "hammerChisel", label: "Hammer chisel" },
+  { key: "shopVac", label: "Shop vac" },
+];
+
+const PICKUP_STORES = ["Home Depot", "Lowe's", "Sherwin-Williams"];
+
+// the server always sends a full jobDetails object, but a lead that was just
+// optimistically added client-side (or an older cached payload) may not have
+// one yet — read through this so the profile never trips over a missing field
+function jobDetailsOf(lead) {
+  const d = lead.jobDetails || {};
+  return {
+    instructions: d.instructions || "",
+    materials: { ordered: false, supplier: "", availability: "", availableDate: "", ...(d.materials || {}) },
+    pickups: Array.isArray(d.pickups) ? d.pickups : [],
+    equipment: Array.isArray(d.equipment) ? d.equipment : [],
+  };
+}
+
+function materialsSummary(m) {
+  if (!m.ordered) return "";
+  const when = m.availability === "date" && m.availableDate ? `available ${fmtDate(m.availableDate)}` : "available now";
+  return `${m.supplier} · ${when}`;
+}
+
+function CheckRow({ checked, onToggle, disabled, children }) {
+  return (
+    <button
+      type="button"
+      onClick={disabled ? undefined : onToggle}
+      aria-pressed={checked}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        textAlign: "left",
+        background: "transparent",
+        border: "none",
+        padding: "8px 0",
+        cursor: disabled ? "default" : "pointer",
+        fontFamily: FONT_BODY,
+        fontSize: 14.5,
+        color: COLORS.ink,
+      }}
+    >
+      <span
+        style={{
+          width: 22,
+          height: 22,
+          flexShrink: 0,
+          borderRadius: 6,
+          border: `2px solid ${checked ? COLORS.accent : "#C9C3B5"}`,
+          background: checked ? COLORS.accent : "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        {checked && <Check size={14} color="#fff" strokeWidth={3} />}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
+    </button>
+  );
+}
+
+function ProfileSection({ title, children, right }) {
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${COLORS.border}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div style={photoSectionLabel}>{title}</div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// pops up over the profile when "Materials ordered" gets checked — deliberately
+// not using useModalBackClose, since a back gesture would then close both this
+// and the profile underneath it at once (both listen for the same popstate)
+function MaterialsOrderedModal({ initial, onSave, onCancel }) {
+  const [supplier, setSupplier] = useState(initial?.supplier || "");
+  const [availability, setAvailability] = useState(initial?.availability === "date" ? "date" : "immediate");
+  const [availableDate, setAvailableDate] = useState(initial?.availableDate || "");
+  const canSave = supplier && (availability === "immediate" || availableDate);
+
+  const choiceBtn = (active) => ({
+    width: "100%",
+    textAlign: "left",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: `1.5px solid ${active ? COLORS.accent : COLORS.border}`,
+    background: active ? "rgba(71,147,107,0.08)" : COLORS.surface,
+    color: COLORS.ink,
+    fontFamily: FONT_BODY,
+    fontSize: 14.5,
+    fontWeight: active ? 700 : 500,
+    cursor: "pointer",
+  });
+
+  return (
+    <div style={{ ...modalOverlay, zIndex: 60 }} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Materials ordered
+          </div>
+          <button onClick={onCancel} style={iconBtnGhost} aria-label="Cancel">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+
+        <div style={photoSectionLabel}>Which supplier?</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+          {MATERIAL_SUPPLIERS.map((name) => (
+            <button key={name} type="button" onClick={() => setSupplier(name)} style={choiceBtn(supplier === name)}>
+              {name}
+            </button>
+          ))}
+        </div>
+
+        <div style={photoSectionLabel}>When will it be available?</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <button type="button" onClick={() => setAvailability("immediate")} style={choiceBtn(availability === "immediate")}>
+            Immediately
+          </button>
+          <button type="button" onClick={() => setAvailability("date")} style={choiceBtn(availability === "date")}>
+            Specific date
+          </button>
+        </div>
+        {availability === "date" && (
+          <input
+            type="date"
+            value={availableDate}
+            onChange={(e) => setAvailableDate(e.target.value)}
+            style={{ ...modalInput, marginBottom: 10 }}
+          />
+        )}
+
+        <button
+          onClick={() =>
+            canSave &&
+            onSave({
+              ordered: true,
+              supplier,
+              availability,
+              availableDate: availability === "date" ? availableDate : "",
+            })
+          }
+          disabled={!canSave}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 6, opacity: canSave ? 1 : 0.5 }}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Full job profile for one lead, opened by tapping a lead's name (or the "Job
+// profile" button) on the board. Holds everything the PM works from — the
+// instructions, materials, pick-ups on the way and special equipment — so
+// none of it has to crowd the lead cards themselves.
+function LeadProfileModal({
+  lead,
+  role,
+  editable,
+  onClose,
+  onEditField,
+  onEditStartDate,
+  onSaveJobDetails,
+  onUploadMedia,
+  onDeleteMedia,
+  mapsPreference,
+}) {
+  useModalBackClose(onClose);
+  const details = jobDetailsOf(lead);
+  const stage = STAGES.find((s) => s.key === lead.stage);
+  const isWonOrLater = AT_OR_AFTER_WON_STAGES.has(lead.stage);
+  const canEditStart = editable || (role === "viewer" && isWonOrLater);
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(lead.name);
+  const [editingReceived, setEditingReceived] = useState(false);
+  const [receivedDraft, setReceivedDraft] = useState("");
+  const [editingStart, setEditingStart] = useState(false);
+  const [startDraft, setStartDraft] = useState(lead.startDate || "");
+  const [instructionsDraft, setInstructionsDraft] = useState(details.instructions);
+  const [showMaterialsModal, setShowMaterialsModal] = useState(false);
+  const [pickupText, setPickupText] = useState("");
+  const [pickupWhere, setPickupWhere] = useState("Home Depot");
+
+  // pick up a fresh server value (e.g. the owner edited on another device and
+  // the board auto-refreshed) as long as there's no unsaved local edit
+  const savedInstructionsRef = useRef(details.instructions);
+  useEffect(() => {
+    if (instructionsDraft === savedInstructionsRef.current) setInstructionsDraft(details.instructions);
+    savedInstructionsRef.current = details.instructions;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [details.instructions]);
+  const instructionsDirty = instructionsDraft.trim() !== details.instructions;
+
+  const saveName = () => {
+    const trimmed = nameDraft.trim();
+    if (trimmed) onEditField(lead.id, "name", trimmed);
+    else setNameDraft(lead.name);
+    setEditingName(false);
+  };
+
+  const openReceivedEdit = () => {
+    const d = new Date(lead.createdAt);
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    setReceivedDraft(local.toISOString().slice(0, 10));
+    setEditingReceived(true);
+  };
+
+  const saveReceived = () => {
+    if (receivedDraft) onEditField(lead.id, "createdAt", new Date(receivedDraft + "T00:00:00").toISOString());
+    setEditingReceived(false);
+  };
+
+  // same owner/viewer split as the board card's start date (LeadTicket saveStart)
+  const saveStart = () => {
+    if (role === "owner") onEditField(lead.id, "startDate", startDraft);
+    else onEditStartDate(lead.id, startDraft);
+    setEditingStart(false);
+  };
+
+  const saveInstructions = () => onSaveJobDetails(lead.id, { instructions: instructionsDraft.trim() });
+
+  const toggleMaterials = () => {
+    if (details.materials.ordered) onSaveJobDetails(lead.id, { materials: { ordered: false } });
+    else setShowMaterialsModal(true);
+  };
+
+  const toggleEquipment = (key) => {
+    const next = details.equipment.includes(key)
+      ? details.equipment.filter((k) => k !== key)
+      : [...details.equipment, key];
+    onSaveJobDetails(lead.id, { equipment: next });
+  };
+
+  const togglePickup = (id) =>
+    onSaveJobDetails(lead.id, {
+      pickups: details.pickups.map((p) => (p.id === id ? { ...p, done: !p.done } : p)),
+    });
+
+  const removePickup = (id) => onSaveJobDetails(lead.id, { pickups: details.pickups.filter((p) => p.id !== id) });
+
+  const addPickup = () => {
+    const text = pickupText.trim();
+    if (!text) return;
+    onSaveJobDetails(lead.id, {
+      pickups: [...details.pickups, { id: (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`), text, where: pickupWhere.trim(), done: false }],
+    });
+    setPickupText("");
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={{ ...modalCard, maxWidth: 560, maxHeight: "94vh" }} onClick={(e) => e.stopPropagation()}>
+        {/* header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {!editingName ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: COLORS.ink, wordBreak: "break-word" }}>
+                  {lead.name}
+                </div>
+                {editable && (
+                  <button
+                    onClick={() => {
+                      setNameDraft(lead.name);
+                      setEditingName(true);
+                    }}
+                    style={iconBtnGhost}
+                    aria-label="Edit name"
+                  >
+                    <Pencil size={14} color={COLORS.muted} />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveName()}
+                  style={{ ...inlineInput, fontFamily: FONT_DISPLAY, flex: 1, minWidth: 0 }}
+                />
+                <button onClick={saveName} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save name">
+                  <Check size={18} color="#fff" />
+                </button>
+                <button onClick={() => setEditingName(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel name edit">
+                  <X size={18} color="#fff" />
+                </button>
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              {stage && (
+                <span
+                  style={{
+                    fontFamily: FONT_UTIL,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: "#fff",
+                    background: stage.color,
+                    borderRadius: 999,
+                    padding: "2px 9px",
+                  }}
+                >
+                  {stage.short}
+                </span>
+              )}
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: lead.job ? "#4A463D" : "#B8B0A0" }}>
+                {lead.job || "No job set"}
+              </span>
+            </div>
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close profile">
+            <X size={20} color={COLORS.muted} />
+          </button>
+        </div>
+
+        {/* quick contact links */}
+        {(lead.phone || lead.address) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 10 }}>
+            {lead.phone && (
+              <a href={`tel:${lead.phone}`} style={{ ...profileLinkBtn, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none", fontSize: 14 }}>
+                <Phone size={14} color={COLORS.accent} />
+                {lead.phone}
+              </a>
+            )}
+            {lead.address && (
+              <a
+                href={mapsHref(lead.address, mapsPreference)}
+                style={{ ...profileLinkBtn, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none", fontSize: 14 }}
+              >
+                <MapPin size={14} color={COLORS.accent} />
+                {lead.address}
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* dates */}
+        <div style={profileFieldRow}>
+          <span style={profileFieldLabel}>Received</span>
+          {!editingReceived ? (
+            <>
+              <span style={{ color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
+              {editable && (
+                <button onClick={openReceivedEdit} style={iconBtnGhost} aria-label="Edit received date">
+                  <Pencil size={13} color={COLORS.muted} />
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <input type="date" value={receivedDraft} onChange={(e) => setReceivedDraft(e.target.value)} style={inlineInput} />
+              <button onClick={saveReceived} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save received date">
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingReceived(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel">
+                <X size={18} color="#fff" />
+              </button>
+            </>
+          )}
+        </div>
+
+        <div style={profileFieldRow}>
+          <span style={profileFieldLabel}>Job start</span>
+          {!editingStart ? (
+            <>
+              <span style={{ color: lead.startDate ? "#4A463D" : isWonOrLater ? COLORS.rust : "#B8B0A0" }}>
+                {lead.startDate ? fmtDate(lead.startDate) : "not set"}
+              </span>
+              {canEditStart && (
+                <button
+                  onClick={() => {
+                    setStartDraft(lead.startDate || "");
+                    setEditingStart(true);
+                  }}
+                  style={iconBtnGhost}
+                  aria-label="Edit job start date"
+                >
+                  <Pencil size={13} color={COLORS.muted} />
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <input type="date" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} style={inlineInput} />
+              <button onClick={saveStart} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save job start date">
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingStart(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel">
+                <X size={18} color="#fff" />
+              </button>
+            </>
+          )}
+        </div>
+        {lead.manager && (
+          <div style={profileFieldRow}>
+            <span style={profileFieldLabel}>Managed by</span>
+            <span style={{ color: "#4A463D" }}>{lead.manager}</span>
+          </div>
+        )}
+        <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted, marginTop: 6 }}>
+          The PM gets a push at 8pm the night before a job starts, and at 7am with today's starts and jobs in progress.
+        </div>
+
+        {/* instructions */}
+        <ProfileSection title="Job instructions">
+          {editable ? (
+            <>
+              <textarea
+                value={instructionsDraft}
+                onChange={(e) => setInstructionsDraft(e.target.value)}
+                placeholder="What needs to be done on this job — scope, colors, access notes, anything the crew should know…"
+                style={{ ...modalTextarea, minHeight: 120, resize: "vertical" }}
+              />
+              {instructionsDirty && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={saveInstructions} style={{ ...addBtn, flex: 1, justifyContent: "center" }}>
+                    Save instructions
+                  </button>
+                  <button
+                    onClick={() => setInstructionsDraft(details.instructions)}
+                    style={{ ...addBtn, background: "#B8B0A0", justifyContent: "center" }}
+                  >
+                    Discard
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div
+              style={{
+                fontFamily: FONT_BODY,
+                fontSize: 14.5,
+                color: details.instructions ? COLORS.ink : "#B8B0A0",
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.5,
+              }}
+            >
+              {details.instructions || "No instructions yet."}
+            </div>
+          )}
+        </ProfileSection>
+
+        <ProfileSection title="Photos & video">
+          <JobMediaGallery
+            lead={lead}
+            editable={editable}
+            onUpload={(files) => onUploadMedia(lead.id, files)}
+            onDelete={(mediaId) => onDeleteMedia(lead.id, mediaId)}
+          />
+        </ProfileSection>
+
+        {/* materials */}
+        <ProfileSection
+          title="Materials"
+          right={
+            details.materials.ordered ? (
+              <button onClick={() => setShowMaterialsModal(true)} style={profileLinkBtn}>
+                Change
+              </button>
+            ) : null
+          }
+        >
+          <CheckRow checked={details.materials.ordered} onToggle={toggleMaterials}>
+            <div style={{ fontWeight: 600 }}>Materials ordered</div>
+            {details.materials.ordered && (
+              <div style={{ fontSize: 13, color: COLORS.muted, marginTop: 2 }}>{materialsSummary(details.materials)}</div>
+            )}
+          </CheckRow>
+        </ProfileSection>
+
+        {/* pick-ups on the way */}
+        <ProfileSection title="Pick up on the way">
+          {details.pickups.length === 0 && !editable && (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>Nothing to pick up.</div>
+          )}
+          {details.pickups.map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <CheckRow checked={!!p.done} onToggle={() => togglePickup(p.id)}>
+                <span style={{ textDecoration: p.done ? "line-through" : "none", color: p.done ? COLORS.muted : COLORS.ink }}>
+                  {p.text}
+                </span>
+                {p.where && <span style={{ fontSize: 13, color: COLORS.muted }}> · {p.where}</span>}
+              </CheckRow>
+              {editable && (
+                <button onClick={() => removePickup(p.id)} style={iconBtnGhost} aria-label={`Remove ${p.text}`}>
+                  <Trash2 size={16} color="#9A9184" />
+                </button>
+              )}
+            </div>
+          ))}
+          {editable && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              <input
+                value={pickupText}
+                onChange={(e) => setPickupText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addPickup()}
+                placeholder="What to grab, e.g. 4 tubes of caulk"
+                style={modalInput}
+              />
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  list="pickup-stores"
+                  value={pickupWhere}
+                  onChange={(e) => setPickupWhere(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addPickup()}
+                  placeholder="Where (Home Depot, …)"
+                  style={{ ...modalInput, flex: 1 }}
+                />
+                <datalist id="pickup-stores">
+                  {PICKUP_STORES.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+                <button
+                  onClick={addPickup}
+                  disabled={!pickupText.trim()}
+                  style={{ ...addBtn, opacity: pickupText.trim() ? 1 : 0.5 }}
+                  aria-label="Add pick-up"
+                >
+                  <Plus size={16} color="#fff" /> Add
+                </button>
+              </div>
+            </div>
+          )}
+        </ProfileSection>
+
+        {/* special equipment */}
+        <ProfileSection title="Special equipment needed">
+          {JOB_EQUIPMENT.map((item) => (
+            <CheckRow key={item.key} checked={details.equipment.includes(item.key)} onToggle={() => toggleEquipment(item.key)}>
+              {item.label}
+            </CheckRow>
+          ))}
+        </ProfileSection>
+      </div>
+
+      {showMaterialsModal && (
+        <MaterialsOrderedModal
+          initial={details.materials.ordered ? details.materials : null}
+          onCancel={() => setShowMaterialsModal(false)}
+          onSave={(materials) => {
+            onSaveJobDetails(lead.id, { materials });
+            setShowMaterialsModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// thumbnails + "Add photos/video" for the job profile. Either role can add
+// (the PM may be the one on site); only the owner can delete, same as the
+// warranty photos. Opens full-size in a lightbox that plays video inline.
+function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [viewing, setViewing] = useState(null);
+  const media = lead.media || [];
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onUpload(files);
+    } catch (uploadErr) {
+      setErr(uploadErr.message || "Couldn't upload those files");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const thumb = { width: 76, height: 76, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.border}`, display: "block" };
+
+  return (
+    <div>
+      {media.length === 0 && (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0", marginBottom: 8 }}>
+          No photos or video yet.
+        </div>
+      )}
+      {media.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          {media.map((m) => (
+            <div key={m.id} style={{ position: "relative", width: 76, height: 76 }}>
+              <button
+                onClick={() => setViewing(m)}
+                style={{ padding: 0, border: "none", background: "none", cursor: "pointer", position: "relative" }}
+                aria-label={m.kind === "video" ? "Play video" : "View photo"}
+              >
+                {m.kind === "video" ? (
+                  <>
+                    {/* #t=0.1 nudges iOS into rendering a first-frame poster */}
+                    <video src={`${m.url}#t=0.1`} muted playsInline preload="metadata" style={{ ...thumb, background: "#000" }} />
+                    <span
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "#fff",
+                        fontSize: 22,
+                        textShadow: "0 1px 4px rgba(0,0,0,0.6)",
+                      }}
+                    >
+                      ▶
+                    </span>
+                  </>
+                ) : (
+                  <img src={m.url} alt="Job photo" style={thumb} />
+                )}
+              </button>
+              {editable && (
+                <button
+                  onClick={() => onDelete(m.id)}
+                  aria-label="Delete file"
+                  style={{
+                    position: "absolute",
+                    top: -6,
+                    right: -6,
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    background: COLORS.rust,
+                    border: "2px solid #fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <X size={11} color="#fff" strokeWidth={3} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={handleFiles} style={{ display: "none" }} />
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        style={{
+          ...actionBtn,
+          background: "transparent",
+          color: COLORS.accent,
+          border: `1px solid ${COLORS.border}`,
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        <Camera size={14} color={COLORS.accent} />
+        {busy ? "Uploading…" : "Add photos / video"}
+      </button>
+      {err && <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
+
+      {viewing && (
+        <div style={{ ...modalOverlay, alignItems: "center", zIndex: 60, background: "rgba(0,0,0,0.85)" }} onClick={() => setViewing(null)}>
+          {viewing.kind === "video" ? (
+            <video
+              src={viewing.url}
+              controls
+              autoPlay
+              playsInline
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <img
+              src={viewing.url}
+              alt="Job photo full size"
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// small summary + entry point shown at the bottom of each board card, so the
+// profile's contents are discoverable without living on the card itself
+function JobProfileButton({ lead, onOpen }) {
+  const details = jobDetailsOf(lead);
+  const chips = [];
+  if (AT_OR_AFTER_WON_STAGES.has(lead.stage)) {
+    chips.push(
+      details.materials.ordered
+        ? { text: "Materials ordered", color: COLORS.accent }
+        : { text: "Materials not ordered", color: COLORS.rust }
+    );
+  }
+  if (details.instructions) chips.push({ text: "Instructions", color: COLORS.muted });
+  const mediaCount = (lead.media || []).length;
+  if (mediaCount) chips.push({ text: `${mediaCount} photo${mediaCount === 1 ? "" : "s"}/video`, color: COLORS.muted });
+  const openPickups = details.pickups.filter((p) => !p.done).length;
+  if (openPickups) chips.push({ text: `${openPickups} pick-up${openPickups === 1 ? "" : "s"}`, color: COLORS.amber });
+  if (details.equipment.length) chips.push({ text: `${details.equipment.length} equipment`, color: COLORS.muted });
+
+  return (
+    <button
+      onClick={onOpen}
+      style={{
+        marginTop: 12,
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        padding: "9px 10px",
+        borderRadius: 8,
+        border: `1px solid ${COLORS.border}`,
+        background: COLORS.surfaceMuted,
+        cursor: "pointer",
+        textAlign: "left",
+      }}
+    >
+      <ListChecks size={16} color={COLORS.accent} />
+      <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 700, color: COLORS.ink }}>Job profile</span>
+      {chips.map((c) => (
+        <span key={c.text} style={{ fontFamily: FONT_UTIL, fontSize: 11.5, fontWeight: 600, color: c.color }}>
+          · {c.text}
+        </span>
+      ))}
+      <ChevronRight size={16} color={COLORS.muted} style={{ marginLeft: "auto" }} />
+    </button>
+  );
+}
+
+const AT_OR_AFTER_WON_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
 
 function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
@@ -9062,4 +9848,26 @@ const modalTextarea = {
   ...modalInput,
   minHeight: 70,
   resize: "vertical",
+};
+
+const profileFieldRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  marginTop: 8,
+  fontFamily: FONT_UTIL,
+  fontSize: 14,
+};
+
+const profileFieldLabel = { color: "#8A8478", fontSize: 13, minWidth: 78 };
+
+const profileLinkBtn = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  fontFamily: FONT_UTIL,
+  fontSize: 13,
+  fontWeight: 600,
+  color: COLORS.accent,
+  cursor: "pointer",
 };

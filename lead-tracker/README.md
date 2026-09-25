@@ -111,6 +111,9 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | PATCH  | /api/leads/:id    | owner  | edit name / createdAt / startDate / revenue / address / etc. |
 | PUT    | /api/leads/:id/scope-of-work | owner | replace the won-job scope-of-work checklist |
 | PATCH  | /api/leads/:id/scope-of-work | viewer | check/uncheck one checklist item           |
+| PATCH  | /api/leads/:id/job-details | viewer (instructions + adding/removing pick-ups are owner-only) | job profile: instructions, materials ordered, pick-ups, special equipment |
+| POST   | /api/leads/:id/media | viewer | upload job-profile photos/videos (multipart `media`, 100MB/file) |
+| DELETE | /api/leads/:id/media/:mediaId | owner | delete one job-profile photo/video |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |
 | GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
 | GET    | /api/activity/access | owner | project-manager (viewer) app-open history |

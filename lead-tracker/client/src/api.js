@@ -51,6 +51,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(actualWorkDays !== undefined ? { startDate, actualWorkDays } : { startDate }),
     }),
+  updateJobDetails: (id, patch) =>
+    request(`/leads/${id}/job-details`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
   logFollowup: (id) => request(`/leads/${id}/followups`, { method: "POST" }),
   removeFollowup: (id, followupId) => request(`/leads/${id}/followups/${followupId}`, { method: "DELETE" }),
@@ -81,6 +83,12 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
+  uploadLeadMedia: (id, files) => {
+    const form = new FormData();
+    for (const file of files) form.append("media", file);
+    return requestForm(`/leads/${id}/media`, form);
+  },
+  deleteLeadMedia: (id, mediaId) => request(`/leads/${id}/media/${mediaId}`, { method: "DELETE" }),
   listActivityFeed: () => request("/activity/feed"),
   listContacts: () => request("/contacts"),
   deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),

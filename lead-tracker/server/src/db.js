@@ -117,6 +117,14 @@ if (!existingColumns.has("contactId")) {
   db.exec(`ALTER TABLE leads ADD COLUMN contactId TEXT`);
 }
 
+if (!existingColumns.has("jobDetails")) {
+  // JSON-encoded job-profile info the PM works from, kept off the board's
+  // lead cards so they stay scannable: { instructions, materials: { ordered,
+  // supplier, availability, availableDate }, pickups: [{ id, text, where,
+  // done }], equipment: [keys] } — see routes/leads.js normalizeJobDetails
+  db.exec(`ALTER TABLE leads ADD COLUMN jobDetails TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,
@@ -235,3 +243,16 @@ db.exec(`
   );
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts (name COLLATE NOCASE)`);
+
+// photos/videos attached to a lead's job profile (files live in job-media/
+// next to this db — see uploads.js)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_media (
+    id TEXT PRIMARY KEY,
+    leadId TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'image',
+    createdAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_media_leadId ON lead_media (leadId)`);

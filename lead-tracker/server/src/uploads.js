@@ -34,3 +34,32 @@ export const warrantyPhotoUpload = multer({
 // strict match here doubles as the path-traversal guard for the serve and
 // delete routes
 export const SAFE_FILENAME = /^[0-9a-f-]+\.(jpg|jpeg|png|webp|heic|heif)$/i;
+
+// photos/videos attached to a lead's job profile to show the crew what needs
+// doing — same persistent disk as warranty photos, own folder
+export const JOB_MEDIA_DIR = path.join(path.dirname(DB_PATH), "job-media");
+fs.mkdirSync(JOB_MEDIA_DIR, { recursive: true });
+
+const VIDEO_EXT_BY_MIME = {
+  "video/mp4": ".mp4",
+  "video/quicktime": ".mov",
+  "video/webm": ".webm",
+};
+const JOB_MEDIA_EXT_BY_MIME = { ...EXT_BY_MIME, ...VIDEO_EXT_BY_MIME };
+
+export function jobMediaKind(filename) {
+  return /\.(mp4|mov|webm)$/i.test(filename) ? "video" : "image";
+}
+
+export const jobMediaUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, JOB_MEDIA_DIR),
+    filename: (req, file, cb) => cb(null, `${randomUUID()}${JOB_MEDIA_EXT_BY_MIME[file.mimetype] || ""}`),
+  }),
+  // the 1GB Render disk is shared with the database and warranty photos, so
+  // cap a single upload at a short phone clip's worth rather than unlimited
+  limits: { fileSize: 100 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => cb(null, Object.prototype.hasOwnProperty.call(JOB_MEDIA_EXT_BY_MIME, file.mimetype)),
+});
+
+export const SAFE_JOB_MEDIA_FILENAME = /^[0-9a-f-]+\.(jpg|jpeg|png|webp|heic|heif|mp4|mov|webm)$/i;

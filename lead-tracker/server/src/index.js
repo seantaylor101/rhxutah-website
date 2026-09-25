@@ -21,6 +21,7 @@ import { startGoalReminderScheduler } from "./goalReminders.js";
 import { startAppointmentReminderScheduler } from "./appointmentReminders.js";
 import { startAppointmentDigestScheduler } from "./appointmentDigest.js";
 import { startScheduleReminderScheduler } from "./scheduleReminders.js";
+import { startJobDigestScheduler } from "./jobDigest.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -79,3 +80,4 @@ startGoalReminderScheduler();
 startAppointmentReminderScheduler();
 startAppointmentDigestScheduler();
 startScheduleReminderScheduler();
+startJobDigestScheduler();
