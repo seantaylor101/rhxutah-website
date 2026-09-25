@@ -9609,7 +9609,9 @@ function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
 // gallery grid's Select Photos mode.
 function MediaViewer({ items, initialIndex, onClose }) {
   useModalBackClose(onClose);
+  const rootRef = useRef(null);
   const trackRef = useRef(null);
+  const zoomedRef = useRef(false); // is the currently-active photo pinch-zoomed right now
   const [current, setCurrent] = useState(initialIndex);
 
   useLayoutEffect(() => {
@@ -9618,6 +9620,17 @@ function MediaViewer({ items, initialIndex, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // fresh photo — its zoom already reset via ZoomableImage's own `active`
+  // effect, and any leftover pull-to-dismiss styling from a cancelled drag
+  // on the previous photo is cleared too
+  useEffect(() => {
+    zoomedRef.current = false;
+    if (rootRef.current) {
+      rootRef.current.style.transition = "";
+      rootRef.current.style.opacity = "1";
+    }
+  }, [current]);
+
   const handleScroll = () => {
     const el = trackRef.current;
     if (!el || !el.clientWidth) return;
@@ -9625,8 +9638,86 @@ function MediaViewer({ items, initialIndex, onClose }) {
     if (i !== current) setCurrent(i);
   };
 
+  // Pull straight down on a photo to dismiss the viewer, like the iPhone
+  // Photos app — only while not pinch-zoomed (zoomedRef), and only once a
+  // drag clearly reads as vertical-and-downward rather than the
+  // horizontal swipe-between-photos gesture, so the two never fight over
+  // the same touch. The photo follows your finger and the page behind it
+  // fades in as you pull; letting go past the threshold finishes the
+  // dismiss, otherwise it springs back.
+  useEffect(() => {
+    const track = trackRef.current;
+    const root = rootRef.current;
+    if (!track || !root) return;
+    const DISMISS_THRESHOLD = 110;
+    let drag = null; // { startX, startY, dy, locked: "vertical" | "horizontal" | null } | null
+
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 1 || zoomedRef.current) {
+        drag = null;
+        return;
+      }
+      drag = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, dy: 0, locked: null };
+    };
+    const onTouchMove = (e) => {
+      if (!drag || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - drag.startX;
+      const dy = e.touches[0].clientY - drag.startY;
+      if (!drag.locked) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; // not enough movement yet to tell
+        // downward and more vertical than horizontal = dismiss; anything
+        // else (including dragging up) is left alone entirely
+        drag.locked = dy > 0 && Math.abs(dy) > Math.abs(dx) ? "vertical" : "horizontal";
+        if (drag.locked === "horizontal") {
+          drag = null;
+          return;
+        }
+      }
+      e.preventDefault();
+      drag.dy = dy;
+      const panel = track.children[current];
+      if (panel) panel.style.transform = `translateY(${dy}px)`;
+      root.style.opacity = String(Math.max(0.4, 1 - dy / 400));
+    };
+    const onTouchEnd = () => {
+      if (!drag || drag.locked !== "vertical") {
+        drag = null;
+        return;
+      }
+      const panel = track.children[current];
+      if (drag.dy > DISMISS_THRESHOLD) {
+        if (panel) {
+          panel.style.transition = "transform 180ms ease-in";
+          panel.style.transform = `translateY(${window.innerHeight}px)`;
+        }
+        root.style.transition = "opacity 180ms ease-in";
+        root.style.opacity = "0";
+        setTimeout(onClose, 180);
+      } else {
+        if (panel) {
+          panel.style.transition = "transform 180ms ease-out";
+          panel.style.transform = "translateY(0px)";
+        }
+        root.style.transition = "opacity 180ms ease-out";
+        root.style.opacity = "1";
+      }
+      drag = null;
+    };
+
+    track.addEventListener("touchstart", onTouchStart, { passive: true });
+    track.addEventListener("touchmove", onTouchMove, { passive: false });
+    track.addEventListener("touchend", onTouchEnd, { passive: true });
+    track.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      track.removeEventListener("touchstart", onTouchStart);
+      track.removeEventListener("touchmove", onTouchMove);
+      track.removeEventListener("touchend", onTouchEnd);
+      track.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [current, onClose]);
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 80, display: "flex", flexDirection: "column" }}>
+    <div ref={rootRef} style={{ position: "fixed", inset: 0, background: "#000", zIndex: 80, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, flexShrink: 0 }}>
         <button onClick={onClose} aria-label="Close" style={{ ...iconBtnGhost, background: "rgba(255,255,255,0.12)" }}>
           <X size={20} color="#fff" />
@@ -9665,7 +9756,13 @@ function MediaViewer({ items, initialIndex, onClose }) {
             {m.kind === "video" ? (
               <video src={m.url} controls playsInline style={{ maxWidth: "100%", maxHeight: "100%" }} />
             ) : (
-              <ZoomableImage src={m.url} active={m === items[current]} />
+              <ZoomableImage
+                src={m.url}
+                active={m === items[current]}
+                onZoomChange={(z) => {
+                  zoomedRef.current = z;
+                }}
+              />
             )}
           </div>
         ))}
@@ -9685,16 +9782,22 @@ const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_DOUBLE_TAP = 2.5;
 
-function ZoomableImage({ src, active }) {
+function ZoomableImage({ src, active, onZoomChange }) {
   const wrapRef = useRef(null);
   const imgRef = useRef(null);
   const state = useRef({ scale: 1, x: 0, y: 0 });
+  const wasZoomedRef = useRef(false);
 
   const apply = (withTransition) => {
     const img = imgRef.current;
     if (!img) return;
     img.style.transition = withTransition ? "transform 180ms ease-out" : "none";
     img.style.transform = `translate(${state.current.x}px, ${state.current.y}px) scale(${state.current.scale})`;
+    const isZoomed = state.current.scale > 1.02;
+    if (isZoomed !== wasZoomedRef.current) {
+      wasZoomedRef.current = isZoomed;
+      onZoomChange?.(isZoomed);
+    }
   };
 
   const reset = (withTransition) => {
