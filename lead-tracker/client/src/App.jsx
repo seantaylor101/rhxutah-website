@@ -1877,8 +1877,8 @@ function App() {
 
   // throws on failure so the profile can show the server's message inline
   // (e.g. "File is too large") instead of the generic banner
-  const uploadLeadMedia = async (id, files) => {
-    const updated = await api.uploadLeadMedia(id, files);
+  const uploadLeadMedia = async (id, files, onProgress) => {
+    const updated = await api.uploadLeadMedia(id, files, onProgress);
     leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
   };
@@ -2011,8 +2011,8 @@ function App() {
 
   // left to throw on failure — the photo picker shows the error inline
   // next to the upload button instead of the global banner
-  const uploadWarrantyPhotos = async (id, files, type) => {
-    const updated = await api.uploadWarrantyPhotos(id, files, type);
+  const uploadWarrantyPhotos = async (id, files, type, onProgress) => {
+    const updated = await api.uploadWarrantyPhotos(id, files, type, onProgress);
     warrantyVersionRef.current++;
     setWarrantyRequests((prev) => prev.map((w) => (w.id === id ? updated : w)));
   };
@@ -5901,7 +5901,8 @@ function WarrantyScheduleModal({ onConfirm, onCancel }) {
 function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
   const inputRef = useRef(null);
-  const [busy, setBusy] = useState(false);
+  const { upload, start, onProgress, stop } = useUploadProgress();
+  const busy = !!upload;
   const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState("");
 
@@ -5911,14 +5912,14 @@ function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (!files.length) return;
-    setBusy(true);
     setErr("");
+    start();
     try {
-      await onUploadPhotos(request.id, files, "after");
+      await onUploadPhotos(request.id, files, "after", onProgress);
     } catch (uploadErr) {
       setErr(uploadErr.message || "Couldn't upload that photo");
     } finally {
-      setBusy(false);
+      stop();
     }
   };
 
@@ -5974,6 +5975,7 @@ function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
           <Camera size={16} color={COLORS.accent} />
           {busy ? "Uploading…" : afterPhotos.length > 0 ? "Add another photo" : "Take or choose a photo"}
         </button>
+        {busy && <UploadProgressBar upload={upload} />}
 
         {err && <div style={{ marginTop: 10, fontFamily: FONT_BODY, fontSize: 13, color: COLORS.rust }}>{err}</div>}
 
@@ -6051,7 +6053,8 @@ function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen 
 
 function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto }) {
   const inputRef = useRef(null);
-  const [busy, setBusy] = useState(false);
+  const { upload, start, onProgress, stop } = useUploadProgress();
+  const busy = !!upload;
   const [err, setErr] = useState("");
   const [lightbox, setLightbox] = useState(null);
 
@@ -6066,14 +6069,14 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (!files.length) return;
-    setBusy(true);
     setErr("");
+    start();
     try {
-      await onUpload(request.id, files);
+      await onUpload(request.id, files, undefined, onProgress);
     } catch (uploadErr) {
       setErr(uploadErr.message || "Couldn't upload those photos");
     } finally {
-      setBusy(false);
+      stop();
     }
   };
 
@@ -6133,6 +6136,7 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
             <Camera size={14} color={COLORS.muted} />
             {busy ? "Uploading…" : "Add photo"}
           </button>
+          {busy && <UploadProgressBar upload={upload} />}
           {err && (
             <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>
           )}
@@ -8462,7 +8466,7 @@ function LeadProfileModal({
           <JobMediaGallery
             lead={lead}
             editable={editable}
-            onUpload={(files) => onUploadMedia(lead.id, files)}
+            onUpload={(files, onProgress) => onUploadMedia(lead.id, files, onProgress)}
             onDelete={(mediaId) => onDeleteMedia(lead.id, mediaId)}
           />
         </ProfileSection>
@@ -9105,9 +9109,57 @@ function ShareLinkControl({ lead, onCreate, onRevoke }) {
   );
 }
 
+// Shared by any "Add photo(s)" flow that wants a real progress bar instead
+// of a static "Uploading…" — tracks bytes sent via the onProgress callback
+// threaded through api.js's XHR-based uploads (fetch has no upload-progress
+// event), and derives a rough time-remaining estimate from bytes sent so
+// far vs. elapsed time. Used by JobMediaGallery and WarrantyPhotos.
+function useUploadProgress() {
+  const [upload, setUpload] = useState(null); // { loaded, total, startedAt } | null
+  const start = () => setUpload({ loaded: 0, total: null, startedAt: Date.now() });
+  const onProgress = ({ loaded, total }) => setUpload((prev) => (prev ? { ...prev, loaded, total } : prev));
+  const stop = () => setUpload(null);
+  return { upload, start, onProgress, stop };
+}
+
+function fmtEta(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds < 1) return "almost done";
+  if (seconds < 60) return `~${Math.ceil(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `~${m}m ${s}s left`;
+}
+
+function UploadProgressBar({ upload }) {
+  if (!upload || !upload.total) return null;
+  const pct = Math.min(100, Math.round((upload.loaded / upload.total) * 100));
+  const elapsed = (Date.now() - upload.startedAt) / 1000;
+  const rate = upload.loaded / Math.max(elapsed, 0.001);
+  const remaining = rate > 0 ? (upload.total - upload.loaded) / rate : null;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div
+        style={{
+          height: 6,
+          borderRadius: 3,
+          background: COLORS.surfaceMuted,
+          border: `1px solid ${COLORS.border}`,
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ height: "100%", width: `${pct}%`, background: COLORS.accent, borderRadius: 3 }} />
+      </div>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+        {pct}% · {fmtEta(remaining)}
+      </div>
+    </div>
+  );
+}
+
 function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
   const inputRef = useRef(null);
-  const [busy, setBusy] = useState(false);
+  const { upload, start, onProgress, stop } = useUploadProgress();
+  const busy = !!upload;
   const [err, setErr] = useState("");
   const [viewing, setViewing] = useState(null);
   const media = lead.media || [];
@@ -9116,14 +9168,14 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (!files.length) return;
-    setBusy(true);
     setErr("");
+    start();
     try {
-      await onUpload(files);
+      await onUpload(files, onProgress);
     } catch (uploadErr) {
       setErr(uploadErr.message || "Couldn't upload those files");
     } finally {
-      setBusy(false);
+      stop();
     }
   };
 
@@ -9211,6 +9263,7 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
         <Camera size={14} color={COLORS.accent} />
         {busy ? "Uploading…" : "Add photo or video reference"}
       </button>
+      {busy && <UploadProgressBar upload={upload} />}
       {err && <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
 
       {viewing && (
