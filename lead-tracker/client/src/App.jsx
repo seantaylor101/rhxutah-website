@@ -174,6 +174,13 @@ const Info = (p) => (
     <circle cx="12" cy="8" r="1.1" fill={p.color || "currentColor"} stroke="none" />
   </Icon>
 );
+const ShareIcon = (p) => (
+  <Icon {...p}>
+    <path d="M12 16V4" />
+    <path d="M7 8.5 12 4l5 4.5" />
+    <path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+  </Icon>
+);
 const Target = (p) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="9" />
@@ -6003,61 +6010,27 @@ function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
   );
 }
 
-function WarrantyPhotoGrid({ photos, editable, onDeletePhoto, requestId, onOpen }) {
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+// read-only preview thumbnails — tapping any of them opens the full gallery
+// page (grid + select/trash/share); there's deliberately no delete
+// affordance here or in the single-photo viewer, only in the gallery's
+// Select Photos mode
+function WarrantyPhotoGrid({ photos, onOpenGallery }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
       {photos.map((p) => (
-        <div key={p.id} style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
+        <button
+          key={p.id}
+          onClick={onOpenGallery}
+          aria-label="View photos"
+          style={{ width: 60, height: 60, flexShrink: 0, padding: 0, border: "none", borderRadius: 6, overflow: "hidden", cursor: "pointer" }}
+        >
           <img
             src={p.url}
-            onClick={() => onOpen(p.url)}
             alt="Warranty photo"
-            style={{
-              width: 60,
-              height: 60,
-              objectFit: "cover",
-              borderRadius: 6,
-              border: `1px solid ${COLORS.border}`,
-              cursor: "pointer",
-              display: "block",
-            }}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", border: `1px solid ${COLORS.border}` }}
           />
-          {editable && (
-            <button
-              onClick={() => setConfirmDeleteId(p.id)}
-              aria-label="Delete photo"
-              style={{
-                position: "absolute",
-                top: -6,
-                right: -6,
-                width: 20,
-                height: 20,
-                borderRadius: "50%",
-                background: COLORS.rust,
-                border: "2px solid #fff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                padding: 0,
-              }}
-            >
-              <X size={11} color="#fff" strokeWidth={3} />
-            </button>
-          )}
-        </div>
+        </button>
       ))}
-      {confirmDeleteId && (
-        <DeleteMediaConfirmModal
-          kind="photo"
-          onConfirm={() => {
-            onDeletePhoto(requestId, confirmDeleteId);
-            setConfirmDeleteId(null);
-          }}
-          onCancel={() => setConfirmDeleteId(null)}
-        />
-      )}
     </div>
   );
 }
@@ -6067,7 +6040,7 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
   const { upload, start, onProgress, stop } = useUploadProgress();
   const busy = !!upload;
   const [err, setErr] = useState("");
-  const [lightbox, setLightbox] = useState(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   const photos = request.photos || [];
   if (!photos.length && !canMove) return null;
@@ -6075,6 +6048,7 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
   const afterPhotos = photos.filter((p) => p.type === "after");
   const beforePhotos = photos.filter((p) => p.type !== "after");
   const showSplit = afterPhotos.length > 0 && beforePhotos.length > 0;
+  const openGallery = () => setGalleryOpen(true);
 
   const handleFiles = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -6096,32 +6070,12 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
       {photos.length > 0 && showSplit && (
         <>
           <div style={photoSectionLabel}>Before</div>
-          <WarrantyPhotoGrid
-            photos={beforePhotos}
-            editable={editable}
-            onDeletePhoto={onDeletePhoto}
-            requestId={request.id}
-            onOpen={setLightbox}
-          />
+          <WarrantyPhotoGrid photos={beforePhotos} onOpenGallery={openGallery} />
           <div style={{ ...photoSectionLabel, marginTop: 10 }}>After</div>
-          <WarrantyPhotoGrid
-            photos={afterPhotos}
-            editable={editable}
-            onDeletePhoto={onDeletePhoto}
-            requestId={request.id}
-            onOpen={setLightbox}
-          />
+          <WarrantyPhotoGrid photos={afterPhotos} onOpenGallery={openGallery} />
         </>
       )}
-      {photos.length > 0 && !showSplit && (
-        <WarrantyPhotoGrid
-          photos={photos}
-          editable={editable}
-          onDeletePhoto={onDeletePhoto}
-          requestId={request.id}
-          onOpen={setLightbox}
-        />
-      )}
+      {photos.length > 0 && !showSplit && <WarrantyPhotoGrid photos={photos} onOpenGallery={openGallery} />}
 
       {canMove && (
         <div style={{ marginTop: photos.length > 0 ? 8 : 0 }}>
@@ -6154,15 +6108,16 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
         </div>
       )}
 
-      {lightbox && (
-        <div style={modalOverlay} onClick={() => setLightbox(null)}>
-          <img
-            src={lightbox}
-            alt="Warranty photo full size"
-            style={{ maxWidth: "92vw", maxHeight: "80vh", borderRadius: 8 }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+      {galleryOpen && (
+        <MediaGalleryPage
+          items={photos.map((p) => ({ id: p.id, kind: "image", url: p.url }))}
+          editable={editable}
+          title="Warranty Photos"
+          onClose={() => setGalleryOpen(false)}
+          onDeleteMany={async (ids) => {
+            for (const id of ids) await onDeletePhoto(request.id, id);
+          }}
+        />
       )}
     </div>
   );
@@ -9167,15 +9122,20 @@ function UploadProgressBar({ upload }) {
   );
 }
 
+// preview strip only — every thumbnail opens the same full gallery page
+// (grid + Select Photos/trash/share); there's deliberately no delete
+// affordance here or on a single photo's full-screen view, only inside the
+// gallery's select mode
+const JOB_MEDIA_PREVIEW_COUNT = 8;
+
 function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
   const inputRef = useRef(null);
   const { upload, start, onProgress, stop } = useUploadProgress();
   const busy = !!upload;
   const [err, setErr] = useState("");
-  const [viewing, setViewing] = useState(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const media = lead.media || [];
-  const confirmDeleteMedia = media.find((m) => m.id === confirmDeleteId);
+  const overflow = media.length - JOB_MEDIA_PREVIEW_COUNT;
 
   const handleFiles = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -9196,20 +9156,30 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
 
   return (
     <div>
-      {media.length === 0 && (
+      {media.length === 0 ? (
         <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0", marginBottom: 8 }}>
           No photos or video yet.
         </div>
-      )}
-      {media.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-          {media.map((m) => (
-            <div key={m.id} style={{ position: "relative", width: 76, height: 76 }}>
-              <button
-                onClick={() => setViewing(m)}
-                style={{ padding: 0, border: "none", background: "none", cursor: "pointer", position: "relative" }}
-                aria-label={m.kind === "video" ? "Play video" : "View photo"}
-              >
+      ) : (
+        <button
+          onClick={() => setGalleryOpen(true)}
+          aria-label="View all photos and video"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 10,
+            padding: 0,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          {media.slice(0, JOB_MEDIA_PREVIEW_COUNT).map((m, i) => {
+            const isLastVisible = i === JOB_MEDIA_PREVIEW_COUNT - 1 && overflow > 0;
+            return (
+              <div key={m.id} style={{ position: "relative", width: 76, height: 76 }}>
                 {m.kind === "video" ? (
                   <>
                     {/* #t=0.1 nudges iOS into rendering a first-frame poster */}
@@ -9232,33 +9202,29 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
                 ) : (
                   <img src={m.url} alt="Job photo" style={thumb} />
                 )}
-              </button>
-              {editable && (
-                <button
-                  onClick={() => setConfirmDeleteId(m.id)}
-                  aria-label="Delete file"
-                  style={{
-                    position: "absolute",
-                    top: -6,
-                    right: -6,
-                    width: 22,
-                    height: 22,
-                    borderRadius: "50%",
-                    background: COLORS.rust,
-                    border: "2px solid #fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                >
-                  <X size={11} color="#fff" strokeWidth={3} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+                {isLastVisible && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      borderRadius: 8,
+                      background: "rgba(0,0,0,0.5)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontFamily: FONT_DISPLAY,
+                      fontWeight: 700,
+                      fontSize: 16,
+                      color: "#fff",
+                    }}
+                  >
+                    +{overflow}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </button>
       )}
 
       <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={handleFiles} style={{ display: "none" }} />
@@ -9279,41 +9245,387 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
       {busy && <UploadProgressBar upload={upload} />}
       {err && <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
 
-      {viewing && (
-        <div style={{ ...modalOverlay, alignItems: "center", zIndex: 60, background: "rgba(0,0,0,0.85)" }} onClick={() => setViewing(null)}>
-          {viewing.kind === "video" ? (
-            <video
-              src={viewing.url}
-              controls
-              autoPlay
-              playsInline
-              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <img
-              src={viewing.url}
-              alt="Job photo full size"
-              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
-              onClick={(e) => e.stopPropagation()}
-            />
-          )}
-        </div>
-      )}
-
-      {confirmDeleteMedia && (
-        <DeleteMediaConfirmModal
-          kind={confirmDeleteMedia.kind === "video" ? "video" : "photo"}
-          onConfirm={() => {
-            onDelete(confirmDeleteMedia.id);
-            setConfirmDeleteId(null);
+      {galleryOpen && (
+        <MediaGalleryPage
+          items={media}
+          editable={editable}
+          title="Job Instruction Photos & Video"
+          onClose={() => setGalleryOpen(false)}
+          onDeleteMany={async (ids) => {
+            for (const id of ids) await onDelete(id);
           }}
-          onCancel={() => setConfirmDeleteId(null)}
         />
       )}
     </div>
   );
 }
+
+// Full-screen gallery page, styled after the iPhone Photos app: a grid of
+// thumbnails (pinch, or ctrl/trackpad-pinch, to resize them), "Select
+// Photos" to enter multi-select (checkmarks + a trash/share bar), and
+// tapping a single thumbnail (outside select mode) opens a swipeable
+// full-screen viewer with no delete control on it — deleting only ever
+// happens from this page's select mode, never off a single photo/video.
+const GALLERY_MIN_COLUMNS = 2;
+const GALLERY_MAX_COLUMNS = 6;
+const GALLERY_DEFAULT_COLUMNS = 3;
+
+function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
+  useModalBackClose(onClose);
+  const gridRef = useRef(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [columns, setColumns] = useState(GALLERY_DEFAULT_COLUMNS);
+  const [viewerIndex, setViewerIndex] = useState(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareErr, setShareErr] = useState("");
+
+  // pinch-to-zoom (touch) and ctrl+wheel (trackpad/mouse) resize the grid —
+  // attached as native listeners rather than React's onTouchMove so
+  // preventDefault actually stops the page from scrolling/zooming during a
+  // real two-finger pinch
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    let pinch = null; // { startDist, startColumns } | null
+
+    const dist = (touches) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+
+    const onTouchStart = (e) => {
+      if (e.touches.length === 2) pinch = { startDist: dist(e.touches), startColumns: columns };
+    };
+    const onTouchMove = (e) => {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      const scale = dist(e.touches) / pinch.startDist;
+      // fingers spreading apart (scale > 1) = zoom in = fewer, bigger tiles
+      const next = Math.round(pinch.startColumns / scale);
+      setColumns(Math.min(GALLERY_MAX_COLUMNS, Math.max(GALLERY_MIN_COLUMNS, next)));
+    };
+    const onTouchEnd = (e) => {
+      if (e.touches.length < 2) pinch = null;
+    };
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return; // trackpad pinch and ctrl+scroll both arrive as this
+      e.preventDefault();
+      setColumns((c) => Math.min(GALLERY_MAX_COLUMNS, Math.max(GALLERY_MIN_COLUMNS, c + (e.deltaY > 0 ? 1 : -1))));
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("wheel", onWheel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns]);
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exitSelect = () => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const confirmDelete = async () => {
+    setDeleting(true);
+    try {
+      await onDeleteMany([...selectedIds]);
+      setConfirmBulkDelete(false);
+      exitSelect();
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // device share sheet (AirDrop, Messages, save to Photos, etc.) — the same
+  // one-tap "share" gesture as the iPhone Photos app. Falls back to a
+  // message on browsers without it (desktop Chrome, mainly) rather than
+  // failing silently.
+  const shareSelected = async () => {
+    setShareErr("");
+    setSharing(true);
+    try {
+      const chosen = items.filter((m) => selectedIds.has(m.id));
+      const files = await Promise.all(
+        chosen.map(async (m) => {
+          const res = await fetch(m.url);
+          const blob = await res.blob();
+          const name = m.url.split("/").pop() || m.id;
+          return new File([blob], name, { type: blob.type });
+        })
+      );
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files });
+      } else {
+        setShareErr("Sharing isn't supported in this browser.");
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") setShareErr(e.message || "Couldn't share those files — try again.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const hasSelection = selectedIds.size > 0;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: COLORS.bg, zIndex: 70, display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "14px 14px",
+          borderBottom: `1px solid ${COLORS.border}`,
+          background: COLORS.surface,
+          flexShrink: 0,
+        }}
+      >
+        {selecting ? (
+          <button onClick={exitSelect} style={galleryHeaderBtn}>
+            Cancel
+          </button>
+        ) : (
+          <button onClick={onClose} aria-label="Close" style={iconBtnGhost}>
+            <X size={20} color={COLORS.muted} />
+          </button>
+        )}
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: 14.5,
+            color: COLORS.ink,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: 1,
+            textAlign: "center",
+          }}
+        >
+          {selecting ? `${selectedIds.size} Selected` : title}
+        </div>
+        {editable ? (
+          <button onClick={() => setSelecting(true)} disabled={selecting} style={{ ...galleryHeaderBtn, opacity: selecting ? 0 : 1 }}>
+            Select Photos
+          </button>
+        ) : (
+          <div style={{ width: 1 }} />
+        )}
+      </div>
+
+      <div ref={gridRef} style={{ flex: 1, overflowY: "auto", padding: 2, touchAction: "pan-y" }}>
+        {items.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", fontFamily: FONT_BODY, fontSize: 14, color: COLORS.muted }}>
+            No photos or video yet.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, 1fr)`, gap: 2 }}>
+            {items.map((m, i) => {
+              const isSelected = selectedIds.has(m.id);
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => (selecting ? toggleSelect(m.id) : setViewerIndex(i))}
+                  aria-label={m.kind === "video" ? "Play video" : "View photo"}
+                  style={{
+                    position: "relative",
+                    aspectRatio: "1",
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    overflow: "hidden",
+                    display: "block",
+                  }}
+                >
+                  {m.kind === "video" ? (
+                    <video
+                      src={`${m.url}#t=0.1`}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      style={{ width: "100%", height: "100%", objectFit: "cover", background: "#000", display: "block" }}
+                    />
+                  ) : (
+                    <img src={m.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  )}
+                  {m.kind === "video" && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        bottom: 4,
+                        right: 4,
+                        color: "#fff",
+                        fontSize: 14,
+                        textShadow: "0 1px 3px rgba(0,0,0,0.7)",
+                      }}
+                    >
+                      ▶
+                    </span>
+                  )}
+                  {selecting && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 5,
+                        right: 5,
+                        width: 20,
+                        height: 20,
+                        borderRadius: "50%",
+                        border: `2px solid ${isSelected ? COLORS.accent : "#fff"}`,
+                        background: isSelected ? COLORS.accent : "rgba(0,0,0,0.3)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {isSelected && <Check size={12} color="#fff" strokeWidth={3} />}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {selecting && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 28px calc(10px + env(safe-area-inset-bottom))",
+            borderTop: `1px solid ${COLORS.border}`,
+            background: COLORS.surface,
+            flexShrink: 0,
+          }}
+        >
+          <button
+            onClick={() => hasSelection && setConfirmBulkDelete(true)}
+            disabled={!hasSelection}
+            aria-label="Delete selected"
+            style={{ ...iconBtnGhost, opacity: hasSelection ? 1 : 0.35 }}
+          >
+            <Trash2 size={22} color={COLORS.rust} />
+          </button>
+          <button
+            onClick={() => hasSelection && !sharing && shareSelected()}
+            disabled={!hasSelection || sharing}
+            aria-label="Share selected"
+            style={{ ...iconBtnGhost, opacity: hasSelection && !sharing ? 1 : 0.35 }}
+          >
+            <ShareIcon size={22} color={COLORS.accent} />
+          </button>
+        </div>
+      )}
+      {shareErr && (
+        <div style={{ padding: "0 16px 10px", fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust, textAlign: "center" }}>
+          {shareErr}
+        </div>
+      )}
+
+      {confirmBulkDelete && (
+        <DeleteMediaConfirmModal
+          count={selectedIds.size}
+          onConfirm={deleting ? undefined : confirmDelete}
+          onCancel={() => !deleting && setConfirmBulkDelete(false)}
+        />
+      )}
+
+      {viewerIndex !== null && <MediaViewer items={items} initialIndex={viewerIndex} onClose={() => setViewerIndex(null)} />}
+    </div>
+  );
+}
+
+// single-photo/video full-screen view, swipe left/right (native scroll-snap,
+// so it's a real touch gesture, not buttons) to move between adjacent
+// items. No delete control here by design — deleting only happens from the
+// gallery grid's Select Photos mode.
+function MediaViewer({ items, initialIndex, onClose }) {
+  useModalBackClose(onClose);
+  const trackRef = useRef(null);
+  const [current, setCurrent] = useState(initialIndex);
+
+  useLayoutEffect(() => {
+    const el = trackRef.current;
+    if (el) el.scrollLeft = initialIndex * el.clientWidth;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleScroll = () => {
+    const el = trackRef.current;
+    if (!el || !el.clientWidth) return;
+    const i = Math.round(el.scrollLeft / el.clientWidth);
+    if (i !== current) setCurrent(i);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 80, display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, flexShrink: 0 }}>
+        <button onClick={onClose} aria-label="Close" style={{ ...iconBtnGhost, background: "rgba(255,255,255,0.12)" }}>
+          <X size={20} color="#fff" />
+        </button>
+        {items.length > 1 && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "rgba(255,255,255,0.8)" }}>
+            {current + 1} of {items.length}
+          </div>
+        )}
+        <div style={{ width: 34 }} />
+      </div>
+      <div
+        ref={trackRef}
+        onScroll={handleScroll}
+        style={{
+          flex: 1,
+          display: "flex",
+          overflowX: "auto",
+          scrollSnapType: "x mandatory",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {items.map((m) => (
+          <div
+            key={m.id}
+            style={{
+              flex: "0 0 100%",
+              scrollSnapAlign: "start",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 8,
+              boxSizing: "border-box",
+            }}
+          >
+            {m.kind === "video" ? (
+              <video src={m.url} controls playsInline style={{ maxWidth: "100%", maxHeight: "100%" }} />
+            ) : (
+              <img src={m.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 
 // small summary + entry point shown at the bottom of each board card, so the
 // profile's contents are discoverable without living on the card itself
@@ -9372,13 +9684,15 @@ const AT_OR_AFTER_SCHEDULED_STAGES = new Set(["scheduled", "progress", "complete
 // same shape as DeleteConfirmModal, but photos/videos have no meaningful
 // name to quote — used by both the job-profile media gallery and warranty
 // photos, so deleting either always requires a confirm tap first
-function DeleteMediaConfirmModal({ kind, onConfirm, onCancel }) {
+// `count` (>1) is for a multi-select bulk delete from the gallery grid;
+// otherwise `kind` ("photo"/"video") describes the single item
+function DeleteMediaConfirmModal({ kind, count, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
   return (
     <div style={{ ...modalOverlay, alignItems: "center", padding: 20, boxSizing: "border-box" }} onClick={onCancel}>
       <div style={{ ...modalCard, borderRadius: 20, border: `1px solid ${COLORS.border}`, maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 8 }}>
-          Delete this {kind}?
+          {count > 1 ? `Delete ${count} items?` : `Delete this ${kind}?`}
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted }}>
           This can't be undone from here.
@@ -10518,6 +10832,18 @@ const actionBtn = {
   fontFamily: FONT_BODY,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const galleryHeaderBtn = {
+  background: "none",
+  border: "none",
+  padding: "4px 2px",
+  fontFamily: FONT_BODY,
+  fontSize: 14,
+  fontWeight: 600,
+  color: COLORS.accent,
+  cursor: "pointer",
+  flexShrink: 0,
 };
 
 const photoSectionLabel = {
