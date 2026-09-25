@@ -108,6 +108,15 @@ if (!existingColumns.has("manager")) {
   // job regardless of who's handling it
   db.exec(`ALTER TABLE leads ADD COLUMN manager TEXT`);
 }
+if (!existingColumns.has("payees")) {
+  // JSON-encoded array of { id, name, role: 'sub'|'pm', agreedAmount,
+  // payments: [{ id, amount, method, methodOther, date, note, createdAt }],
+  // createdAt } — who's owed money on this job (subcontractors and/or the
+  // job's PM) and every payment logged against them. Owner-only, same as
+  // the other cost fields (materialCost/laborCost/commission) — stripped
+  // from the viewer-role response in GET /api/leads.
+  db.exec(`ALTER TABLE leads ADD COLUMN payees TEXT DEFAULT ''`);
+}
 if (!existingColumns.has("contactId")) {
   // which contacts-table row this lead is tied to, set once at creation.
   // Later edits to name/phone/email/address update that same contact

@@ -160,6 +160,13 @@ const Camera = (p) => (
     <circle cx="12" cy="13" r="4" />
   </Icon>
 );
+const AlertCircle = (p) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="13" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </Icon>
+);
 const Info = (p) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="10" />
@@ -1292,6 +1299,7 @@ function App() {
   const [warrantyLoaded, setWarrantyLoaded] = useState(false);
   const [warrantyAlertDelayElapsed, setWarrantyAlertDelayElapsed] = useState(false);
   const [managerPromptLead, setManagerPromptLead] = useState(null);
+  const [payeesPromptLead, setPayeesPromptLead] = useState(null);
   const [showMissingInfoAlert, setShowMissingInfoAlert] = useState(false);
   const bootHtmlRef = useRef(null);
   // bumped by every leads/warranty mutation so a slower-resolving fetch
@@ -1757,6 +1765,10 @@ function App() {
       // also what decides whether Dave gets the "Lead won!" push, see
       // saveJobManager below
       if (!revert && stage === "won") setManagerPromptLead(updated);
+      // just scheduled — prompt to add any subs/PM being paid on this job
+      // and what they're owed (skippable); owner-only, same as every other
+      // payment action
+      if (!revert && stage === "scheduled" && editable) setPayeesPromptLead(updated);
     } catch {
       setError("Couldn't save that move — try again.");
       loadLeads();
@@ -1894,6 +1906,36 @@ function App() {
 
   const revokeShare = async (id) => {
     const updated = await api.revokeLeadShare(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const addPayeeToLead = async (id, payee) => {
+    const updated = await api.addPayee(id, payee);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const editPayeeOnLead = async (id, payeeId, payee) => {
+    const updated = await api.editPayee(id, payeeId, payee);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const removePayeeFromLead = async (id, payeeId) => {
+    const updated = await api.removePayee(id, payeeId);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const recordPaymentOnLead = async (id, payeeId, payment) => {
+    const updated = await api.recordPayment(id, payeeId, payment);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const removePaymentFromLead = async (id, payeeId, paymentId) => {
+    const updated = await api.removePayment(id, payeeId, paymentId);
     leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
   };
@@ -2343,12 +2385,17 @@ function App() {
           openWarrantyCount={openWarrantyCount}
           upcomingAppointment={upcomingAppointment}
           myMetrics={allSourcesMetrics}
+          leads={leads}
           onOpenGoals={() => setView("goals")}
           onOpenMetrics={() => setView("metrics")}
           onOpenBoard={() => setView("board")}
           onOpenWarranty={() => setView("warranty")}
           onOpenCalendar={() => setView("calendar")}
           onOpenLead={navigateToLead}
+          onOpenLeadProfile={(id) => {
+            navigateToLead(id);
+            setProfileLeadId(id);
+          }}
         />
       ) : view === "calendar" ? (
         <CalendarView
@@ -2724,6 +2771,13 @@ function App() {
           onSkip={() => saveJobManager(managerPromptLead.id, null)}
         />
       )}
+      {payeesPromptLead && (
+        <PayeesPromptModal
+          leadName={payeesPromptLead.name}
+          onAdd={(payee) => addPayeeToLead(payeesPromptLead.id, payee)}
+          onDone={() => setPayeesPromptLead(null)}
+        />
+      )}
       {showAccountModal && (
         <AccountModal
           role={role}
@@ -2778,6 +2832,11 @@ function App() {
           onDeleteMedia={deleteLeadMedia}
           onCreateShare={createShare}
           onRevokeShare={revokeShare}
+          onAddPayee={addPayeeToLead}
+          onEditPayee={editPayeeOnLead}
+          onRemovePayee={removePayeeFromLead}
+          onRecordPayment={recordPaymentOnLead}
+          onRemovePayment={removePaymentFromLead}
         />
       )}
       {reportLead && (
@@ -4259,11 +4318,26 @@ function DashboardView({
   onOpenWarranty,
   onOpenCalendar,
   onOpenLead,
+  leads,
+  onOpenLeadProfile,
 }) {
   const { plan, takeHomeNum } = computeGoalPlanFromSettings(settings, myMetrics);
   const hasGoal = takeHomeNum > 0;
   const pct = plan && plan.requiredRevenuePerMonth > 0 ? (stats.wonMonth / plan.requiredRevenuePerMonth) * 100 : 0;
   const activeLeadsCount = STAGES.reduce((sum, s) => sum + (counts[s.key] || 0), 0);
+  const [showPaymentsDue, setShowPaymentsDue] = useState(false);
+
+  // every payee, across every non-archived lead, still owed money — this is
+  // the "who do I owe and how much" answer the payments feature exists for,
+  // so it's surfaced here instead of only being visible lead-by-lead
+  const duePayees = editable
+    ? (leads || [])
+        .filter((l) => !l.archived)
+        .flatMap((l) => (l.payees || []).map((p) => ({ lead: l, payee: p, ...payeeTotals(p) })))
+        .filter((d) => d.remaining > 0)
+        .sort((a, b) => b.remaining - a.remaining)
+    : [];
+  const totalOwed = duePayees.reduce((sum, d) => sum + d.remaining, 0);
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -4306,6 +4380,23 @@ function DashboardView({
               Set a monthly take-home target to see your progress here.
             </div>
           )}
+        </DashboardTile>
+      )}
+
+      {editable && duePayees.length > 0 && (
+        <DashboardTile
+          onClick={() => setShowPaymentsDue(true)}
+          icon={<AlertCircle size={15} color={COLORS.rust} />}
+          title="Payments Due"
+          accent={COLORS.rust}
+          big
+        >
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.rust }}>
+            {fmtCurrency(totalOwed)}
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
+            owed to {duePayees.length} payee{duePayees.length === 1 ? "" : "s"} — tap to see who
+          </div>
         </DashboardTile>
       )}
 
@@ -4391,6 +4482,73 @@ function DashboardView({
       </DashboardTile>
 
       <ActivityFeed role={role} />
+
+      {showPaymentsDue && (
+        <PaymentsDueModal
+          duePayees={duePayees}
+          onOpenLead={(id) => {
+            setShowPaymentsDue(false);
+            onOpenLeadProfile(id);
+          }}
+          onClose={() => setShowPaymentsDue(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// lists every payee across every job who's still owed money, most owed
+// first — the answer to "who do I owe and how much", without having to
+// remember which job it was on and open it
+function PaymentsDueModal({ duePayees, onOpenLead, onClose }) {
+  useModalBackClose(onClose);
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Payments due</div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {duePayees.map(({ lead, payee, remaining, status }) => (
+            <button
+              key={payee.id}
+              onClick={() => onOpenLead(lead.id)}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                width: "100%",
+                textAlign: "left",
+                background: "none",
+                border: "none",
+                borderBottom: `1px solid ${COLORS.border}`,
+                padding: "12px 0",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14.5, color: COLORS.ink }}>
+                  {payee.name} <span style={{ fontWeight: 500, color: COLORS.muted }}>({PAYEE_ROLE_LABEL[payee.role] || payee.role})</span>
+                </div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 2 }}>
+                  {lead.name}
+                  {lead.job ? ` — ${lead.job}` : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.rust }}>{fmtCurrency(remaining)}</div>
+                <div style={{ fontFamily: FONT_UTIL, fontSize: 11, color: PAYEE_STATUS_STYLE[status].color }}>
+                  {PAYEE_STATUS_STYLE[status].label}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -7980,6 +8138,11 @@ function LeadProfileModal({
   onDeleteMedia,
   onCreateShare,
   onRevokeShare,
+  onAddPayee,
+  onEditPayee,
+  onRemovePayee,
+  onRecordPayment,
+  onRemovePayment,
   mapsPreference,
 }) {
   useModalBackClose(onClose);
@@ -7998,6 +8161,9 @@ function LeadProfileModal({
   const [showMaterialsModal, setShowMaterialsModal] = useState(false);
   const [pickupText, setPickupText] = useState("");
   const [pickupWhere, setPickupWhere] = useState("Home Depot");
+  const [addingPayee, setAddingPayee] = useState(false);
+  const [editingPayee, setEditingPayee] = useState(null); // payee object | null
+  const [payingPayee, setPayingPayee] = useState(null); // payee object | null
 
   // pick up a fresh server value (e.g. the owner edited on another device and
   // the board auto-refreshed) as long as there's no unsaved local edit
@@ -8259,6 +8425,33 @@ function LeadProfileModal({
           )}
         </ProfileSection>
 
+        {editable && AT_OR_AFTER_SCHEDULED_STAGES.has(lead.stage) && (
+          <ProfileSection
+            title="Subs & PM payments"
+            right={
+              <button onClick={() => setAddingPayee(true)} style={profileLinkBtn}>
+                + Add
+              </button>
+            }
+          >
+            {(lead.payees || []).length === 0 && (
+              <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>
+                Nobody added yet — tap "+ Add" for each sub or the PM being paid on this job.
+              </div>
+            )}
+            {(lead.payees || []).map((payee) => (
+              <PayeeRow
+                key={payee.id}
+                payee={payee}
+                onEdit={() => setEditingPayee(payee)}
+                onRemove={() => onRemovePayee(lead.id, payee.id)}
+                onRecordPayment={() => setPayingPayee(payee)}
+                onRemovePayment={(paymentId) => onRemovePayment(lead.id, payee.id, paymentId)}
+              />
+            ))}
+          </ProfileSection>
+        )}
+
         {editable && (
           <ProfileSection title="Share with a subcontractor">
             <ShareLinkControl lead={lead} onCreate={onCreateShare} onRevoke={onRevokeShare} />
@@ -8369,6 +8562,36 @@ function LeadProfileModal({
           }}
         />
       )}
+
+      {addingPayee && (
+        <AddPayeeModal
+          onCancel={() => setAddingPayee(false)}
+          onSave={async (payee) => {
+            await onAddPayee(lead.id, payee);
+            setAddingPayee(false);
+          }}
+        />
+      )}
+      {editingPayee && (
+        <AddPayeeModal
+          initial={editingPayee}
+          onCancel={() => setEditingPayee(null)}
+          onSave={async (payee) => {
+            await onEditPayee(lead.id, editingPayee.id, payee);
+            setEditingPayee(null);
+          }}
+        />
+      )}
+      {payingPayee && (
+        <RecordPaymentModal
+          payee={payingPayee}
+          onCancel={() => setPayingPayee(null)}
+          onSave={async (payment) => {
+            await onRecordPayment(lead.id, payingPayee.id, payment);
+            setPayingPayee(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -8381,6 +8604,424 @@ function LeadProfileModal({
 // link opens a standalone unauthenticated page (SharePage) built for a
 // subcontractor, showing just this job's instructions and photo/video
 // references, nothing else on the board.
+// Keep in sync with PAYMENT_METHODS in server/src/payeeTracking.js
+const PAYMENT_METHODS = ["Cash", "Check", "Zelle", "Venmo", "PayPal", "Bank transfer", "Card", "Other"];
+const PAYEE_ROLE_LABEL = { sub: "Sub", pm: "PM" };
+
+function payeeTotals(payee) {
+  const paid = (payee.payments || []).reduce((sum, p) => sum + p.amount, 0);
+  const remaining = Math.max(0, payee.agreedAmount - paid);
+  const status = paid <= 0 ? "unpaid" : paid >= payee.agreedAmount ? "paid" : "partial";
+  return { paid, remaining, status };
+}
+
+const PAYEE_STATUS_STYLE = {
+  unpaid: { label: "Unpaid", color: COLORS.rust },
+  partial: { label: "Partially paid", color: COLORS.amber },
+  paid: { label: "Paid in full", color: COLORS.accent },
+};
+
+function fmtPaymentMethod(payment) {
+  return payment.method === "Other" && payment.methodOther ? payment.methodOther : payment.method;
+}
+
+// one payee's card within the profile's "Subs & PM payments" section — the
+// running balance plus every payment logged against them, each carrying the
+// method and date the owner required at entry
+function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const { paid, remaining, status } = payeeTotals(payee);
+  const statusStyle = PAYEE_STATUS_STYLE[status];
+  const payments = payee.payments || [];
+
+  return (
+    <div style={{ padding: "10px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{payee.name}</span>
+            <span
+              style={{
+                fontFamily: FONT_UTIL,
+                fontSize: 10.5,
+                fontWeight: 700,
+                color: COLORS.muted,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 999,
+                padding: "1px 7px",
+              }}
+            >
+              {PAYEE_ROLE_LABEL[payee.role] || payee.role}
+            </span>
+          </div>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.muted, marginTop: 2 }}>
+            {fmtCurrency(paid)} of {fmtCurrency(payee.agreedAmount)} paid
+            {remaining > 0 && ` · ${fmtCurrency(remaining)} left`}
+          </div>
+        </div>
+        <span style={{ fontFamily: FONT_UTIL, fontSize: 11.5, fontWeight: 700, color: statusStyle.color, flexShrink: 0, whiteSpace: "nowrap" }}>
+          {statusStyle.label}
+        </span>
+      </div>
+
+      {payments.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {payments.map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#4A463D" }}>
+                {fmtDate(p.date)} · {fmtPaymentMethod(p)} · {fmtCurrency(p.amount)}
+                {p.note ? ` · ${p.note}` : ""}
+              </span>
+              <button onClick={() => onRemovePayment(p.id)} aria-label="Remove payment" style={{ ...iconBtnGhost, width: 24, height: 24, flexShrink: 0 }}>
+                <X size={12} color="#9A9184" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={onRecordPayment} style={{ ...actionBtn, background: COLORS.accent, color: "#fff" }}>
+          Record payment
+        </button>
+        <button onClick={onEdit} aria-label="Edit payee" style={iconBtnGhost}>
+          <Pencil size={15} color={COLORS.muted} />
+        </button>
+        <button onClick={() => setConfirmDel(true)} aria-label="Remove payee" style={iconBtnGhost}>
+          <Trash2 size={15} color="#9A9184" />
+        </button>
+      </div>
+
+      {confirmDel && (
+        <DeleteConfirmModal
+          label="payee"
+          itemName={payee.name}
+          onConfirm={() => {
+            setConfirmDel(false);
+            onRemove();
+          }}
+          onCancel={() => setConfirmDel(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// add-or-edit form for one payee — same fields either way, just seeded from
+// `initial` when editing
+function AddPayeeModal({ initial, onCancel, onSave }) {
+  useModalBackClose(onCancel);
+  const [name, setName] = useState(initial?.name || "");
+  const [role, setRole] = useState(initial?.role || "sub");
+  const [amount, setAmount] = useState(initial?.agreedAmount != null ? String(initial.agreedAmount) : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const canSave = name.trim() && parseFloat(amount) > 0;
+
+  const save = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSave({ name: name.trim(), role, agreedAmount: parseFloat(amount) });
+    } catch (e) {
+      setErr(e.message || "Couldn't save");
+      setBusy(false);
+    }
+  };
+
+  const roleBtn = (active) => ({
+    flex: 1,
+    textAlign: "center",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: `1.5px solid ${active ? COLORS.accent : COLORS.border}`,
+    background: active ? "rgba(71,147,107,0.08)" : COLORS.surface,
+    color: COLORS.ink,
+    fontFamily: FONT_BODY,
+    fontSize: 14.5,
+    fontWeight: active ? 700 : 500,
+    cursor: "pointer",
+  });
+
+  return (
+    <div style={{ ...modalOverlay, zIndex: 60 }} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            {initial ? "Edit payee" : "Add a sub or PM"}
+          </div>
+          <button onClick={onCancel} style={iconBtnGhost} aria-label="Cancel">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+
+        <label style={modalLabel}>Name</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Mike's Roofing" style={{ ...modalInput, marginBottom: 14 }} />
+
+        <div style={photoSectionLabel}>Role</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button type="button" onClick={() => setRole("sub")} style={roleBtn(role === "sub")}>
+            Subcontractor
+          </button>
+          <button type="button" onClick={() => setRole("pm")} style={roleBtn(role === "pm")}>
+            Project manager
+          </button>
+        </div>
+
+        <label style={modalLabel}>Agreed amount ($)</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && canSave && save()}
+          placeholder="0"
+          style={modalInput}
+        />
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+        <button
+          onClick={save}
+          disabled={!canSave || busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 16, opacity: canSave && !busy ? 1 : 0.5 }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// requires a method and date every time — that's the whole point: no more
+// payments that only exist as a vague memory of having sent them
+function RecordPaymentModal({ payee, onCancel, onSave }) {
+  useModalBackClose(onCancel);
+  const { remaining } = payeeTotals(payee);
+  const [amount, setAmount] = useState(remaining > 0 ? String(remaining) : "");
+  const [method, setMethod] = useState("");
+  const [methodOther, setMethodOther] = useState("");
+  const [date, setDate] = useState(() => toDateInputValue(new Date()));
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const canSave = parseFloat(amount) > 0 && method && (method !== "Other" || methodOther.trim()) && date;
+
+  const save = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await onSave({ amount: parseFloat(amount), method, methodOther: methodOther.trim(), date, note: note.trim() });
+    } catch (e) {
+      setErr(e.message || "Couldn't save that payment");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ ...modalOverlay, zIndex: 60 }} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>Record payment</div>
+          <button onClick={onCancel} style={iconBtnGhost} aria-label="Cancel">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 14 }}>To {payee.name}</div>
+
+        <label style={modalLabel}>Amount ($)</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          style={{ ...modalInput, marginBottom: 14 }}
+        />
+
+        <label style={modalLabel}>Method</label>
+        <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ ...modalInput, appearance: "auto", marginBottom: method === "Other" ? 10 : 14 }}>
+          <option value="">Select a method…</option>
+          {PAYMENT_METHODS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+        {method === "Other" && (
+          <input
+            value={methodOther}
+            onChange={(e) => setMethodOther(e.target.value)}
+            placeholder="Describe the method"
+            style={{ ...modalInput, marginBottom: 14 }}
+          />
+        )}
+
+        <label style={modalLabel}>Date sent</label>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...modalInput, marginBottom: 14 }} />
+
+        <label style={modalLabel}>Note (optional)</label>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. down payment" style={modalInput} />
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+        <button
+          onClick={save}
+          disabled={!canSave || busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 16, opacity: canSave && !busy ? 1 : 0.5 }}
+        >
+          {busy ? "Saving…" : "Save payment"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// shown once, right after a job moves to Scheduled — add any subs and/or
+// the PM being paid on this job, and what they're agreed to be paid.
+// Skippable; more payees can always be added later from the profile.
+function PayeesPromptModal({ leadName, onAdd, onDone }) {
+  useModalBackClose(onDone);
+  const [rows, setRows] = useState([{ name: "", role: "sub", amount: "" }]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const updateRow = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const addRow = () => setRows((prev) => [...prev, { name: "", role: "sub", amount: "" }]);
+  const removeRow = (i) => setRows((prev) => prev.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    const valid = rows.filter((r) => r.name.trim() && parseFloat(r.amount) > 0);
+    if (valid.length === 0) {
+      onDone();
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      for (const r of valid) {
+        await onAdd({ name: r.name.trim(), role: r.role, agreedAmount: parseFloat(r.amount) });
+      }
+      onDone();
+    } catch (e) {
+      setErr(e.message || "Couldn't save — try again");
+      setBusy(false);
+    }
+  };
+
+  const roleBtn = (active) => ({
+    padding: "6px 10px",
+    borderRadius: 7,
+    border: `1.5px solid ${active ? COLORS.accent : COLORS.border}`,
+    background: active ? "rgba(71,147,107,0.08)" : COLORS.surface,
+    color: COLORS.ink,
+    fontFamily: FONT_BODY,
+    fontSize: 12.5,
+    fontWeight: active ? 700 : 500,
+    cursor: "pointer",
+  });
+
+  return (
+    <div style={modalOverlay} onClick={onDone}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink }}>
+            Who's getting paid on this job?
+          </div>
+          <button onClick={onDone} style={iconBtnGhost} aria-label="Skip">
+            <X size={18} color={COLORS.muted} />
+          </button>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 14 }}>
+          {leadName} was just scheduled. Add any subs and/or the PM you've agreed to pay, and how much — you'll mark
+          payments off as you send them.
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ paddingBottom: 12, borderBottom: rows.length > 1 ? `1px solid ${COLORS.border}` : "none" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input
+                  value={r.name}
+                  onChange={(e) => updateRow(i, { name: e.target.value })}
+                  placeholder="Name"
+                  style={{ ...modalInput, flex: 1 }}
+                />
+                {rows.length > 1 && (
+                  <button onClick={() => removeRow(i)} aria-label="Remove row" style={iconBtnGhost}>
+                    <X size={16} color="#9A9184" />
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => updateRow(i, { role: "sub" })} style={roleBtn(r.role === "sub")}>
+                  Sub
+                </button>
+                <button type="button" onClick={() => updateRow(i, { role: "pm" })} style={roleBtn(r.role === "pm")}>
+                  PM
+                </button>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={r.amount}
+                  onChange={(e) => updateRow(i, { amount: e.target.value })}
+                  placeholder="Agreed amount $"
+                  style={{ ...modalInput, flex: 1 }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={addRow}
+          style={{
+            marginTop: 10,
+            background: "none",
+            border: "none",
+            padding: 0,
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.accent,
+            cursor: "pointer",
+          }}
+        >
+          + Add another
+        </button>
+
+        {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+        <button
+          onClick={save}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 16, opacity: busy ? 0.6 : 1 }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button
+          onClick={onDone}
+          style={{
+            marginTop: 10,
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            fontFamily: FONT_BODY,
+            fontSize: 13,
+            fontWeight: 600,
+            color: COLORS.muted,
+            cursor: "pointer",
+            textAlign: "center",
+          }}
+        >
+          Skip for now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ShareLinkControl({ lead, onCreate, onRevoke }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -8615,6 +9256,8 @@ function JobProfileButton({ lead, onOpen }) {
   const openPickups = details.pickups.filter((p) => !p.done).length;
   if (openPickups) chips.push({ text: `${openPickups} to pick up`, color: COLORS.amber });
   if (details.equipment.length) chips.push({ text: `${details.equipment.length} equipment`, color: COLORS.muted });
+  const owed = (lead.payees || []).reduce((sum, p) => sum + payeeTotals(p).remaining, 0);
+  if (owed > 0) chips.push({ text: `${fmtCurrency(owed)} owed`, color: COLORS.rust });
 
   return (
     <button
@@ -8647,6 +9290,7 @@ function JobProfileButton({ lead, onOpen }) {
 }
 
 const AT_OR_AFTER_WON_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
+const AT_OR_AFTER_SCHEDULED_STAGES = new Set(["scheduled", "progress", "completed", "paid"]);
 
 function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
   useModalBackClose(onCancel);

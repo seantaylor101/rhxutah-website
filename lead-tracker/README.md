@@ -117,6 +117,11 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | POST   | /api/leads/:id/share | owner | create/regenerate a public no-login share link for a job |
 | DELETE | /api/leads/:id/share | owner | turn off a job's share link |
 | GET    | /api/share/:token | public | a share link's job instructions, photo/video references, and special equipment |
+| POST   | /api/leads/:id/payees | owner | add a sub/PM being paid on this job |
+| PATCH  | /api/leads/:id/payees/:payeeId | owner | edit a payee's name/role/agreed amount |
+| DELETE | /api/leads/:id/payees/:payeeId | owner | remove a payee |
+| POST   | /api/leads/:id/payees/:payeeId/payments | owner | record a payment (amount, method, date required) |
+| DELETE | /api/leads/:id/payees/:payeeId/payments/:paymentId | owner | remove a logged payment |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |
 | GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
 | GET    | /api/activity/access | owner | project-manager (viewer) app-open history |
