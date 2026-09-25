@@ -6750,8 +6750,6 @@ function LeadTicket({
   const [emailDraft, setEmailDraft] = useState(lead.email || "");
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressDraft, setAddressDraft] = useState(lead.address || "");
-  const [editingReceived, setEditingReceived] = useState(false);
-  const [receivedDraft, setReceivedDraft] = useState("");
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
   const [showWorkDaysPrompt, setShowWorkDaysPrompt] = useState(false);
@@ -6790,19 +6788,6 @@ function LeadTicket({
   const saveAddress = () => {
     onEditField(lead.id, "address", addressDraft.trim());
     setEditingAddress(false);
-  };
-
-  const openReceivedEdit = () => {
-    const d = new Date(lead.createdAt);
-    const off = d.getTimezoneOffset();
-    const local = new Date(d.getTime() - off * 60000);
-    setReceivedDraft(local.toISOString().slice(0, 10));
-    setEditingReceived(true);
-  };
-
-  const saveReceived = () => {
-    if (receivedDraft) onEditField(lead.id, "createdAt", new Date(receivedDraft + "T00:00:00").toISOString());
-    setEditingReceived(false);
   };
 
   // owner keeps going through the general-purpose lead editor; the viewer
@@ -7227,38 +7212,6 @@ function LeadTicket({
             )}
           </div>
         )}
-
-        {/* received timestamp */}
-        <div
-          onClick={!editingReceived && editable ? openReceivedEdit : undefined}
-          style={{
-            marginTop: 10,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            cursor: !editingReceived && editable ? "pointer" : "default",
-          }}
-        >
-          <span style={{ fontFamily: FONT_UTIL, fontSize: 13, color: "#8A8478" }}>Received</span>
-          {!editingReceived ? (
-            <span style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: "#4A463D" }}>{fmtDateOnly(lead.createdAt)}</span>
-          ) : (
-            <>
-              <input
-                type="date"
-                value={receivedDraft}
-                onChange={(e) => setReceivedDraft(e.target.value)}
-                style={inlineInput}
-              />
-              <button onClick={saveReceived} style={{ ...iconBtn, background: COLORS.accent }}>
-                <Check size={18} color="#fff" />
-              </button>
-              <button onClick={() => setEditingReceived(false)} style={{ ...iconBtn, background: "#B8B0A0" }}>
-                <X size={18} color="#fff" />
-              </button>
-            </>
-          )}
-        </div>
 
         {/* sales appointment — editable at any stage in case it needs rescheduling;
             drives the 7am-of push reminder and the Apple Calendar feed */}
