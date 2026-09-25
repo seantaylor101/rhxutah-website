@@ -1352,6 +1352,7 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (window.location.pathname.startsWith("/share/")) return;
     (async () => {
       try {
         const me = await api.me();
@@ -1885,6 +1886,18 @@ function App() {
     }
   };
 
+  const createShare = async (id) => {
+    const updated = await api.createLeadShare(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const revokeShare = async (id) => {
+    const updated = await api.revokeLeadShare(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
   const deleteLead = async (id) => {
     const prevLeads = leads;
     leadsVersionRef.current++;
@@ -2134,6 +2147,14 @@ function App() {
   };
 
   const stageIdx = STAGES.findIndex((s) => s.key === activeStage);
+
+  // subcontractor-facing share link (see LeadProfileModal's Share section) —
+  // a standalone unauthenticated view, never the login/board flow, so this
+  // has to short-circuit before the auth-gated returns below
+  const shareMatch = window.location.pathname.match(/^\/share\/([a-f0-9]+)$/);
+  if (shareMatch) {
+    return <SharePage token={shareMatch[1]} />;
+  }
 
   if (!authChecked) {
     return (
@@ -2755,6 +2776,8 @@ function App() {
           onSaveJobDetails={saveJobDetails}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
+          onCreateShare={createShare}
+          onRevokeShare={revokeShare}
         />
       )}
       {reportLead && (
@@ -2782,6 +2805,151 @@ function App() {
           }}
           onClose={() => setDrilldown(null)}
         />
+      )}
+    </div>
+  );
+}
+
+// Standalone public page for a subcontractor share link — no login, no
+// board chrome, just this one job's instructions and photo/video
+// references. Reached via the /share/:token path short-circuit in App().
+function SharePage({ token }) {
+  const [data, setData] = useState(null); // undefined once loaded-and-missing, object once loaded
+  const [error, setError] = useState("");
+  const [lightbox, setLightbox] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getShare(token)
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message || "This link isn't valid");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const wrap = {
+    ...shell,
+    alignItems: "center",
+    padding: "28px 16px 60px",
+  };
+
+  if (error) {
+    return (
+      <div style={{ ...wrap, justifyContent: "center", textAlign: "center" }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: COLORS.ink, marginBottom: 6 }}>
+          Link not available
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: COLORS.muted, maxWidth: 320 }}>{error}</div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div style={{ ...wrap, justifyContent: "center" }}>
+        <div style={{ color: COLORS.muted, fontFamily: FONT_UTIL, fontSize: 14 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  const thumb = { width: 100, height: 100, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.border}`, display: "block" };
+
+  return (
+    <div style={wrap}>
+      <div style={{ width: "100%", maxWidth: 480 }}>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: COLORS.muted, marginBottom: 4 }}>
+          Job details
+        </div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 22, color: COLORS.ink, marginBottom: 4 }}>
+          {data.job || "Job"}
+        </div>
+        {data.address && (
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 14, color: COLORS.muted, marginBottom: 20 }}>{data.address}</div>
+        )}
+
+        <ProfileSection title="Instructions">
+          <div
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 15,
+              color: data.instructions ? COLORS.ink : "#B8B0A0",
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.5,
+            }}
+          >
+            {data.instructions || "No instructions given."}
+          </div>
+        </ProfileSection>
+
+        <ProfileSection title="Photos & video">
+          {data.media.length === 0 && (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>None yet.</div>
+          )}
+          {data.media.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {data.media.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setLightbox(m)}
+                  style={{ padding: 0, border: "none", background: "none", cursor: "pointer", position: "relative" }}
+                  aria-label={m.kind === "video" ? "Play video" : "View photo"}
+                >
+                  {m.kind === "video" ? (
+                    <>
+                      <video src={`${m.url}#t=0.1`} muted playsInline preload="metadata" style={{ ...thumb, background: "#000" }} />
+                      <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 26, textShadow: "0 1px 4px rgba(0,0,0,0.6)" }}>
+                        ▶
+                      </span>
+                    </>
+                  ) : (
+                    <img src={m.url} alt="Job reference" style={thumb} />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </ProfileSection>
+
+        {data.equipment.length > 0 && (
+          <ProfileSection title="Special equipment needed">
+            {data.equipment.map((key) => {
+              const item = JOB_EQUIPMENT.find((e) => e.key === key);
+              return item ? (
+                <div key={key} style={{ fontFamily: FONT_BODY, fontSize: 14.5, color: COLORS.ink, padding: "4px 0" }}>
+                  {item.label}
+                </div>
+              ) : null;
+            })}
+          </ProfileSection>
+        )}
+      </div>
+
+      {lightbox && (
+        <div style={{ ...modalOverlay, alignItems: "center", zIndex: 60, background: "rgba(0,0,0,0.85)" }} onClick={() => setLightbox(null)}>
+          {lightbox.kind === "video" ? (
+            <video
+              src={lightbox.url}
+              controls
+              autoPlay
+              playsInline
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <img
+              src={lightbox.url}
+              alt="Job reference full size"
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+        </div>
       )}
     </div>
   );
@@ -7810,6 +7978,8 @@ function LeadProfileModal({
   onSaveJobDetails,
   onUploadMedia,
   onDeleteMedia,
+  onCreateShare,
+  onRevokeShare,
   mapsPreference,
 }) {
   useModalBackClose(onClose);
@@ -8089,6 +8259,12 @@ function LeadProfileModal({
           )}
         </ProfileSection>
 
+        {editable && (
+          <ProfileSection title="Share with a subcontractor">
+            <ShareLinkControl lead={lead} onCreate={onCreateShare} onRevoke={onRevokeShare} />
+          </ProfileSection>
+        )}
+
         <ProfileSection title="Job instruction photo and video references">
           <JobMediaGallery
             lead={lead}
@@ -8201,6 +8377,93 @@ function LeadProfileModal({
 // references. Either role can add
 // (the PM may be the one on site); only the owner can delete, same as the
 // warranty photos. Opens full-size in a lightbox that plays video inline.
+// share-link create/copy/revoke row inside the profile — owner-only. The
+// link opens a standalone unauthenticated page (SharePage) built for a
+// subcontractor, showing just this job's instructions and photo/video
+// references, nothing else on the board.
+function ShareLinkControl({ lead, onCreate, onRevoke }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const shareUrl = lead.shareToken ? `${window.location.origin}/share/${lead.shareToken}` : "";
+
+  const run = async (action) => {
+    setBusy(true);
+    setErr("");
+    try {
+      await action();
+    } catch (e) {
+      setErr(e.message || "Couldn't update the share link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API can be unavailable — the link is still selectable by
+      // hand from the input below
+    }
+  };
+
+  if (!shareUrl) {
+    return (
+      <>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 10 }}>
+          Creates a link anyone can open without signing in — just this job's instructions and photo/video
+          references, nothing else on the board.
+        </div>
+        <button
+          onClick={() => run(() => onCreate(lead.id))}
+          disabled={busy}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1 }}
+        >
+          {busy ? "Creating…" : "Create share link"}
+        </button>
+        {err && <div style={{ marginTop: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input readOnly value={shareUrl} style={{ ...modalInput, flex: 1, fontSize: 12 }} onClick={(e) => e.target.select()} />
+        <button onClick={copyLink} style={{ ...iconBtn, background: COLORS.accent, flexShrink: 0 }} aria-label="Copy share link">
+          <Check size={18} color="#fff" />
+        </button>
+      </div>
+      {copied && (
+        <div style={{ color: COLORS.accent, fontFamily: FONT_BODY, fontSize: 12.5, marginTop: 6 }}>Link copied.</div>
+      )}
+      <button
+        onClick={() => run(() => onRevoke(lead.id))}
+        disabled={busy}
+        style={{
+          marginTop: 10,
+          background: "none",
+          border: "none",
+          padding: 0,
+          fontFamily: FONT_BODY,
+          fontSize: 12.5,
+          color: COLORS.rust,
+          cursor: busy ? "default" : "pointer",
+          textDecoration: "underline",
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        {busy ? "Working…" : "Turn off this link"}
+      </button>
+      {err && <div style={{ marginTop: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
+    </>
+  );
+}
+
 function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);

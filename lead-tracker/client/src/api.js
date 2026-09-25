@@ -83,6 +83,9 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
+  createLeadShare: (id) => request(`/leads/${id}/share`, { method: "POST" }),
+  revokeLeadShare: (id) => request(`/leads/${id}/share`, { method: "DELETE" }),
+  getShare: (token) => request(`/share/${token}`),
   uploadLeadMedia: (id, files) => {
     const form = new FormData();
     for (const file of files) form.append("media", file);

@@ -15,6 +15,7 @@ import warrantyRoutes from "./routes/warranty.js";
 import calendarRoutes from "./routes/calendar.js";
 import activityRoutes from "./routes/activity.js";
 import contactsRoutes from "./routes/contacts.js";
+import shareViewRoutes from "./routes/shareView.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
 import { startBackupScheduler, recordActivity } from "./backupService.js";
 import { startGoalReminderScheduler } from "./goalReminders.js";
@@ -57,6 +58,7 @@ app.use("/api/warranty", warrantyRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/activity", activityRoutes);
 app.use("/api/contacts", contactsRoutes);
+app.use("/api/share", shareViewRoutes);
 app.use("/api/public", publicCors, publicRoutes);
 
 const clientDist = path.join(__dirname, "../../client/dist");

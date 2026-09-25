@@ -256,3 +256,14 @@ db.exec(`
   );
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_media_leadId ON lead_media (leadId)`);
+
+// per-lead public share link (owner-issued) letting a subcontractor view a
+// job's instructions and photo/video references without an app login —
+// one row per lead; regenerating the token invalidates the old link
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_shares (
+    leadId TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    createdAt TEXT NOT NULL
+  );
+`);
