@@ -83,6 +83,12 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
+  uploadLeadMedia: (id, files) => {
+    const form = new FormData();
+    for (const file of files) form.append("media", file);
+    return requestForm(`/leads/${id}/media`, form);
+  },
+  deleteLeadMedia: (id, mediaId) => request(`/leads/${id}/media/${mediaId}`, { method: "DELETE" }),
   listActivityFeed: () => request("/activity/feed"),
   listContacts: () => request("/contacts"),
   deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),

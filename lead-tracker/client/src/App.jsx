@@ -1862,6 +1862,29 @@ function App() {
     }
   };
 
+  // throws on failure so the profile can show the server's message inline
+  // (e.g. "File is too large") instead of the generic banner
+  const uploadLeadMedia = async (id, files) => {
+    const updated = await api.uploadLeadMedia(id, files);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
+  const deleteLeadMedia = async (id, mediaId) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, media: (l.media || []).filter((m) => m.id !== mediaId) } : l))
+    );
+    try {
+      const updated = await api.deleteLeadMedia(id, mediaId);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't delete that file — try again.");
+      loadLeads();
+    }
+  };
+
   const deleteLead = async (id) => {
     const prevLeads = leads;
     leadsVersionRef.current++;
@@ -2730,6 +2753,8 @@ function App() {
           onEditField={editField}
           onEditStartDate={editStartDate}
           onSaveJobDetails={saveJobDetails}
+          onUploadMedia={uploadLeadMedia}
+          onDeleteMedia={deleteLeadMedia}
         />
       )}
       {reportLead && (
@@ -7822,7 +7847,18 @@ function MaterialsOrderedModal({ initial, onSave, onCancel }) {
 // profile" button) on the board. Holds everything the PM works from — the
 // instructions, materials, pick-ups on the way and special equipment — so
 // none of it has to crowd the lead cards themselves.
-function LeadProfileModal({ lead, role, editable, onClose, onEditField, onEditStartDate, onSaveJobDetails, mapsPreference }) {
+function LeadProfileModal({
+  lead,
+  role,
+  editable,
+  onClose,
+  onEditField,
+  onEditStartDate,
+  onSaveJobDetails,
+  onUploadMedia,
+  onDeleteMedia,
+  mapsPreference,
+}) {
   useModalBackClose(onClose);
   const details = jobDetailsOf(lead);
   const stage = STAGES.find((s) => s.key === lead.stage);
@@ -8100,6 +8136,15 @@ function LeadProfileModal({ lead, role, editable, onClose, onEditField, onEditSt
           )}
         </ProfileSection>
 
+        <ProfileSection title="Photos & video">
+          <JobMediaGallery
+            lead={lead}
+            editable={editable}
+            onUpload={(files) => onUploadMedia(lead.id, files)}
+            onDelete={(mediaId) => onDeleteMedia(lead.id, mediaId)}
+          />
+        </ProfileSection>
+
         {/* materials */}
         <ProfileSection
           title="Materials"
@@ -8199,6 +8244,142 @@ function LeadProfileModal({ lead, role, editable, onClose, onEditField, onEditSt
   );
 }
 
+// thumbnails + "Add photos/video" for the job profile. Either role can add
+// (the PM may be the one on site); only the owner can delete, same as the
+// warranty photos. Opens full-size in a lightbox that plays video inline.
+function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [viewing, setViewing] = useState(null);
+  const media = lead.media || [];
+
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onUpload(files);
+    } catch (uploadErr) {
+      setErr(uploadErr.message || "Couldn't upload those files");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const thumb = { width: 76, height: 76, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.border}`, display: "block" };
+
+  return (
+    <div>
+      {media.length === 0 && (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0", marginBottom: 8 }}>
+          No photos or video yet.
+        </div>
+      )}
+      {media.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          {media.map((m) => (
+            <div key={m.id} style={{ position: "relative", width: 76, height: 76 }}>
+              <button
+                onClick={() => setViewing(m)}
+                style={{ padding: 0, border: "none", background: "none", cursor: "pointer", position: "relative" }}
+                aria-label={m.kind === "video" ? "Play video" : "View photo"}
+              >
+                {m.kind === "video" ? (
+                  <>
+                    {/* #t=0.1 nudges iOS into rendering a first-frame poster */}
+                    <video src={`${m.url}#t=0.1`} muted playsInline preload="metadata" style={{ ...thumb, background: "#000" }} />
+                    <span
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "#fff",
+                        fontSize: 22,
+                        textShadow: "0 1px 4px rgba(0,0,0,0.6)",
+                      }}
+                    >
+                      ▶
+                    </span>
+                  </>
+                ) : (
+                  <img src={m.url} alt="Job photo" style={thumb} />
+                )}
+              </button>
+              {editable && (
+                <button
+                  onClick={() => onDelete(m.id)}
+                  aria-label="Delete file"
+                  style={{
+                    position: "absolute",
+                    top: -6,
+                    right: -6,
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    background: COLORS.rust,
+                    border: "2px solid #fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <X size={11} color="#fff" strokeWidth={3} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <input ref={inputRef} type="file" accept="image/*,video/*" multiple onChange={handleFiles} style={{ display: "none" }} />
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        style={{
+          ...actionBtn,
+          background: "transparent",
+          color: COLORS.accent,
+          border: `1px solid ${COLORS.border}`,
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        <Camera size={14} color={COLORS.accent} />
+        {busy ? "Uploading…" : "Add photos / video"}
+      </button>
+      {err && <div style={{ marginTop: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
+
+      {viewing && (
+        <div style={{ ...modalOverlay, alignItems: "center", zIndex: 60, background: "rgba(0,0,0,0.85)" }} onClick={() => setViewing(null)}>
+          {viewing.kind === "video" ? (
+            <video
+              src={viewing.url}
+              controls
+              autoPlay
+              playsInline
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <img
+              src={viewing.url}
+              alt="Job photo full size"
+              style={{ maxWidth: "94vw", maxHeight: "84vh", borderRadius: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // small summary + entry point shown at the bottom of each board card, so the
 // profile's contents are discoverable without living on the card itself
 function JobProfileButton({ lead, onOpen }) {
@@ -8212,6 +8393,8 @@ function JobProfileButton({ lead, onOpen }) {
     );
   }
   if (details.instructions) chips.push({ text: "Instructions", color: COLORS.muted });
+  const mediaCount = (lead.media || []).length;
+  if (mediaCount) chips.push({ text: `${mediaCount} photo${mediaCount === 1 ? "" : "s"}/video`, color: COLORS.muted });
   const openPickups = details.pickups.filter((p) => !p.done).length;
   if (openPickups) chips.push({ text: `${openPickups} pick-up${openPickups === 1 ? "" : "s"}`, color: COLORS.amber });
   if (details.equipment.length) chips.push({ text: `${details.equipment.length} equipment`, color: COLORS.muted });

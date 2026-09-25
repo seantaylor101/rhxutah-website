@@ -1,4 +1,6 @@
 import { Router } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
@@ -8,6 +10,7 @@ import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
+import { jobMediaUpload, jobMediaKind, JOB_MEDIA_DIR, SAFE_JOB_MEDIA_FILENAME } from "../uploads.js";
 
 const router = Router();
 
@@ -42,6 +45,13 @@ function parseWorkDays(value) {
 
 const VALID_MANAGERS = new Set(["Sean", "Dave"]);
 
+function mediaFor(leadId) {
+  return db
+    .prepare(`SELECT id, filename, kind, createdAt FROM lead_media WHERE leadId = ? ORDER BY createdAt ASC`)
+    .all(leadId)
+    .map((m) => ({ id: m.id, kind: m.kind, createdAt: m.createdAt, url: `/api/leads/media/${m.filename}` }));
+}
+
 function rowToLead(row) {
   let scopeOfWork = [];
   if (row.scopeOfWork) {
@@ -59,7 +69,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -534,11 +544,65 @@ router.delete("/:id/followups/:followupId", requireAuth("owner"), (req, res) => 
   res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
 });
 
+// photos/videos explaining the work — any role can add (the PM may be the
+// one on site snapping the "before"), deleting stays owner-only, same split
+// as warranty photos
+router.post("/:id/media", requireAuth("viewer"), (req, res) => {
+  jobMediaUpload.array("media", 10)(req, res, (err) => {
+    if (err) {
+      const message = err.code === "LIMIT_FILE_SIZE" ? "File is too large (100MB max)" : "Couldn't upload those files";
+      return res.status(400).json({ error: message });
+    }
+
+    const row = getLeadOr404(req.params.id, res);
+    if (!row) {
+      for (const f of req.files || []) fs.unlink(f.path, () => {});
+      return;
+    }
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: "No photo or video files given" });
+
+    const now = new Date().toISOString();
+    const insert = db.prepare(`INSERT INTO lead_media (id, leadId, filename, kind, createdAt) VALUES (?, ?, ?, ?, ?)`);
+    db.transaction((uploaded) => {
+      for (const f of uploaded) insert.run(randomUUID(), row.id, f.filename, jobMediaKind(f.filename), now);
+    })(files);
+
+    res.status(201).json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  });
+});
+
+router.delete("/:id/media/:mediaId", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const media = db.prepare(`SELECT * FROM lead_media WHERE id = ? AND leadId = ?`).get(req.params.mediaId, row.id);
+  if (!media) return res.status(404).json({ error: "File not found" });
+
+  db.prepare(`DELETE FROM lead_media WHERE id = ?`).run(media.id);
+  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+
+  fs.unlink(path.join(JOB_MEDIA_DIR, media.filename), () => {});
+});
+
+// sendFile handles Range requests, which iOS Safari needs to play video
+router.get("/media/:filename", requireAuth("viewer"), (req, res) => {
+  const { filename } = req.params;
+  if (!SAFE_JOB_MEDIA_FILENAME.test(filename)) return res.status(400).end();
+  res.sendFile(path.join(JOB_MEDIA_DIR, filename), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
 router.delete("/:id", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
+  const media = db.prepare(`SELECT filename FROM lead_media WHERE leadId = ?`).all(row.id);
+  db.prepare(`DELETE FROM lead_media WHERE leadId = ?`).run(row.id);
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);
   res.status(204).end();
+
+  for (const m of media) fs.unlink(path.join(JOB_MEDIA_DIR, m.filename), () => {});
 });
 
 export default router;
