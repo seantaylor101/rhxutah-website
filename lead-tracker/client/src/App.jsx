@@ -9665,11 +9665,135 @@ function MediaViewer({ items, initialIndex, onClose }) {
             {m.kind === "video" ? (
               <video src={m.url} controls playsInline style={{ maxWidth: "100%", maxHeight: "100%" }} />
             ) : (
-              <img src={m.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+              <ZoomableImage src={m.url} active={m === items[current]} />
             )}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Pinch (or double-tap) to zoom into a single photo, then drag to pan around
+// while zoomed — standard photo-viewer behavior. At 1x (not zoomed), a
+// single finger is left alone so the surrounding track's native swipe-
+// between-photos keeps working; preventDefault only kicks in for an actual
+// pinch, or a one-finger drag once already zoomed in, so the two gestures
+// never fight each other. Resets to 1x the moment you swipe to a different
+// photo (`active` goes false), so each photo starts fresh.
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_DOUBLE_TAP = 2.5;
+
+function ZoomableImage({ src, active }) {
+  const wrapRef = useRef(null);
+  const imgRef = useRef(null);
+  const state = useRef({ scale: 1, x: 0, y: 0 });
+
+  const apply = (withTransition) => {
+    const img = imgRef.current;
+    if (!img) return;
+    img.style.transition = withTransition ? "transform 180ms ease-out" : "none";
+    img.style.transform = `translate(${state.current.x}px, ${state.current.y}px) scale(${state.current.scale})`;
+  };
+
+  const reset = (withTransition) => {
+    state.current = { scale: 1, x: 0, y: 0 };
+    apply(withTransition);
+  };
+
+  useEffect(() => {
+    if (!active) reset(false);
+  }, [active]);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    let mode = null; // "pinch" | "pan" | null
+    let start = null;
+
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+    const beginPan = (touch) => {
+      mode = "pan";
+      start = { x: touch.clientX, y: touch.clientY, ox: state.current.x, oy: state.current.y };
+    };
+
+    const onTouchStart = (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        mode = "pinch";
+        start = { dist: dist(e.touches), mid: mid(e.touches), scale: state.current.scale, x: state.current.x, y: state.current.y };
+      } else if (e.touches.length === 1 && state.current.scale > 1.02) {
+        // only steal the single-finger gesture once already zoomed in —
+        // otherwise leave it alone so swipe-between-photos still works
+        e.preventDefault();
+        beginPan(e.touches[0]);
+      } else {
+        mode = null;
+      }
+    };
+    const onTouchMove = (e) => {
+      if (mode === "pinch" && e.touches.length === 2) {
+        e.preventDefault();
+        const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, start.scale * (dist(e.touches) / start.dist)));
+        const m = mid(e.touches);
+        state.current.scale = scale;
+        state.current.x = start.x + (m.x - start.mid.x);
+        state.current.y = start.y + (m.y - start.mid.y);
+        apply(false);
+      } else if (mode === "pan" && e.touches.length === 1) {
+        e.preventDefault();
+        state.current.x = start.ox + (e.touches[0].clientX - start.x);
+        state.current.y = start.oy + (e.touches[0].clientY - start.y);
+        apply(false);
+      }
+    };
+    const onTouchEnd = (e) => {
+      if (e.touches.length === 1 && mode === "pinch") {
+        // dropped from two fingers to one mid-pinch — keep going as a pan
+        // if still zoomed, otherwise let go entirely
+        if (state.current.scale > 1.02) beginPan(e.touches[0]);
+        else mode = null;
+        return;
+      }
+      if (e.touches.length === 0) {
+        mode = null;
+        // pinched back down past ~1x — snap cleanly to exactly 1x instead
+        // of leaving it at some slightly-off scale
+        if (state.current.scale < 1.05) reset(true);
+      }
+    };
+
+    wrap.addEventListener("touchstart", onTouchStart, { passive: false });
+    wrap.addEventListener("touchmove", onTouchMove, { passive: false });
+    wrap.addEventListener("touchend", onTouchEnd, { passive: true });
+    wrap.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      wrap.removeEventListener("touchstart", onTouchStart);
+      wrap.removeEventListener("touchmove", onTouchMove);
+      wrap.removeEventListener("touchend", onTouchEnd);
+      wrap.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, []);
+
+  const lastTapRef = useRef(0);
+  const handleClick = () => {
+    const now = Date.now();
+    const isDoubleTap = now - lastTapRef.current < 300;
+    lastTapRef.current = now;
+    if (!isDoubleTap) return;
+    if (state.current.scale > 1.02) reset(true);
+    else {
+      state.current = { scale: ZOOM_DOUBLE_TAP, x: 0, y: 0 };
+      apply(true);
+    }
+  };
+
+  return (
+    <div ref={wrapRef} onClick={handleClick} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      <img ref={imgRef} src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
     </div>
   );
 }
