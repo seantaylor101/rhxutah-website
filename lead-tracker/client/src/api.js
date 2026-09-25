@@ -83,6 +83,14 @@ export const api = {
     return requestForm(`/warranty/${id}/photos`, form);
   },
   deleteWarrantyPhoto: (id, photoId) => request(`/warranty/${id}/photos/${photoId}`, { method: "DELETE" }),
+  addPayee: (id, payee) => request(`/leads/${id}/payees`, { method: "POST", body: JSON.stringify(payee) }),
+  editPayee: (id, payeeId, payee) =>
+    request(`/leads/${id}/payees/${payeeId}`, { method: "PATCH", body: JSON.stringify(payee) }),
+  removePayee: (id, payeeId) => request(`/leads/${id}/payees/${payeeId}`, { method: "DELETE" }),
+  recordPayment: (id, payeeId, payment) =>
+    request(`/leads/${id}/payees/${payeeId}/payments`, { method: "POST", body: JSON.stringify(payment) }),
+  removePayment: (id, payeeId, paymentId) =>
+    request(`/leads/${id}/payees/${payeeId}/payments/${paymentId}`, { method: "DELETE" }),
   createLeadShare: (id) => request(`/leads/${id}/share`, { method: "POST" }),
   revokeLeadShare: (id) => request(`/leads/${id}/share`, { method: "DELETE" }),
   getShare: (token) => request(`/share/${token}`),

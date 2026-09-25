@@ -10,6 +10,16 @@ import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
+import {
+  parsePayees,
+  validatePayeeInput,
+  addPayee,
+  updatePayee,
+  removePayee,
+  validatePaymentInput,
+  addPayment,
+  removePayment,
+} from "../payeeTracking.js";
 import { jobMediaUpload, jobMediaKind, JOB_MEDIA_DIR, SAFE_JOB_MEDIA_FILENAME } from "../uploads.js";
 
 const router = Router();
@@ -74,7 +84,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -140,6 +150,19 @@ function sweepArchive() {
   tx(toSweep);
 }
 
+// materialCost/laborCost/commission/payees are all owner-only financial
+// data — strip them for any non-owner response, not just the list endpoint,
+// so a viewer can't recover them from a move/edit response either
+function forRole(role, lead) {
+  if (role !== "owner") {
+    lead.materialCost = null;
+    lead.laborCost = null;
+    lead.commission = null;
+    lead.payees = [];
+  }
+  return lead;
+}
+
 function getLeadOr404(id, res) {
   const row = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
   if (!row) {
@@ -152,16 +175,7 @@ function getLeadOr404(id, res) {
 router.get("/", requireAuth("viewer"), (req, res) => {
   sweepArchive();
   const rows = db.prepare(`SELECT * FROM leads ORDER BY createdAt DESC`).all();
-  const leads = rows.map(rowToLead);
-  // profit is owner-only: strip the cost inputs at the API layer too, not
-  // just in the UI, so a viewer can't recover them by inspecting the response
-  if (req.role !== "owner") {
-    for (const lead of leads) {
-      lead.materialCost = null;
-      lead.laborCost = null;
-      lead.commission = null;
-    }
-  }
+  const leads = rows.map((row) => forRole(req.role, rowToLead(row)));
   res.json(leads);
 });
 
@@ -171,7 +185,7 @@ router.post("/", requireAuth("owner"), (req, res) => {
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
   const lead = insertLead(db, { name, job, phone, email, source, sourceOther });
-  res.status(201).json(rowToLead(lead));
+  res.status(201).json(forRole(req.role, rowToLead(lead)));
 });
 
 // Stage transitions carry the same bidSentAt/wonAt/completedAt/paidAt side
@@ -278,7 +292,7 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     id: row.id,
   });
 
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 
   logMove({
     type: "lead",
@@ -374,7 +388,7 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
     }
   }
 
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // viewer-level so the project manager can schedule/reschedule a won job's
@@ -410,7 +424,7 @@ router.patch("/:id/start-date", requireAuth("viewer"), (req, res) => {
     ...updates,
     id: row.id,
   });
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 router.patch("/:id/report", requireAuth("owner"), (req, res) => {
@@ -446,7 +460,7 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
     id: row.id,
   });
 
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 function readScopeOfWork(row) {
@@ -480,7 +494,7 @@ router.put("/:id/scope-of-work", requireAuth("owner"), (req, res) => {
   }
 
   db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(cleaned), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // toggling a single item's done state — viewer-level so the project
@@ -498,7 +512,7 @@ router.patch("/:id/scope-of-work", requireAuth("viewer"), (req, res) => {
   item.done = !!done;
 
   db.prepare(`UPDATE leads SET scopeOfWork = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // job profile (instructions, materials ordered, pick-ups on the way,
@@ -513,7 +527,7 @@ router.patch("/:id/job-details", requireAuth("viewer"), (req, res) => {
   if (!result.ok) return res.status(result.status).json({ error: result.error });
 
   db.prepare(`UPDATE leads SET jobDetails = ? WHERE id = ?`).run(JSON.stringify(result.value), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 function readFollowUps(row) {
@@ -535,7 +549,7 @@ router.post("/:id/followups", requireAuth("owner"), (req, res) => {
   followUps.push({ id: randomUUID(), createdAt: new Date().toISOString() });
 
   db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // undo an accidental log
@@ -546,7 +560,7 @@ router.delete("/:id/followups/:followupId", requireAuth("owner"), (req, res) => 
   const followUps = readFollowUps(row).filter((f) => f.id !== req.params.followupId);
 
   db.prepare(`UPDATE leads SET followUps = ? WHERE id = ?`).run(JSON.stringify(followUps), row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // photos/videos explaining the work — any role can add (the PM may be the
@@ -574,7 +588,7 @@ router.post("/:id/media", requireAuth("viewer"), (req, res) => {
       for (const f of uploaded) insert.run(randomUUID(), row.id, f.filename, jobMediaKind(f.filename), now);
     })(files);
 
-    res.status(201).json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+    res.status(201).json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
   });
 });
 
@@ -585,7 +599,7 @@ router.delete("/:id/media/:mediaId", requireAuth("owner"), (req, res) => {
   if (!media) return res.status(404).json({ error: "File not found" });
 
   db.prepare(`DELETE FROM lead_media WHERE id = ?`).run(media.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 
   fs.unlink(path.join(JOB_MEDIA_DIR, media.filename), () => {});
 });
@@ -611,14 +625,68 @@ router.post("/:id/share", requireAuth("owner"), (req, res) => {
     `INSERT INTO lead_shares (leadId, token, createdAt) VALUES (@leadId, @token, @createdAt)
      ON CONFLICT(leadId) DO UPDATE SET token = excluded.token, createdAt = excluded.createdAt`
   ).run({ leadId: row.id, token, createdAt: new Date().toISOString() });
-  res.status(201).json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.status(201).json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 router.delete("/:id/share", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
   db.prepare(`DELETE FROM lead_shares WHERE leadId = ?`).run(row.id);
-  res.json(rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id)));
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+// who's owed money on this job (subs and/or the PM) and payments logged
+// against them — entirely owner-only, same tier as the other cost fields
+router.post("/:id/payees", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const result = validatePayeeInput(req.body || {});
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  const next = addPayee(parsePayees(row.payees), result.value);
+  db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.status(201).json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+router.patch("/:id/payees/:payeeId", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const result = validatePayeeInput(req.body || {});
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  const next = updatePayee(parsePayees(row.payees), req.params.payeeId, result.value);
+  if (!next) return res.status(404).json({ error: "Payee not found" });
+  db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+router.delete("/:id/payees/:payeeId", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const next = removePayee(parsePayees(row.payees), req.params.payeeId);
+  db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+router.post("/:id/payees/:payeeId/payments", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const result = validatePaymentInput(req.body || {});
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  const next = addPayment(parsePayees(row.payees), req.params.payeeId, result.value);
+  if (!next) return res.status(404).json({ error: "Payee not found" });
+  db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.status(201).json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+router.delete("/:id/payees/:payeeId/payments/:paymentId", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const next = removePayment(parsePayees(row.payees), req.params.payeeId, req.params.paymentId);
+  if (!next) return res.status(404).json({ error: "Payee not found" });
+  db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 router.delete("/:id", requireAuth("owner"), (req, res) => {
