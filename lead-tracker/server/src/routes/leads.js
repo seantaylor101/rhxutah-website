@@ -21,6 +21,7 @@ import {
   removePayment,
 } from "../payeeTracking.js";
 import { jobMediaUpload, jobMediaKind, JOB_MEDIA_DIR, SAFE_JOB_MEDIA_FILENAME } from "../uploads.js";
+import { validateMeasureData, parseMeasureData } from "../measureData.js";
 
 const router = Router();
 
@@ -62,9 +63,15 @@ function shareTokenFor(leadId) {
 
 function mediaFor(leadId) {
   return db
-    .prepare(`SELECT id, filename, kind, createdAt FROM lead_media WHERE leadId = ? ORDER BY createdAt ASC`)
+    .prepare(`SELECT id, filename, kind, createdAt, measureData FROM lead_media WHERE leadId = ? ORDER BY createdAt ASC`)
     .all(leadId)
-    .map((m) => ({ id: m.id, kind: m.kind, createdAt: m.createdAt, url: `/api/leads/media/${m.filename}` }));
+    .map((m) => ({
+      id: m.id,
+      kind: m.kind,
+      createdAt: m.createdAt,
+      url: `/api/leads/media/${m.filename}`,
+      measureData: parseMeasureData(m.measureData),
+    }));
 }
 
 function rowToLead(row) {
@@ -602,6 +609,22 @@ router.delete("/:id/media/:mediaId", requireAuth("owner"), (req, res) => {
   res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 
   fs.unlink(path.join(JOB_MEDIA_DIR, media.filename), () => {});
+});
+
+// full replace of one photo's ruler calibration + measurement lines —
+// viewer-level (same as uploading the photo itself) so the PM can measure
+// on site, not just the owner
+router.put("/:id/media/:mediaId/measure", requireAuth("viewer"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const media = db.prepare(`SELECT * FROM lead_media WHERE id = ? AND leadId = ?`).get(req.params.mediaId, row.id);
+  if (!media) return res.status(404).json({ error: "File not found" });
+
+  const result = validateMeasureData(req.body);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  db.prepare(`UPDATE lead_media SET measureData = ? WHERE id = ?`).run(JSON.stringify(result.value), media.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
 // sendFile handles Range requests, which iOS Safari needs to play video

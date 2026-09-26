@@ -266,6 +266,18 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_media_leadId ON lead_media (leadId)`);
 
+if (!db.prepare(`PRAGMA table_info(lead_media)`).all().some((c) => c.name === "measureData")) {
+  // JSON-encoded { calibration: { corners: [[x,y]x4 in 0..1 image space],
+  // realWidth, realHeight } | null, measurements: [{ id, a: [x,y], b: [x,y],
+  // label, createdAt }] } — a perspective-correct ruler calibrated against
+  // one known-size rectangle in the photo (a door, a brick, a siding
+  // panel), so later measurements on that same flat surface account for
+  // converging lines instead of just scaling one reference length
+  // uniformly across the whole image. See client/src/App.jsx's
+  // computeHomography/measureDistanceInches for the math.
+  db.exec(`ALTER TABLE lead_media ADD COLUMN measureData TEXT DEFAULT ''`);
+}
+
 // per-lead public share link (owner-issued) letting a subcontractor view a
 // job's instructions and photo/video references without an app login —
 // one row per lead; regenerating the token invalidates the old link
