@@ -174,6 +174,12 @@ const Info = (p) => (
     <circle cx="12" cy="8" r="1.1" fill={p.color || "currentColor"} stroke="none" />
   </Icon>
 );
+const Ruler = (p) => (
+  <Icon {...p}>
+    <rect x="2.5" y="7.5" width="19" height="9" rx="1.5" transform="rotate(-45 12 12)" />
+    <path d="m9 15 1.5-1.5M11.5 17.5 13 16M13.5 12.5 15 11M16 9.5l1.5-1.5" />
+  </Icon>
+);
 const ShareIcon = (p) => (
   <Icon {...p}>
     <path d="M12 16V4" />
@@ -1890,6 +1896,15 @@ function App() {
     setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
   };
 
+  // throws on failure so the viewer can show its own inline error instead
+  // of the global banner — losing a just-placed measurement to a network
+  // hiccup with no feedback would be worse than a visible retry
+  const updateMediaMeasure = async (id, mediaId, measureData) => {
+    const updated = await api.updateMediaMeasure(id, mediaId, measureData);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+  };
+
   const deleteLeadMedia = async (id, mediaId) => {
     leadsVersionRef.current++;
     setLeads((prev) =>
@@ -2837,6 +2852,7 @@ function App() {
           onSaveJobDetails={saveJobDetails}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
+          onUpdateMediaMeasure={updateMediaMeasure}
           onCreateShare={createShare}
           onRevokeShare={revokeShare}
           onAddPayee={addPayeeToLead}
@@ -8106,6 +8122,7 @@ function LeadProfileModal({
   onSaveJobDetails,
   onUploadMedia,
   onDeleteMedia,
+  onUpdateMediaMeasure,
   onCreateShare,
   onRevokeShare,
   onAddPayee,
@@ -8434,6 +8451,7 @@ function LeadProfileModal({
             editable={editable}
             onUpload={(files, onProgress) => onUploadMedia(lead.id, files, onProgress)}
             onDelete={(mediaId) => onDeleteMedia(lead.id, mediaId)}
+            onUpdateMeasure={(mediaId, measureData) => onUpdateMediaMeasure(lead.id, mediaId, measureData)}
           />
         </ProfileSection>
 
@@ -9128,7 +9146,7 @@ function UploadProgressBar({ upload }) {
 // gallery's select mode
 const JOB_MEDIA_PREVIEW_COUNT = 8;
 
-function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
+function JobMediaGallery({ lead, editable, onUpload, onDelete, onUpdateMeasure }) {
   const inputRef = useRef(null);
   const { upload, start, onProgress, stop } = useUploadProgress();
   const busy = !!upload;
@@ -9254,6 +9272,7 @@ function JobMediaGallery({ lead, editable, onUpload, onDelete }) {
           onDeleteMany={async (ids) => {
             for (const id of ids) await onDelete(id);
           }}
+          onUpdateMeasure={onUpdateMeasure}
         />
       )}
     </div>
@@ -9270,7 +9289,7 @@ const GALLERY_MIN_COLUMNS = 2;
 const GALLERY_MAX_COLUMNS = 6;
 const GALLERY_DEFAULT_COLUMNS = 3;
 
-function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
+function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany, onUpdateMeasure }) {
   useModalBackClose(onClose);
   const gridRef = useRef(null); // the scrolling container (touch/wheel listeners)
   const gridInnerRef = useRef(null); // the actual CSS grid (gets the live transform)
@@ -9598,7 +9617,15 @@ function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
         />
       )}
 
-      {viewerIndex !== null && <MediaViewer items={items} initialIndex={viewerIndex} onClose={() => setViewerIndex(null)} />}
+      {viewerIndex !== null && (
+        <MediaViewer
+          items={items}
+          initialIndex={viewerIndex}
+          editable={editable}
+          onClose={() => setViewerIndex(null)}
+          onUpdateMeasure={onUpdateMeasure}
+        />
+      )}
     </div>
   );
 }
@@ -9607,12 +9634,106 @@ function MediaGalleryPage({ items, editable, title, onClose, onDeleteMany }) {
 // so it's a real touch gesture, not buttons) to move between adjacent
 // items. No delete control here by design — deleting only happens from the
 // gallery grid's Select Photos mode.
-function MediaViewer({ items, initialIndex, onClose }) {
+// Perspective-correct photo ruler. Calibrate against one rectangle of known
+// real-world size in the photo (a door, a brick, a siding panel) by tapping
+// its 4 corners in order — top-left, top-right, bottom-right, bottom-left —
+// and typing its real width/height. That gives four point correspondences
+// (image pixel -> real-world inches), enough to solve a homography: the
+// exact transform for "one flat surface viewed at an angle," which is what
+// actually accounts for converging lines/perspective (a single reference
+// line can't — it only knows the scale at its own distance from the
+// camera). Any two points tapped on that SAME flat surface afterward can
+// then be measured accurately; points on a different plane (the roof vs.
+// the wall, something sticking out like a gutter) won't be, since a single
+// 2D photo has no way to know depth for a surface it wasn't calibrated
+// against — this is a real limitation of measuring from one photo, not a
+// bug to fix.
+function solveLinear8x8(A, b) {
+  const n = 8;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    }
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    const pv = M[col][col];
+    if (Math.abs(pv) < 1e-10) continue; // near-degenerate (collinear/duplicate corners) — caller sanity-checks results
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = M[r][col] / pv;
+      for (let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  return M.map((row, i) => (Math.abs(row[i]) < 1e-10 ? 0 : row[n] / row[i]));
+}
+
+function computeHomography(src, dst) {
+  const A = [];
+  const B = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i];
+    const [X, Y] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -x * X, -y * X]);
+    B.push(X);
+    A.push([0, 0, 0, x, y, 1, -x * Y, -y * Y]);
+    B.push(Y);
+  }
+  const h = solveLinear8x8(A, B);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
+function applyHomography(H, x, y) {
+  const w = H[6] * x + H[7] * y + H[8];
+  if (!w) return [0, 0];
+  return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w];
+}
+
+// distance in inches between two normalized (0..1) image points, given a
+// { corners: [4 points], realWidth, realHeight } calibration
+function measureDistanceInches(calibration, a, b) {
+  if (!calibration) return null;
+  const dst = [
+    [0, 0],
+    [calibration.realWidth, 0],
+    [calibration.realWidth, calibration.realHeight],
+    [0, calibration.realHeight],
+  ];
+  const H = computeHomography(calibration.corners, dst);
+  const [ax, ay] = applyHomography(H, a[0], a[1]);
+  const [bx, by] = applyHomography(H, b[0], b[1]);
+  const d = Math.hypot(bx - ax, by - ay);
+  return Number.isFinite(d) ? d : null;
+}
+
+function fmtInches(n) {
+  if (n == null || !Number.isFinite(n) || n < 0) return "—";
+  if (n < 12) return `${n.toFixed(1)}"`;
+  const feet = Math.floor(n / 12);
+  const inches = n - feet * 12;
+  return `${feet}'${inches.toFixed(1)}"`;
+}
+
+function newMeasureId() {
+  return window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+}
+
+function MediaViewer({ items, initialIndex, editable, onClose, onUpdateMeasure }) {
   useModalBackClose(onClose);
   const rootRef = useRef(null);
   const trackRef = useRef(null);
   const zoomedRef = useRef(false); // is the currently-active photo pinch-zoomed right now
   const [current, setCurrent] = useState(initialIndex);
+  const [measuring, setMeasuring] = useState(false);
+  const measuringRef = useRef(false);
+  useEffect(() => {
+    measuringRef.current = measuring;
+  }, [measuring]);
+  // leaving a photo (swipe) also leaves measuring mode on it — reopening it
+  // resumes read-only, with whatever was saved still shown
+  useEffect(() => {
+    setMeasuring(false);
+  }, [current]);
 
   useLayoutEffect(() => {
     const el = trackRef.current;
@@ -9653,7 +9774,7 @@ function MediaViewer({ items, initialIndex, onClose }) {
     let drag = null; // { startX, startY, dy, locked: "vertical" | "horizontal" | null } | null
 
     const onTouchStart = (e) => {
-      if (e.touches.length !== 1 || zoomedRef.current) {
+      if (e.touches.length !== 1 || zoomedRef.current || measuringRef.current) {
         drag = null;
         return;
       }
@@ -9718,16 +9839,37 @@ function MediaViewer({ items, initialIndex, onClose }) {
 
   return (
     <div ref={rootRef} style={{ position: "fixed", inset: 0, background: "#000", zIndex: 80, display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, flexShrink: 0, gap: 8 }}>
         <button onClick={onClose} aria-label="Close" style={{ ...iconBtnGhost, background: "rgba(255,255,255,0.12)" }}>
           <X size={20} color="#fff" />
         </button>
-        {items.length > 1 && (
+        {items.length > 1 && !measuring && (
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "rgba(255,255,255,0.8)" }}>
             {current + 1} of {items.length}
           </div>
         )}
-        <div style={{ width: 34 }} />
+        {editable && items[current]?.kind !== "video" ? (
+          <button
+            onClick={() => setMeasuring((v) => !v)}
+            aria-label={measuring ? "Done measuring" : "Measure"}
+            style={{
+              ...iconBtnGhost,
+              background: measuring ? COLORS.accent : "rgba(255,255,255,0.12)",
+              width: "auto",
+              padding: "0 12px",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <Ruler size={16} color="#fff" />
+            <span style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: "#fff" }}>
+              {measuring ? "Done" : "Measure"}
+            </span>
+          </button>
+        ) : (
+          <div style={{ width: 34 }} />
+        )}
       </div>
       <div
         ref={trackRef}
@@ -9735,7 +9877,7 @@ function MediaViewer({ items, initialIndex, onClose }) {
         style={{
           flex: 1,
           display: "flex",
-          overflowX: "auto",
+          overflowX: measuring ? "hidden" : "auto",
           scrollSnapType: "x mandatory",
           WebkitOverflowScrolling: "touch",
         }}
@@ -9762,6 +9904,9 @@ function MediaViewer({ items, initialIndex, onClose }) {
                 onZoomChange={(z) => {
                   zoomedRef.current = z;
                 }}
+                measuring={measuring && m === items[current]}
+                measureData={m.measureData}
+                onSaveMeasureData={onUpdateMeasure ? (next) => onUpdateMeasure(m.id, next) : undefined}
               />
             )}
           </div>
@@ -9782,17 +9927,31 @@ const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_DOUBLE_TAP = 2.5;
 
-function ZoomableImage({ src, active, onZoomChange }) {
+const CALIBRATION_STEPS = ["top-left", "top-right", "bottom-right", "bottom-left"];
+const MEASURE_ACCENT = "#FFB020";
+
+function ZoomableImage({ src, active, onZoomChange, measuring, measureData, onSaveMeasureData }) {
   const wrapRef = useRef(null);
+  const stageRef = useRef(null); // gets the pinch/pan transform — img + overlay move together
   const imgRef = useRef(null);
   const state = useRef({ scale: 1, x: 0, y: 0 });
   const wasZoomedRef = useRef(false);
+  const [box, setBox] = useState(null); // {left, top, width, height} of the rendered image within wrap, contain-fit, independent of any zoom transform
+
+  const data = measureData || { calibration: null, measurements: [] };
+  const [calibrating, setCalibrating] = useState(false);
+  const [pendingPoints, setPendingPoints] = useState([]);
+  const [calibForm, setCalibForm] = useState(null); // { corners } once 4 tapped, awaiting real-world size
+  const [labelForm, setLabelForm] = useState(null); // { a, b } once 2 tapped, awaiting an optional label
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   const apply = (withTransition) => {
-    const img = imgRef.current;
-    if (!img) return;
-    img.style.transition = withTransition ? "transform 180ms ease-out" : "none";
-    img.style.transform = `translate(${state.current.x}px, ${state.current.y}px) scale(${state.current.scale})`;
+    const stage = stageRef.current;
+    if (!stage) return;
+    stage.style.transition = withTransition ? "transform 180ms ease-out" : "none";
+    stage.style.transform = `translate(${state.current.x}px, ${state.current.y}px) scale(${state.current.scale})`;
     const isZoomed = state.current.scale > 1.02;
     if (isZoomed !== wasZoomedRef.current) {
       wasZoomedRef.current = isZoomed;
@@ -9809,6 +9968,48 @@ function ZoomableImage({ src, active, onZoomChange }) {
     if (!active) reset(false);
   }, [active]);
 
+  // entering measure mode always starts from a clean 1x view — tap
+  // coordinates are computed against the untransformed image box, and
+  // leaving it clears any in-progress point sequence
+  useEffect(() => {
+    if (measuring) {
+      reset(false);
+      setCalibrating(!data.calibration);
+    } else {
+      setCalibrating(false);
+    }
+    setPendingPoints([]);
+    setCalibForm(null);
+    setLabelForm(null);
+    setSaveErr("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measuring]);
+
+  // the displayed image's box within wrap, independent of the live zoom
+  // transform (computed from natural size + container size, not from
+  // getBoundingClientRect, which would bake in whatever scale is current) —
+  // this is what both the <img> and its measurement overlay are positioned
+  // against, so they always land in exactly the same place
+  const computeBox = () => {
+    const wrap = wrapRef.current;
+    const img = imgRef.current;
+    if (!wrap || !img || !img.naturalWidth) return;
+    const cw = wrap.clientWidth;
+    const ch = wrap.clientHeight;
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    const scale = Math.min(cw / iw, ch / ih);
+    const width = iw * scale;
+    const height = ih * scale;
+    setBox({ left: (cw - width) / 2, top: (ch - height) / 2, width, height });
+  };
+  useEffect(() => {
+    computeBox();
+    window.addEventListener("resize", computeBox);
+    return () => window.removeEventListener("resize", computeBox);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
@@ -9824,6 +10025,10 @@ function ZoomableImage({ src, active, onZoomChange }) {
     };
 
     const onTouchStart = (e) => {
+      if (measuring) {
+        mode = null;
+        return;
+      }
       if (e.touches.length === 2) {
         e.preventDefault();
         mode = "pinch";
@@ -9879,10 +10084,37 @@ function ZoomableImage({ src, active, onZoomChange }) {
       wrap.removeEventListener("touchend", onTouchEnd);
       wrap.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measuring]);
 
   const lastTapRef = useRef(0);
-  const handleClick = () => {
+
+  const placePoint = (e) => {
+    if (!box) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - rect.left - box.left) / box.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - rect.top - box.top) / box.height));
+    const next = [...pendingPoints, [x, y]];
+    if (calibrating) {
+      if (next.length === 4) {
+        setCalibForm({ corners: next });
+        setPendingPoints([]);
+      } else {
+        setPendingPoints(next);
+      }
+    } else if (next.length === 2) {
+      setLabelForm({ a: next[0], b: next[1] });
+      setPendingPoints([]);
+    } else {
+      setPendingPoints(next);
+    }
+  };
+
+  const handleClick = (e) => {
+    if (measuring) {
+      placePoint(e);
+      return;
+    }
     const now = Date.now();
     const isDoubleTap = now - lastTapRef.current < 300;
     lastTapRef.current = now;
@@ -9894,12 +10126,290 @@ function ZoomableImage({ src, active, onZoomChange }) {
     }
   };
 
+  const save = async (next) => {
+    setSaving(true);
+    setSaveErr("");
+    try {
+      await onSaveMeasureData?.(next);
+    } catch (err) {
+      setSaveErr(err.message || "Couldn't save — try again");
+      setSaving(false);
+      return false;
+    }
+    setSaving(false);
+    return true;
+  };
+
+  const submitCalibration = async (realWidth, realHeight) => {
+    const ok = await save({ ...data, calibration: { corners: calibForm.corners, realWidth, realHeight } });
+    if (ok) {
+      setCalibForm(null);
+      setCalibrating(false);
+    }
+  };
+
+  const submitMeasurement = async (label) => {
+    const measurement = { id: newMeasureId(), a: labelForm.a, b: labelForm.b, label, createdAt: new Date().toISOString() };
+    const ok = await save({ ...data, measurements: [...data.measurements, measurement] });
+    if (ok) setLabelForm(null);
+  };
+
+  const deleteMeasurement = async (id) => {
+    setConfirmDeleteId(null);
+    await save({ ...data, measurements: data.measurements.filter((m) => m.id !== id) });
+  };
+
+  const showOverlay = box && (data.calibration || data.measurements.length > 0 || pendingPoints.length > 0);
+  const stepLabel = calibrating
+    ? `Tap the ${CALIBRATION_STEPS[Math.min(pendingPoints.length, 3)]} corner of your reference (${pendingPoints.length}/4)`
+    : `Tap 2 points to measure between (${pendingPoints.length}/2)`;
+
   return (
-    <div ref={wrapRef} onClick={handleClick} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-      <img ref={imgRef} src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+    <div ref={wrapRef} onClick={handleClick} style={{ width: "100%", height: "100%", position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      <div ref={stageRef} style={{ position: "relative", width: "100%", height: "100%" }}>
+        <img
+          ref={imgRef}
+          src={src}
+          alt=""
+          onLoad={computeBox}
+          style={{ maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+        />
+        {showOverlay && (
+          <svg
+            style={{ position: "absolute", left: box.left, top: box.top, width: box.width, height: box.height, pointerEvents: "none" }}
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+          >
+            {data.calibration && (
+              <polygon
+                points={data.calibration.corners.map((c) => c.join(",")).join(" ")}
+                fill="rgba(71,147,107,0.10)"
+                stroke={COLORS.accent}
+                strokeWidth={0.003}
+              />
+            )}
+            {data.measurements.map((m) => {
+              const dist = measureDistanceInches(data.calibration, m.a, m.b);
+              const mid = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2];
+              return (
+                <g key={m.id}>
+                  <line x1={m.a[0]} y1={m.a[1]} x2={m.b[0]} y2={m.b[1]} stroke={MEASURE_ACCENT} strokeWidth={0.004} />
+                  <circle cx={m.a[0]} cy={m.a[1]} r={0.012} fill={MEASURE_ACCENT} />
+                  <circle cx={m.b[0]} cy={m.b[1]} r={0.012} fill={MEASURE_ACCENT} />
+                  <circle cx={mid[0]} cy={mid[1]} r={0.02} fill="#fff" stroke={MEASURE_ACCENT} strokeWidth={0.003} />
+                </g>
+              );
+            })}
+            {pendingPoints.map((p, i) => (
+              <circle key={i} cx={p[0]} cy={p[1]} r={0.014} fill="#fff" stroke={COLORS.accent} strokeWidth={0.004} />
+            ))}
+            {pendingPoints.length === 2 && (
+              <line x1={pendingPoints[0][0]} y1={pendingPoints[0][1]} x2={pendingPoints[1][0]} y2={pendingPoints[1][1]} stroke="#fff" strokeWidth={0.003} strokeDasharray="0.012 0.012" />
+            )}
+            {calibForm &&
+              calibForm.corners.map((c, i) => {
+                const next = calibForm.corners[(i + 1) % 4];
+                return <line key={i} x1={c[0]} y1={c[1]} x2={next[0]} y2={next[1]} stroke={COLORS.accent} strokeWidth={0.004} strokeDasharray="0.012 0.012" />;
+              })}
+          </svg>
+        )}
+      </div>
+
+      {measuring && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: 8,
+            left: 8,
+            right: 8,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(0,0,0,0.65)",
+              color: "#fff",
+              fontFamily: FONT_BODY,
+              fontSize: 12.5,
+              padding: "7px 12px",
+              borderRadius: 8,
+              textAlign: "center",
+              pointerEvents: "auto",
+            }}
+          >
+            {stepLabel}
+            {!calibrating && data.calibration && (
+              <button
+                onClick={() => {
+                  setCalibrating(true);
+                  setPendingPoints([]);
+                }}
+                style={{ display: "block", margin: "4px auto 0", background: "none", border: "none", color: MEASURE_ACCENT, fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+              >
+                Recalibrate
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {measuring && !calibForm && !labelForm && data.measurements.length > 0 && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            left: 8,
+            right: 8,
+            bottom: 8,
+            maxHeight: "40%",
+            overflowY: "auto",
+            background: "rgba(0,0,0,0.65)",
+            borderRadius: 10,
+            padding: 8,
+          }}
+        >
+          {data.measurements.map((m) => (
+            <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 4px", gap: 8 }}>
+              <div style={{ minWidth: 0, overflow: "hidden" }}>
+                <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: MEASURE_ACCENT }}>
+                  {fmtInches(measureDistanceInches(data.calibration, m.a, m.b))}
+                </span>
+                {m.label && (
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: "rgba(255,255,255,0.8)", marginLeft: 8 }}>{m.label}</span>
+                )}
+              </div>
+              <button onClick={() => setConfirmDeleteId(m.id)} aria-label="Delete measurement" style={{ ...iconBtnGhost, flexShrink: 0 }}>
+                <Trash2 size={15} color="rgba(255,255,255,0.7)" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {calibForm && (
+        <CalibrationForm
+          saving={saving}
+          error={saveErr}
+          onCancel={() => {
+            setCalibForm(null);
+            setSaveErr("");
+          }}
+          onSave={submitCalibration}
+        />
+      )}
+      {labelForm && (
+        <MeasurementLabelForm
+          distance={fmtInches(measureDistanceInches(data.calibration, labelForm.a, labelForm.b))}
+          saving={saving}
+          error={saveErr}
+          onCancel={() => {
+            setLabelForm(null);
+            setSaveErr("");
+          }}
+          onSave={submitMeasurement}
+        />
+      )}
+      {confirmDeleteId && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <DeleteMediaConfirmModal kind="measurement" onConfirm={() => deleteMeasurement(confirmDeleteId)} onCancel={() => setConfirmDeleteId(null)} />
+        </div>
+      )}
     </div>
   );
 }
+
+// after tapping the 4 corners of a known-size rectangle — asks for its real
+// width/height, then hands back a homography-ready calibration
+function CalibrationForm({ saving, error, onCancel, onSave }) {
+  const [width, setWidth] = useState("");
+  const [height, setHeight] = useState("");
+  const canSave = parseFloat(width) > 0 && parseFloat(height) > 0;
+  return (
+    <div style={measureFormOverlay} onClick={(e) => e.stopPropagation()}>
+      <div style={measureFormCard}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: COLORS.ink, marginBottom: 10 }}>
+          How big is that, in real life?
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Width (in)</label>
+            <input autoFocus type="number" inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="36" style={modalInput} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ ...modalLabel, marginTop: 0 }}>Height (in)</label>
+            <input type="number" inputMode="decimal" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="80" style={modalInput} />
+          </div>
+        </div>
+        {error && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginBottom: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onCancel} disabled={saving} style={{ ...roleOption, flex: 1, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}>
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Retry corners</span>
+          </button>
+          <button
+            onClick={() => canSave && onSave(parseFloat(width), parseFloat(height))}
+            disabled={!canSave || saving}
+            style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: canSave && !saving ? 1 : 0.5 }}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// after tapping 2 points — shows the computed distance and an optional
+// label ("window width") before saving the measurement
+function MeasurementLabelForm({ distance, saving, error, onCancel, onSave }) {
+  const [label, setLabel] = useState("");
+  return (
+    <div style={measureFormOverlay} onClick={(e) => e.stopPropagation()}>
+      <div style={measureFormCard}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: MEASURE_ACCENT, marginBottom: 6 }}>{distance}</div>
+        <label style={{ ...modalLabel, marginTop: 0 }}>What is this? (optional)</label>
+        <input
+          autoFocus
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onSave(label.trim())}
+          placeholder="e.g. window width"
+          style={{ ...modalInput, marginBottom: 10 }}
+        />
+        {error && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 12.5, marginBottom: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onCancel} disabled={saving} style={{ ...roleOption, flex: 1, justifyContent: "center", borderColor: COLORS.border, cursor: "pointer" }}>
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>Discard</span>
+          </button>
+          <button onClick={() => onSave(label.trim())} disabled={saving} style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: saving ? 0.6 : 1 }}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const measureFormOverlay = {
+  position: "absolute",
+  inset: 0,
+  background: "rgba(0,0,0,0.4)",
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "center",
+  padding: 16,
+  boxSizing: "border-box",
+};
+
+const measureFormCard = {
+  background: COLORS.surface,
+  borderRadius: 14,
+  padding: 16,
+  width: "100%",
+  maxWidth: 380,
+};
 
 
 

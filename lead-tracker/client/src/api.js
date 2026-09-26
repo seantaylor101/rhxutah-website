@@ -134,6 +134,8 @@ export const api = {
     return requestFormWithProgress(`/leads/${id}/media`, form, onProgress);
   },
   deleteLeadMedia: (id, mediaId) => request(`/leads/${id}/media/${mediaId}`, { method: "DELETE" }),
+  updateMediaMeasure: (id, mediaId, measureData) =>
+    request(`/leads/${id}/media/${mediaId}/measure`, { method: "PUT", body: JSON.stringify(measureData) }),
   listActivityFeed: () => request("/activity/feed"),
   listContacts: () => request("/contacts"),
   deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),
