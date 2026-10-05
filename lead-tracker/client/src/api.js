@@ -126,6 +126,17 @@ export const api = {
     request(`/leads/${id}/payees/${payeeId}/payments`, { method: "POST", body: JSON.stringify(payment) }),
   removePayment: (id, payeeId, paymentId) =>
     request(`/leads/${id}/payees/${payeeId}/payments/${paymentId}`, { method: "DELETE" }),
+  // binary response, not JSON — bypasses request() for that reason
+  fetchPayeePdf: async (id, payeeId) => {
+    const res = await fetch(`${BASE}/leads/${id}/payees/${payeeId}/pdf`, { credentials: "include" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      const err = new Error((data && data.error) || `Request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.blob();
+  },
   createLeadShare: (id) => request(`/leads/${id}/share`, { method: "POST" }),
   revokeLeadShare: (id) => request(`/leads/${id}/share`, { method: "DELETE" }),
   getShare: (token) => request(`/share/${token}`),

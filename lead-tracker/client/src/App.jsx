@@ -8285,6 +8285,24 @@ function LeadProfileModal({
 
   const removePickup = (id) => onSaveJobDetails(lead.id, { pickups: details.pickups.filter((p) => p.id !== id) });
 
+  // one-tap device share sheet for a sub/PM's own PDF (customer, address,
+  // their agreed amount, their instructions, every job photo) — same
+  // fetch-blob-then-navigator.share pattern as the gallery's photo share.
+  // Falls back to opening the PDF in a new tab on browsers without
+  // navigator.share (mainly desktop).
+  const sharePayeePdf = async (payee) => {
+    const blob = await api.fetchPayeePdf(lead.id, payee.id);
+    const safeName = payee.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "sub";
+    const file = new File([blob], `${safeName}-job-info.pdf`, { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file] });
+    } else {
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
+  };
+
   const addPickup = () => {
     const text = pickupText.trim();
     if (!text) return;
@@ -8510,6 +8528,7 @@ function LeadProfileModal({
                 onRemove={() => onRemovePayee(lead.id, payee.id)}
                 onRecordPayment={() => setPayingPayee(payee)}
                 onRemovePayment={(paymentId) => onRemovePayment(lead.id, payee.id, paymentId)}
+                onSharePdf={() => sharePayeePdf(payee)}
               />
             ))}
           </ProfileSection>
@@ -8702,11 +8721,25 @@ function fmtPaymentMethod(payment) {
 // one payee's card within the profile's "Subs & PM payments" section — the
 // running balance plus every payment logged against them, each carrying the
 // method and date the owner required at entry
-function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment }) {
+function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment, onSharePdf }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareErr, setShareErr] = useState("");
   const { paid, remaining, status } = payeeTotals(payee);
   const statusStyle = PAYEE_STATUS_STYLE[status];
   const payments = payee.payments || [];
+
+  const share = async () => {
+    setSharing(true);
+    setShareErr("");
+    try {
+      await onSharePdf();
+    } catch (e) {
+      if (e.name !== "AbortError") setShareErr(e.message || "Couldn't share that PDF — try again.");
+    } finally {
+      setSharing(false);
+    }
+  };
 
   return (
     <div style={{ padding: "10px 0", borderBottom: `1px solid ${COLORS.border}` }}>
@@ -8758,6 +8791,9 @@ function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment })
         <button onClick={onRecordPayment} style={{ ...actionBtn, background: COLORS.accent, color: "#fff" }}>
           Record payment
         </button>
+        <button onClick={share} disabled={sharing} aria-label={`Share PDF for ${payee.name}`} style={{ ...iconBtnGhost, opacity: sharing ? 0.5 : 1 }}>
+          <ShareIcon size={15} color={COLORS.accent} />
+        </button>
         <button onClick={onEdit} aria-label="Edit payee" style={iconBtnGhost}>
           <Pencil size={15} color={COLORS.muted} />
         </button>
@@ -8765,6 +8801,7 @@ function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment })
           <Trash2 size={15} color="#9A9184" />
         </button>
       </div>
+      {shareErr && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust, marginTop: 6 }}>{shareErr}</div>}
 
       {confirmDel && (
         <DeleteConfirmModal
@@ -8823,6 +8860,7 @@ function AddPayeeModal({ initial, onCancel, onSave }) {
   const [name, setName] = useState(initial?.name || "");
   const [role, setRole] = useState(initial?.role || "sub");
   const [amount, setAmount] = useState(initial?.agreedAmount != null ? String(initial.agreedAmount) : "");
+  const [instructions, setInstructions] = useState(initial?.instructions || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -8832,7 +8870,7 @@ function AddPayeeModal({ initial, onCancel, onSave }) {
     setBusy(true);
     setErr("");
     try {
-      await onSave({ name: name.trim(), role, agreedAmount: parseFloat(amount) });
+      await onSave({ name: name.trim(), role, agreedAmount: parseFloat(amount), instructions: instructions.trim() });
     } catch (e) {
       setErr(e.message || "Couldn't save");
       setBusy(false);
@@ -8886,7 +8924,18 @@ function AddPayeeModal({ initial, onCancel, onSave }) {
           onChange={(e) => setAmount(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && canSave && save()}
           placeholder="0"
-          style={modalInput}
+          style={{ ...modalInput, marginBottom: 14 }}
+        />
+
+        <label style={modalLabel}>Instructions for this sub/PM (optional)</label>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.muted, marginBottom: 6 }}>
+          Just what they need to know — this is what shows up on their shared PDF, not the full job instructions.
+        </div>
+        <textarea
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          placeholder="e.g. Stucco on north and east walls only, match existing texture…"
+          style={{ ...modalTextarea, minHeight: 80, resize: "vertical" }}
         />
 
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 10 }}>{err}</div>}
