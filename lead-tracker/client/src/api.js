@@ -93,6 +93,7 @@ export const api = {
   deleteLead: (id) => request(`/leads/${id}`, { method: "DELETE" }),
   getSettings: () => request("/settings"),
   updateSettings: (patch) => request("/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  addMaterialSupplier: (name) => request("/settings/material-suppliers", { method: "POST", body: JSON.stringify({ name }) }),
   listBackups: () => request("/backups"),
   restoreBackup: (filename) => request(`/backups/${encodeURIComponent(filename)}/restore`, { method: "POST" }),
   vapidPublicKey: () => request("/push/vapid-public-key"),
