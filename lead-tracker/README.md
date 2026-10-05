@@ -120,8 +120,9 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | DELETE | /api/leads/:id/share | owner | turn off a job's share link |
 | GET    | /api/share/:token | public | a share link's job instructions, photo/video references, and special equipment |
 | POST   | /api/leads/:id/payees | owner | add a sub/PM being paid on this job |
-| PATCH  | /api/leads/:id/payees/:payeeId | owner | edit a payee's name/role/agreed amount |
+| PATCH  | /api/leads/:id/payees/:payeeId | owner | edit a payee's name/role/agreed amount/instructions |
 | DELETE | /api/leads/:id/payees/:payeeId | owner | remove a payee |
+| GET    | /api/leads/:id/payees/:payeeId/pdf | owner | a one-page PDF for that sub/PM: customer, address, their agreed amount, their instructions, every job photo |
 | POST   | /api/leads/:id/payees/:payeeId/payments | owner | record a payment (amount, method, date required) |
 | DELETE | /api/leads/:id/payees/:payeeId/payments/:paymentId | owner | remove a logged payment |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |

@@ -23,13 +23,16 @@ function positiveAmount(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export function validatePayeeInput({ name, role, agreedAmount }) {
+export function validatePayeeInput({ name, role, agreedAmount, instructions }) {
   const cleanName = String(name || "").trim();
   if (!cleanName) return { ok: false, error: "Name is required" };
   if (!PAYEE_ROLES.has(role)) return { ok: false, error: "role must be 'sub' or 'pm'" };
   const amount = positiveAmount(agreedAmount);
   if (amount === null) return { ok: false, error: "agreedAmount must be a positive number" };
-  return { ok: true, value: { name: cleanName, role, agreedAmount: amount } };
+  // what this person specifically needs to know — shown on their own
+  // share-PDF instead of the whole job's instructions
+  const cleanInstructions = String(instructions || "").trim().slice(0, 4000);
+  return { ok: true, value: { name: cleanName, role, agreedAmount: amount, instructions: cleanInstructions } };
 }
 
 export function addPayee(payees, input) {

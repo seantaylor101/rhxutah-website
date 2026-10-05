@@ -22,6 +22,7 @@ import {
 } from "../payeeTracking.js";
 import { jobMediaUpload, jobMediaKind, JOB_MEDIA_DIR, SAFE_JOB_MEDIA_FILENAME } from "../uploads.js";
 import { validateMeasureData, parseMeasureData } from "../measureData.js";
+import { buildPayeePdf } from "../payeePdf.js";
 
 const router = Router();
 
@@ -714,6 +715,26 @@ router.delete("/:id/payees/:payeeId/payments/:paymentId", requireAuth("owner"), 
   if (!next) return res.status(404).json({ error: "Payee not found" });
   db.prepare(`UPDATE leads SET payees = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
   res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+// a one-page PDF with just what this sub/PM needs: customer, address, their
+// agreed amount, their own instructions, and every job reference photo —
+// nothing about other payees or other jobs
+router.get("/:id/payees/:payeeId/pdf", requireAuth("owner"), async (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const payee = parsePayees(row.payees).find((p) => p.id === req.params.payeeId);
+  if (!payee) return res.status(404).json({ error: "Payee not found" });
+
+  try {
+    const pdf = await buildPayeePdf({ lead: row, payee, media: mediaFor(row.id) });
+    const safeName = (payee.name || "sub").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "sub";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}-job-info.pdf"`);
+    res.send(pdf);
+  } catch {
+    res.status(500).json({ error: "Couldn't generate the PDF — try again" });
+  }
 });
 
 router.delete("/:id", requireAuth("owner"), (req, res) => {
