@@ -4361,12 +4361,12 @@ function DashboardView({
   const activeLeadsCount = STAGES.reduce((sum, s) => sum + (counts[s.key] || 0), 0);
   const [showPaymentsDue, setShowPaymentsDue] = useState(false);
 
-  // every payee, across every non-archived lead, still owed money — this is
-  // the "who do I owe and how much" answer the payments feature exists for,
-  // so it's surfaced here instead of only being visible lead-by-lead
+  // every payee, across every non-archived, completed-or-later lead, still
+  // owed money — "who do I owe" is only worth surfacing once a job is
+  // actually done, not while amounts could still change mid-job
   const duePayees = editable
     ? (leads || [])
-        .filter((l) => !l.archived)
+        .filter((l) => !l.archived && AT_OR_AFTER_COMPLETED_STAGES.has(l.stage))
         .flatMap((l) => (l.payees || []).map((p) => ({ lead: l, payee: p, ...payeeTotals(p) })))
         .filter((d) => d.remaining > 0)
         .sort((a, b) => b.remaining - a.remaining)
@@ -8217,6 +8217,8 @@ function LeadProfileModal({
   const [addingPayee, setAddingPayee] = useState(false);
   const [editingPayee, setEditingPayee] = useState(null); // payee object | null
   const [payingPayee, setPayingPayee] = useState(null); // payee object | null
+  const [subProfilePayeeId, setSubProfilePayeeId] = useState(null);
+  const subProfilePayee = (lead.payees || []).find((p) => p.id === subProfilePayeeId) || null;
 
   // pick up a fresh server value (e.g. the owner edited on another device and
   // the board auto-refreshed) as long as there's no unsaved local edit
@@ -8288,15 +8290,25 @@ function LeadProfileModal({
   // one-tap device share sheet for a sub/PM's own PDF (customer, address,
   // their agreed amount, their instructions, every job photo) — same
   // fetch-blob-then-navigator.share pattern as the gallery's photo share.
-  // Falls back to opening the PDF in a new tab on browsers without
-  // navigator.share (mainly desktop).
+  // navigator.share can refuse for reasons outside our control (platform
+  // policy, a webview without share wired up, a previously-denied
+  // permission) even when canShare() said yes — rather than surface that as
+  // a failure, fall back to just opening the PDF, where the browser/OS's
+  // own PDF viewer still has its own share button
   const sharePayeePdf = async (payee) => {
     const blob = await api.fetchPayeePdf(lead.id, payee.id);
     const safeName = payee.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "sub";
     const file = new File([blob], `${safeName}-job-info.pdf`, { type: "application/pdf" });
+    let shared = false;
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file] });
-    } else {
+      try {
+        await navigator.share({ files: [file] });
+        shared = true;
+      } catch (e) {
+        if (e.name === "AbortError") shared = true; // user backed out of the share sheet — not an error
+      }
+    }
+    if (!shared) {
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 30000);
@@ -8468,7 +8480,7 @@ function LeadProfileModal({
         </div>
 
         {/* instructions */}
-        <ProfileSection title="Job instructions">
+        <ProfileSection title="Job notes">
           {editable ? (
             <>
               <textarea
@@ -8480,7 +8492,7 @@ function LeadProfileModal({
               {instructionsDirty && (
                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                   <button onClick={saveInstructions} style={{ ...addBtn, flex: 1, justifyContent: "center" }}>
-                    Save instructions
+                    Save notes
                   </button>
                   <button
                     onClick={() => setInstructionsDraft(details.instructions)}
@@ -8501,7 +8513,7 @@ function LeadProfileModal({
                 lineHeight: 1.5,
               }}
             >
-              {details.instructions || "No instructions yet."}
+              {details.instructions || "No notes yet."}
             </div>
           )}
         </ProfileSection>
@@ -8521,22 +8533,8 @@ function LeadProfileModal({
               </div>
             )}
             {(lead.payees || []).map((payee) => (
-              <PayeeRow
-                key={payee.id}
-                payee={payee}
-                onEdit={() => setEditingPayee(payee)}
-                onRemove={() => onRemovePayee(lead.id, payee.id)}
-                onRecordPayment={() => setPayingPayee(payee)}
-                onRemovePayment={(paymentId) => onRemovePayment(lead.id, payee.id, paymentId)}
-                onSharePdf={() => sharePayeePdf(payee)}
-              />
+              <PayeeRow key={payee.id} payee={payee} onOpenProfile={() => setSubProfilePayeeId(payee.id)} />
             ))}
-          </ProfileSection>
-        )}
-
-        {editable && (
-          <ProfileSection title="Share with a subcontractor">
-            <ShareLinkControl lead={lead} onCreate={onCreateShare} onRevoke={onRevokeShare} />
           </ProfileSection>
         )}
 
@@ -8685,6 +8683,23 @@ function LeadProfileModal({
           }}
         />
       )}
+      {subProfilePayee && (
+        <SubProfileModal
+          lead={lead}
+          payee={subProfilePayee}
+          onClose={() => setSubProfilePayeeId(null)}
+          onEdit={() => setEditingPayee(subProfilePayee)}
+          onRemove={() => {
+            onRemovePayee(lead.id, subProfilePayee.id);
+            setSubProfilePayeeId(null);
+          }}
+          onRecordPayment={() => setPayingPayee(subProfilePayee)}
+          onRemovePayment={(paymentId) => onRemovePayment(lead.id, subProfilePayee.id, paymentId)}
+          onSharePdf={() => sharePayeePdf(subProfilePayee)}
+          onCreateShare={onCreateShare}
+          onRevokeShare={onRevokeShare}
+        />
+      )}
     </div>
   );
 }
@@ -8718,103 +8733,62 @@ function fmtPaymentMethod(payment) {
   return payment.method === "Other" && payment.methodOther ? payment.methodOther : payment.method;
 }
 
-// one payee's card within the profile's "Subs & PM payments" section — the
-// running balance plus every payment logged against them, each carrying the
-// method and date the owner required at entry
-function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment, onSharePdf }) {
-  const [confirmDel, setConfirmDel] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [shareErr, setShareErr] = useState("");
+// one payee's compact row within the profile's "Subs & PM payments" section
+// — just the balance at a glance. Everything else (payment history,
+// recording a payment, editing, instructions, sharing) lives one tap away
+// in their own Sub Profile, so this list doesn't get crowded as more people
+// are added to the job.
+function PayeeRow({ payee, onOpenProfile }) {
   const { paid, remaining, status } = payeeTotals(payee);
   const statusStyle = PAYEE_STATUS_STYLE[status];
-  const payments = payee.payments || [];
-
-  const share = async () => {
-    setSharing(true);
-    setShareErr("");
-    try {
-      await onSharePdf();
-    } catch (e) {
-      if (e.name !== "AbortError") setShareErr(e.message || "Couldn't share that PDF — try again.");
-    } finally {
-      setSharing(false);
-    }
-  };
 
   return (
-    <div style={{ padding: "10px 0", borderBottom: `1px solid ${COLORS.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{payee.name}</span>
-            <span
-              style={{
-                fontFamily: FONT_UTIL,
-                fontSize: 10.5,
-                fontWeight: 700,
-                color: COLORS.muted,
-                border: `1px solid ${COLORS.border}`,
-                borderRadius: 999,
-                padding: "1px 7px",
-              }}
-            >
-              {PAYEE_ROLE_LABEL[payee.role] || payee.role}
-            </span>
-          </div>
-          <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.muted, marginTop: 2 }}>
-            {fmtCurrency(paid)} of {fmtCurrency(payee.agreedAmount)} paid
-            {remaining > 0 && ` · ${fmtCurrency(remaining)} left`}
-          </div>
+    <button
+      onClick={onOpenProfile}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        textAlign: "left",
+        background: "none",
+        border: "none",
+        borderBottom: `1px solid ${COLORS.border}`,
+        padding: "10px 0",
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 15, color: COLORS.ink }}>{payee.name}</span>
+          <span
+            style={{
+              fontFamily: FONT_UTIL,
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: COLORS.muted,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 999,
+              padding: "1px 7px",
+            }}
+          >
+            {PAYEE_ROLE_LABEL[payee.role] || payee.role}
+          </span>
         </div>
-        <span style={{ fontFamily: FONT_UTIL, fontSize: 11.5, fontWeight: 700, color: statusStyle.color, flexShrink: 0, whiteSpace: "nowrap" }}>
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.muted, marginTop: 2 }}>
+          {fmtCurrency(paid)} of {fmtCurrency(payee.agreedAmount)} paid
+          {remaining > 0 && ` · ${fmtCurrency(remaining)} left`}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <span style={{ fontFamily: FONT_UTIL, fontSize: 11.5, fontWeight: 700, color: statusStyle.color, whiteSpace: "nowrap" }}>
           {statusStyle.label}
         </span>
+        <span style={{ ...profileLinkBtn, whiteSpace: "nowrap" }}>Sub Profile</span>
+        <ChevronRight size={16} color={COLORS.muted} />
       </div>
-
-      {payments.length > 0 && (
-        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-          {payments.map((p) => (
-            <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-              <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#4A463D" }}>
-                {fmtDate(p.date)} · {fmtPaymentMethod(p)} · {fmtCurrency(p.amount)}
-                {p.note ? ` · ${p.note}` : ""}
-              </span>
-              <button onClick={() => onRemovePayment(p.id)} aria-label="Remove payment" style={{ ...iconBtnGhost, width: 24, height: 24, flexShrink: 0 }}>
-                <X size={12} color="#9A9184" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={onRecordPayment} style={{ ...actionBtn, background: COLORS.accent, color: "#fff" }}>
-          Record payment
-        </button>
-        <button onClick={share} disabled={sharing} aria-label={`Share PDF for ${payee.name}`} style={{ ...iconBtnGhost, opacity: sharing ? 0.5 : 1 }}>
-          <ShareIcon size={15} color={COLORS.accent} />
-        </button>
-        <button onClick={onEdit} aria-label="Edit payee" style={iconBtnGhost}>
-          <Pencil size={15} color={COLORS.muted} />
-        </button>
-        <button onClick={() => setConfirmDel(true)} aria-label="Remove payee" style={iconBtnGhost}>
-          <Trash2 size={15} color="#9A9184" />
-        </button>
-      </div>
-      {shareErr && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust, marginTop: 6 }}>{shareErr}</div>}
-
-      {confirmDel && (
-        <DeleteConfirmModal
-          label="payee"
-          itemName={payee.name}
-          onConfirm={() => {
-            setConfirmDel(false);
-            onRemove();
-          }}
-          onCancel={() => setConfirmDel(false)}
-        />
-      )}
-    </div>
+    </button>
   );
 }
 
@@ -9260,6 +9234,138 @@ function ShareLinkControl({ lead, onCreate, onRevoke }) {
       </button>
       {err && <div style={{ marginTop: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{err}</div>}
     </>
+  );
+}
+
+// everything specific to one sub/PM, out of the way of the rest of the job
+// profile: their balance and payment history, their own instructions, and
+// the two ways to hand them their info — a PDF or the job's no-login share
+// link (the only place that link lives now; it used to have its own section
+// on the main profile).
+function SubProfileModal({ lead, payee, onClose, onEdit, onRemove, onRecordPayment, onRemovePayment, onSharePdf, onCreateShare, onRevokeShare }) {
+  useModalBackClose(onClose);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [sharingPdf, setSharingPdf] = useState(false);
+  const [pdfErr, setPdfErr] = useState("");
+  const { paid, remaining, status } = payeeTotals(payee);
+  const statusStyle = PAYEE_STATUS_STYLE[status];
+  const payments = payee.payments || [];
+
+  const sharePdf = async () => {
+    setSharingPdf(true);
+    setPdfErr("");
+    try {
+      await onSharePdf();
+    } catch (e) {
+      if (e.name !== "AbortError") setPdfErr(e.message || "Couldn't share that PDF — try again.");
+    } finally {
+      setSharingPdf(false);
+    }
+  };
+
+  return (
+    <div style={{ ...modalOverlay, zIndex: 58 }} onClick={onClose}>
+      <div style={{ ...modalCard, maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 19, color: COLORS.ink }}>{payee.name}</div>
+            <span
+              style={{
+                fontFamily: FONT_UTIL,
+                fontSize: 10.5,
+                fontWeight: 700,
+                color: COLORS.muted,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 999,
+                padding: "1px 7px",
+              }}
+            >
+              {PAYEE_ROLE_LABEL[payee.role] || payee.role}
+            </span>
+          </div>
+          <button onClick={onClose} style={iconBtnGhost} aria-label="Close sub profile">
+            <X size={20} color={COLORS.muted} />
+          </button>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: COLORS.muted }}>
+            {fmtCurrency(paid)} of {fmtCurrency(payee.agreedAmount)} paid
+            {remaining > 0 && ` · ${fmtCurrency(remaining)} left`}
+          </div>
+          <span style={{ fontFamily: FONT_UTIL, fontSize: 11.5, fontWeight: 700, color: statusStyle.color }}>
+            {statusStyle.label}
+          </span>
+        </div>
+
+        {payments.length > 0 && (
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+            {payments.map((p) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                <span style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: "#4A463D" }}>
+                  {fmtDate(p.date)} · {fmtPaymentMethod(p)} · {fmtCurrency(p.amount)}
+                  {p.note ? ` · ${p.note}` : ""}
+                </span>
+                <button onClick={() => onRemovePayment(p.id)} aria-label="Remove payment" style={{ ...iconBtnGhost, width: 24, height: 24, flexShrink: 0 }}>
+                  <X size={12} color="#9A9184" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={onRecordPayment} style={{ ...actionBtn, background: COLORS.accent, color: "#fff" }}>
+            Record payment
+          </button>
+          <button onClick={onEdit} aria-label="Edit payee" style={iconBtnGhost}>
+            <Pencil size={15} color={COLORS.muted} />
+          </button>
+          <button onClick={() => setConfirmDel(true)} aria-label="Remove payee" style={iconBtnGhost}>
+            <Trash2 size={15} color="#9A9184" />
+          </button>
+        </div>
+
+        <ProfileSection title="Instructions for this sub/PM">
+          <div
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 14,
+              color: payee.instructions ? COLORS.ink : "#B8B0A0",
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.5,
+            }}
+          >
+            {payee.instructions || 'Nothing written yet — tap the pencil above to add some.'}
+          </div>
+        </ProfileSection>
+
+        <ProfileSection title="Share">
+          <button
+            onClick={sharePdf}
+            disabled={sharingPdf}
+            style={{ ...addBtn, width: "100%", justifyContent: "center", marginBottom: 10, opacity: sharingPdf ? 0.6 : 1 }}
+          >
+            <ShareIcon size={16} color="#fff" /> {sharingPdf ? "Preparing…" : "Share PDF"}
+          </button>
+          {pdfErr && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust, marginBottom: 10 }}>{pdfErr}</div>}
+          <ShareLinkControl lead={lead} onCreate={onCreateShare} onRevoke={onRevokeShare} />
+        </ProfileSection>
+
+        {confirmDel && (
+          <DeleteConfirmModal
+            label="payee"
+            itemName={payee.name}
+            onConfirm={() => {
+              setConfirmDel(false);
+              onRemove();
+              onClose();
+            }}
+            onCancel={() => setConfirmDel(false)}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -10611,7 +10717,7 @@ function JobProfileButton({ lead, onOpen }) {
   if (openPickups) chips.push({ text: `${openPickups} to pick up`, color: COLORS.amber });
   if (details.equipment.length) chips.push({ text: `${details.equipment.length} equipment`, color: COLORS.muted });
   const owed = (lead.payees || []).reduce((sum, p) => sum + payeeTotals(p).remaining, 0);
-  if (owed > 0) chips.push({ text: `${fmtCurrency(owed)} owed`, color: COLORS.rust });
+  if (owed > 0 && AT_OR_AFTER_COMPLETED_STAGES.has(lead.stage)) chips.push({ text: `${fmtCurrency(owed)} owed`, color: COLORS.rust });
 
   return (
     <button
@@ -10645,6 +10751,7 @@ function JobProfileButton({ lead, onOpen }) {
 
 const AT_OR_AFTER_WON_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
 const AT_OR_AFTER_SCHEDULED_STAGES = new Set(["scheduled", "progress", "completed", "paid"]);
+const AT_OR_AFTER_COMPLETED_STAGES = new Set(["completed", "paid"]);
 
 // same shape as DeleteConfirmModal, but photos/videos have no meaningful
 // name to quote — used by both the job-profile media gallery and warranty
