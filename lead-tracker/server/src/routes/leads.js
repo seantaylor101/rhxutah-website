@@ -165,7 +165,10 @@ function forRole(role, lead) {
     lead.materialCost = null;
     lead.laborCost = null;
     lead.commission = null;
-    lead.payees = [];
+    // the PM still needs to see who's on the job (for the per-sub materials
+    // check-offs), just not what they're being paid — strip the financial
+    // parts of each payee rather than the whole list
+    lead.payees = (lead.payees || []).map((p) => ({ id: p.id, name: p.name, role: p.role }));
   }
   return lead;
 }
@@ -530,7 +533,8 @@ router.patch("/:id/job-details", requireAuth("viewer"), (req, res) => {
   if (!row) return;
 
   const patch = req.body && typeof req.body === "object" ? req.body : {};
-  const result = applyJobDetailsPatch(parseJobDetails(row.jobDetails), patch, req.role);
+  const validPayeeIds = new Set(parsePayees(row.payees).map((p) => p.id));
+  const result = applyJobDetailsPatch(parseJobDetails(row.jobDetails), patch, req.role, validPayeeIds);
   if (!result.ok) return res.status(result.status).json({ error: result.error });
 
   db.prepare(`UPDATE leads SET jobDetails = ? WHERE id = ?`).run(JSON.stringify(result.value), row.id);

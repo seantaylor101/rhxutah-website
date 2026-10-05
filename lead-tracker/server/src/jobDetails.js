@@ -1,15 +1,5 @@
 import { randomUUID } from "node:crypto";
-
-// Keep in sync with MATERIAL_SUPPLIERS / JOB_EQUIPMENT in client/src/App.jsx
-export const MATERIAL_SUPPLIERS = [
-  "Lansing Sandy",
-  "Lansing PG",
-  "Alside Orem",
-  "Alside West Jordan",
-  "Timberline Exteriors",
-  "LKL West Jordan",
-  "LKL Spanish Fork",
-];
+import { getMaterialSuppliers } from "./materialSuppliers.js";
 
 export const JOB_EQUIPMENT = {
   brake: "Brake and sawhorses",
@@ -20,15 +10,22 @@ export const JOB_EQUIPMENT = {
   shopVac: "Shop vac",
 };
 
-const SUPPLIER_SET = new Set(MATERIAL_SUPPLIERS);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function emptyMaterials() {
   return { ordered: false, supplier: "", availability: "", availableDate: "" };
 }
 
+// one entry per sub/PM on the job (keyed by payee id) — whether that person
+// is picking materials up from a supplier ("ordered") or bringing their own
+// ("subProviding"), so ordering from one supplier never implies everyone's
+// materials are covered
+function emptyPayeeMaterials() {
+  return { ordered: false, supplier: "", availability: "", availableDate: "", subProviding: false };
+}
+
 export function emptyJobDetails() {
-  return { instructions: "", materials: emptyMaterials(), pickups: [], equipment: [] };
+  return { instructions: "", materials: emptyMaterials(), materialsByPayee: {}, pickups: [], equipment: [] };
 }
 
 // tolerant read of whatever's stored in the jobDetails column — missing or
@@ -44,9 +41,16 @@ export function parseJobDetails(raw) {
     return base;
   }
   if (!parsed || typeof parsed !== "object") return base;
+  const rawByPayee =
+    parsed.materialsByPayee && typeof parsed.materialsByPayee === "object" && !Array.isArray(parsed.materialsByPayee)
+      ? parsed.materialsByPayee
+      : {};
   return {
     instructions: typeof parsed.instructions === "string" ? parsed.instructions : "",
     materials: { ...emptyMaterials(), ...(parsed.materials || {}) },
+    materialsByPayee: Object.fromEntries(
+      Object.entries(rawByPayee).map(([id, v]) => [id, { ...emptyPayeeMaterials(), ...(v || {}) }])
+    ),
     pickups: Array.isArray(parsed.pickups) ? parsed.pickups : [],
     equipment: Array.isArray(parsed.equipment) ? parsed.equipment : [],
   };
@@ -55,13 +59,42 @@ export function parseJobDetails(raw) {
 function cleanMaterials(input) {
   if (!input || !input.ordered) return { ok: true, value: emptyMaterials() };
   const supplier = String(input.supplier || "");
-  if (!SUPPLIER_SET.has(supplier)) return { ok: false, error: "Pick a supplier from the list" };
+  if (!getMaterialSuppliers().includes(supplier)) return { ok: false, error: "Pick a supplier from the list" };
   const availability = input.availability === "date" ? "date" : "immediate";
   const availableDate = availability === "date" ? String(input.availableDate || "") : "";
   if (availability === "date" && !DATE_RE.test(availableDate)) {
     return { ok: false, error: "availableDate must be YYYY-MM-DD" };
   }
   return { ok: true, value: { ordered: true, supplier, availability, availableDate } };
+}
+
+function cleanPayeeMaterialsEntry(input) {
+  if (input && input.subProviding) return { ok: true, value: { ...emptyPayeeMaterials(), subProviding: true } };
+  if (!input || !input.ordered) return { ok: true, value: emptyPayeeMaterials() };
+  const supplier = String(input.supplier || "");
+  if (!getMaterialSuppliers().includes(supplier)) return { ok: false, error: "Pick a supplier from the list" };
+  const availability = input.availability === "date" ? "date" : "immediate";
+  const availableDate = availability === "date" ? String(input.availableDate || "") : "";
+  if (availability === "date" && !DATE_RE.test(availableDate)) {
+    return { ok: false, error: "availableDate must be YYYY-MM-DD" };
+  }
+  return { ok: true, value: { ordered: true, supplier, availability, availableDate, subProviding: false } };
+}
+
+// drops entries for payees that no longer exist on the job, so a removed
+// sub's stale materials choice can't linger in the data forever
+function cleanMaterialsByPayee(map, validPayeeIds) {
+  if (!map || typeof map !== "object" || Array.isArray(map)) {
+    return { ok: false, error: "materialsByPayee must be an object" };
+  }
+  const next = {};
+  for (const [payeeId, entry] of Object.entries(map)) {
+    if (validPayeeIds && !validPayeeIds.has(payeeId)) continue;
+    const res = cleanPayeeMaterialsEntry(entry);
+    if (!res.ok) return res;
+    next[payeeId] = res.value;
+  }
+  return { ok: true, value: next };
 }
 
 function cleanPickups(items) {
@@ -87,11 +120,13 @@ function cleanEquipment(keys) {
 // anything; the project manager (viewer) can mark materials ordered, check
 // equipment off, and tick pick-up items done — but can't rewrite the owner's
 // instructions or add/remove/reword pick-up items, so a PM's check-off never
-// clobbers what the owner wrote.
-export function applyJobDetailsPatch(current, patch, role) {
+// clobbers what the owner wrote. validPayeeIds (the job's current sub/PM
+// list) is optional so callers that don't track payees still work.
+export function applyJobDetailsPatch(current, patch, role, validPayeeIds) {
   const next = {
     ...current,
     materials: { ...current.materials },
+    materialsByPayee: { ...current.materialsByPayee },
     pickups: current.pickups.map((p) => ({ ...p })),
     equipment: [...current.equipment],
   };
@@ -106,6 +141,12 @@ export function applyJobDetailsPatch(current, patch, role) {
     const res = cleanMaterials(patch.materials);
     if (!res.ok) return { ok: false, status: 400, error: res.error };
     next.materials = res.value;
+  }
+
+  if ("materialsByPayee" in patch) {
+    const res = cleanMaterialsByPayee(patch.materialsByPayee, validPayeeIds);
+    if (!res.ok) return { ok: false, status: 400, error: res.error };
+    next.materialsByPayee = res.value;
   }
 
   if ("equipment" in patch) {

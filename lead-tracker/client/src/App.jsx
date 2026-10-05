@@ -1300,6 +1300,7 @@ function App() {
     popupWarrantyEnabled: true,
     popupMissingInfoEnabled: true,
     popupMapsEnabled: true,
+    materialSuppliers: [],
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [reportLead, setReportLead] = useState(null);
@@ -1472,6 +1473,14 @@ function App() {
     const updated = await api.updateSettings(patch);
     setSettings(updated);
     return updated;
+  };
+
+  // called from the materials-ordered picker when the supplier someone used
+  // isn't on the list yet — persists it for every future job, not just this one
+  const addMaterialSupplier = async (name) => {
+    const { materialSuppliers } = await api.addMaterialSupplier(name);
+    setSettings((prev) => ({ ...prev, materialSuppliers }));
+    return materialSuppliers;
   };
 
   const setMonthlyGoalFromPrompt = async (amount) => {
@@ -2860,6 +2869,8 @@ function App() {
           onRemovePayee={removePayeeFromLead}
           onRecordPayment={recordPaymentOnLead}
           onRemovePayment={removePaymentFromLead}
+          materialSuppliers={settings.materialSuppliers}
+          onAddMaterialSupplier={addMaterialSupplier}
         />
       )}
       {reportLead && (
@@ -7931,16 +7942,10 @@ function LeadTicket({
   );
 }
 
-// Keep in sync with MATERIAL_SUPPLIERS / JOB_EQUIPMENT in server/src/jobDetails.js
-const MATERIAL_SUPPLIERS = [
-  "Lansing Sandy",
-  "Lansing PG",
-  "Alside Orem",
-  "Alside West Jordan",
-  "Timberline Exteriors",
-  "LKL West Jordan",
-  "LKL Spanish Fork",
-];
+// Keep in sync with JOB_EQUIPMENT in server/src/jobDetails.js. The supplier
+// list itself now lives in settings (server/src/materialSuppliers.js) since
+// it's user-extensible — see the `materialSuppliers` setting.
+const EMPTY_PAYEE_MATERIALS = { ordered: false, supplier: "", availability: "", availableDate: "", subProviding: false };
 
 const JOB_EQUIPMENT = [
   { key: "brake", label: "Brake and sawhorses" },
@@ -7958,12 +7963,20 @@ const PICKUP_STORES = ["Home Depot", "Lowe's", "Sherwin-Williams"];
 // one yet — read through this so the profile never trips over a missing field
 function jobDetailsOf(lead) {
   const d = lead.jobDetails || {};
+  const rawByPayee = d.materialsByPayee && typeof d.materialsByPayee === "object" ? d.materialsByPayee : {};
   return {
     instructions: d.instructions || "",
     materials: { ordered: false, supplier: "", availability: "", availableDate: "", ...(d.materials || {}) },
+    materialsByPayee: Object.fromEntries(
+      Object.entries(rawByPayee).map(([id, v]) => [id, { ...EMPTY_PAYEE_MATERIALS, ...(v || {}) }])
+    ),
     pickups: Array.isArray(d.pickups) ? d.pickups : [],
     equipment: Array.isArray(d.equipment) ? d.equipment : [],
   };
+}
+
+function payeeMaterialsOf(details, payeeId) {
+  return details.materialsByPayee[payeeId] || EMPTY_PAYEE_MATERIALS;
 }
 
 function materialsSummary(m) {
@@ -8029,11 +8042,28 @@ function ProfileSection({ title, children, right }) {
 // pops up over the profile when "Materials ordered" gets checked — deliberately
 // not using useModalBackClose, since a back gesture would then close both this
 // and the profile underneath it at once (both listen for the same popstate)
-function MaterialsOrderedModal({ initial, onSave, onCancel }) {
+function MaterialsOrderedModal({ initial, suppliers, onAddSupplier, onSave, onCancel }) {
   const [supplier, setSupplier] = useState(initial?.supplier || "");
   const [availability, setAvailability] = useState(initial?.availability === "date" ? "date" : "immediate");
   const [availableDate, setAvailableDate] = useState(initial?.availableDate || "");
+  const [addingSupplier, setAddingSupplier] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [addSupplierError, setAddSupplierError] = useState("");
   const canSave = supplier && (availability === "immediate" || availableDate);
+
+  const saveNewSupplier = async () => {
+    const name = newSupplierName.trim();
+    if (!name) return;
+    try {
+      await onAddSupplier(name);
+      setSupplier(name);
+      setAddingSupplier(false);
+      setNewSupplierName("");
+      setAddSupplierError("");
+    } catch (err) {
+      setAddSupplierError(err.message || "Couldn't add that supplier — try again.");
+    }
+  };
 
   const choiceBtn = (active) => ({
     width: "100%",
@@ -8062,13 +8092,47 @@ function MaterialsOrderedModal({ initial, onSave, onCancel }) {
         </div>
 
         <div style={photoSectionLabel}>Which supplier?</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
-          {MATERIAL_SUPPLIERS.map((name) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: addingSupplier ? 8 : 16 }}>
+          {(suppliers || []).map((name) => (
             <button key={name} type="button" onClick={() => setSupplier(name)} style={choiceBtn(supplier === name)}>
               {name}
             </button>
           ))}
+          {!addingSupplier && (
+            <button type="button" onClick={() => setAddingSupplier(true)} style={{ ...choiceBtn(false), color: COLORS.accent, fontWeight: 700 }}>
+              + Add a new supplier
+            </button>
+          )}
         </div>
+        {addingSupplier && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+            <input
+              autoFocus
+              value={newSupplierName}
+              onChange={(e) => setNewSupplierName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveNewSupplier()}
+              placeholder="Supplier name"
+              style={modalInput}
+            />
+            {addSupplierError && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.rust }}>{addSupplierError}</div>}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" onClick={saveNewSupplier} disabled={!newSupplierName.trim()} style={{ ...addBtn, flex: 1, justifyContent: "center", opacity: newSupplierName.trim() ? 1 : 0.5 }}>
+                Add supplier
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAddingSupplier(false);
+                  setNewSupplierName("");
+                  setAddSupplierError("");
+                }}
+                style={{ ...addBtn, background: "#B8B0A0", justifyContent: "center" }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={photoSectionLabel}>When will it be available?</div>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -8131,6 +8195,8 @@ function LeadProfileModal({
   onRecordPayment,
   onRemovePayment,
   mapsPreference,
+  materialSuppliers,
+  onAddMaterialSupplier,
 }) {
   useModalBackClose(onClose);
   const details = jobDetailsOf(lead);
@@ -8145,7 +8211,7 @@ function LeadProfileModal({
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
   const [instructionsDraft, setInstructionsDraft] = useState(details.instructions);
-  const [showMaterialsModal, setShowMaterialsModal] = useState(false);
+  const [materialsModalPayeeId, setMaterialsModalPayeeId] = useState(null);
   const [pickupText, setPickupText] = useState("");
   const [pickupWhere, setPickupWhere] = useState("Home Depot");
   const [addingPayee, setAddingPayee] = useState(false);
@@ -8190,9 +8256,19 @@ function LeadProfileModal({
 
   const saveInstructions = () => onSaveJobDetails(lead.id, { instructions: instructionsDraft.trim() });
 
-  const toggleMaterials = () => {
-    if (details.materials.ordered) onSaveJobDetails(lead.id, { materials: { ordered: false } });
-    else setShowMaterialsModal(true);
+  // per sub/PM, so ordering from one supplier for one person never implies
+  // everyone else's materials are covered too
+  const saveMaterialsByPayee = (payeeId, entry) =>
+    onSaveJobDetails(lead.id, { materialsByPayee: { ...details.materialsByPayee, [payeeId]: entry } });
+
+  const toggleOrderedForPayee = (payeeId) => {
+    if (payeeMaterialsOf(details, payeeId).ordered) saveMaterialsByPayee(payeeId, EMPTY_PAYEE_MATERIALS);
+    else setMaterialsModalPayeeId(payeeId);
+  };
+
+  const toggleSubProvidingForPayee = (payeeId) => {
+    const current = payeeMaterialsOf(details, payeeId);
+    saveMaterialsByPayee(payeeId, current.subProviding ? EMPTY_PAYEE_MATERIALS : { ...EMPTY_PAYEE_MATERIALS, subProviding: true });
   };
 
   const toggleEquipment = (key) => {
@@ -8455,23 +8531,31 @@ function LeadProfileModal({
           />
         </ProfileSection>
 
-        {/* materials */}
-        <ProfileSection
-          title="Materials"
-          right={
-            details.materials.ordered ? (
-              <button onClick={() => setShowMaterialsModal(true)} style={profileLinkBtn}>
-                Change
-              </button>
-            ) : null
-          }
-        >
-          <CheckRow checked={details.materials.ordered} onToggle={toggleMaterials}>
-            <div style={{ fontWeight: 600 }}>Materials ordered</div>
-            {details.materials.ordered && (
-              <div style={{ fontSize: 13, color: COLORS.muted, marginTop: 2 }}>{materialsSummary(details.materials)}</div>
-            )}
-          </CheckRow>
+        {/* materials — one ordered/providing check-off per sub or PM on the
+            job, so ordering for one person never reads as everyone covered */}
+        <ProfileSection title="Materials">
+          {!AT_OR_AFTER_SCHEDULED_STAGES.has(lead.stage) ? (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>
+              Materials tracking opens once the job is scheduled.
+            </div>
+          ) : (lead.payees || []).length === 0 ? (
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>
+              {editable
+                ? 'Add a sub or PM above (under "Subs & PM payments") to track materials for them.'
+                : "No subs or PM added to this job yet."}
+            </div>
+          ) : (
+            (lead.payees || []).map((payee) => (
+              <PayeeMaterialsRow
+                key={payee.id}
+                payee={payee}
+                materials={payeeMaterialsOf(details, payee.id)}
+                editable
+                onToggleOrdered={() => toggleOrderedForPayee(payee.id)}
+                onToggleSubProviding={() => toggleSubProvidingForPayee(payee.id)}
+              />
+            ))
+          )}
         </ProfileSection>
 
         {/* shopping list — items to grab on the way */}
@@ -8540,13 +8624,15 @@ function LeadProfileModal({
         </ProfileSection>
       </div>
 
-      {showMaterialsModal && (
+      {materialsModalPayeeId && (
         <MaterialsOrderedModal
-          initial={details.materials.ordered ? details.materials : null}
-          onCancel={() => setShowMaterialsModal(false)}
+          initial={null}
+          suppliers={materialSuppliers}
+          onAddSupplier={onAddMaterialSupplier}
+          onCancel={() => setMaterialsModalPayeeId(null)}
           onSave={(materials) => {
-            onSaveJobDetails(lead.id, { materials });
-            setShowMaterialsModal(false);
+            saveMaterialsByPayee(materialsModalPayeeId, materials);
+            setMaterialsModalPayeeId(null);
           }}
         />
       )}
@@ -8691,6 +8777,41 @@ function PayeeRow({ payee, onEdit, onRemove, onRecordPayment, onRemovePayment })
           onCancel={() => setConfirmDel(false)}
         />
       )}
+    </div>
+  );
+}
+
+// one sub/PM's materials row — mutually exclusive "ordered" (picks a
+// supplier) vs. "sub providing" (bringing their own), so marking one person's
+// order never reads as the whole job's materials being covered
+function PayeeMaterialsRow({ payee, materials, onToggleOrdered, onToggleSubProviding, editable }) {
+  return (
+    <div style={{ padding: "8px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+        <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14.5, color: COLORS.ink }}>{payee.name}</span>
+        <span
+          style={{
+            fontFamily: FONT_UTIL,
+            fontSize: 10.5,
+            fontWeight: 700,
+            color: COLORS.muted,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 999,
+            padding: "1px 7px",
+          }}
+        >
+          {PAYEE_ROLE_LABEL[payee.role] || payee.role}
+        </span>
+      </div>
+      <CheckRow checked={materials.ordered} onToggle={onToggleOrdered} disabled={!editable || materials.subProviding}>
+        <span>Materials ordered</span>
+        {materials.ordered && (
+          <div style={{ fontSize: 13, color: COLORS.muted, marginTop: 2 }}>{materialsSummary(materials)}</div>
+        )}
+      </CheckRow>
+      <CheckRow checked={materials.subProviding} onToggle={onToggleSubProviding} disabled={!editable || materials.ordered}>
+        Sub providing materials
+      </CheckRow>
     </div>
   );
 }
@@ -10419,11 +10540,20 @@ function JobProfileButton({ lead, onOpen }) {
   const details = jobDetailsOf(lead);
   const chips = [];
   if (AT_OR_AFTER_WON_STAGES.has(lead.stage)) {
-    chips.push(
-      details.materials.ordered
-        ? { text: "Materials ordered", color: COLORS.accent }
-        : { text: "Materials not ordered", color: COLORS.rust }
-    );
+    const payees = lead.payees || [];
+    if (payees.length === 0) {
+      chips.push({ text: "Materials not ordered", color: COLORS.rust });
+    } else {
+      const covered = payees.filter((p) => {
+        const m = payeeMaterialsOf(details, p.id);
+        return m.ordered || m.subProviding;
+      }).length;
+      chips.push(
+        covered === payees.length
+          ? { text: "Materials covered", color: COLORS.accent }
+          : { text: `Materials covered ${covered}/${payees.length}`, color: covered === 0 ? COLORS.rust : COLORS.amber }
+      );
+    }
   }
   if (details.instructions) chips.push({ text: "Instructions", color: COLORS.muted });
   const mediaCount = (lead.media || []).length;

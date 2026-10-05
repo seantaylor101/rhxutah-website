@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { localMonthKey } from "../businessTime.js";
+import { getMaterialSuppliers, addMaterialSupplier } from "../materialSuppliers.js";
 
 const router = Router();
 
@@ -64,6 +65,9 @@ function readSettings() {
     popupWarrantyEnabled: map.popupWarrantyEnabled !== "0",
     popupMissingInfoEnabled: map.popupMissingInfoEnabled !== "0",
     popupMapsEnabled: map.popupMapsEnabled !== "0",
+    // visible to both roles — the PM needs the same supplier list the owner
+    // sees when marking a sub's materials ordered
+    materialSuppliers: getMaterialSuppliers(),
   };
 }
 
@@ -82,6 +86,15 @@ router.get("/", requireAuth("viewer"), (req, res) => {
     settings.goalMonthConfirmed = null;
   }
   res.json(settings);
+});
+
+// viewer-level — same reasoning as marking materials ordered being
+// viewer-accessible in job-details: the PM is often the one standing at the
+// supplier counter discovering it's not on the list yet
+router.post("/material-suppliers", requireAuth("viewer"), (req, res) => {
+  const result = addMaterialSupplier(req.body?.name);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.status(201).json({ materialSuppliers: result.value });
 });
 
 const GOAL_NUMBER_FIELDS = {
