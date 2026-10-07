@@ -8558,9 +8558,9 @@ function LeadProfileModal({
         {/* materials — one ordered/providing check-off per sub or PM on the
             job, so ordering for one person never reads as everyone covered */}
         <ProfileSection title="Materials">
-          {!AT_OR_AFTER_SCHEDULED_STAGES.has(lead.stage) ? (
+          {!AT_OR_AFTER_WON_STAGES.has(lead.stage) ? (
             <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>
-              Materials tracking opens once the job is scheduled.
+              Materials tracking opens once the job is won.
             </div>
           ) : (lead.payees || []).length === 0 ? (
             <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: "#B8B0A0" }}>
@@ -10757,7 +10757,6 @@ function JobProfileButton({ lead, onOpen }) {
 }
 
 const AT_OR_AFTER_WON_STAGES = new Set(["won", "scheduled", "progress", "completed", "paid"]);
-const AT_OR_AFTER_SCHEDULED_STAGES = new Set(["scheduled", "progress", "completed", "paid"]);
 const AT_OR_AFTER_COMPLETED_STAGES = new Set(["completed", "paid"]);
 
 // same shape as DeleteConfirmModal, but photos/videos have no meaningful
