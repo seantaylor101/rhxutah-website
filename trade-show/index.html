@@ -217,7 +217,18 @@
   .chip input:focus-visible + span { outline: 2px solid var(--dark); outline-offset: 2px; }
 
   .optional { font-weight: 400; color: #888; }
-  .lp-fine { font-size: 12px; color: #888; text-align: center; margin: 12px 0 0; line-height: 1.5; }
+  .lp-privacy {
+    font-size: 13px;
+    color: #555;
+    text-align: center;
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    background: #f1f6f3;
+    border-radius: 4px;
+    line-height: 1.5;
+  }
+  .lp-privacy strong { color: var(--dark); }
+  .lp-privacy svg { vertical-align: -2px; margin-right: 3px; color: var(--accent); }
   .lp-submit[disabled] { opacity: .7; cursor: default; }
 
   @media (max-width: 480px) {
@@ -324,7 +335,10 @@
         </div>
 
         <button type="submit" class="lp-submit" id="lp-submit">Send My Info</button>
-        <p class="lp-fine">We&#39;ll only use this to follow up with you. No spam, and we never sell your info.</p>
+        <p class="lp-privacy">
+          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <strong>Your information stops here.</strong> We don&#39;t sell it or hand it off to anyone &#8211; it&#39;s only used so we can follow up with you.
+        </p>
       </form>
       <div class="lp-alt">or call/text us directly at <a href="tel:+18019003362">(801) 900-3362</a></div>
     </div>
