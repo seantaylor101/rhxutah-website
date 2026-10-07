@@ -66,6 +66,28 @@ export async function syncPushSubscriptionRole() {
   }
 }
 
+// the browser/OS can silently drop a push subscription on its own (expired,
+// revoked, the PWA reinstalled) with no event the page can listen for — and
+// since the "Enable notifications" prompt only ever offers once per device
+// (see rhxPushPromptSeen in App.jsx), a device that already granted
+// permission once had no way to ever get re-subscribed after that happened.
+// Called alongside syncPushSubscriptionRole on every app open: if
+// permission is already granted but there's no live subscription, quietly
+// re-subscribes — requestPermission() resolves immediately with the
+// existing "granted" status, so this never shows a second permission prompt.
+export async function ensurePushSubscription() {
+  if (!pushSupported()) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const sub = await getPushSubscription();
+    if (sub) return;
+    await enablePush();
+  } catch {
+    // best-effort — nothing to surface to the user over this; the next app
+    // open will just try again
+  }
+}
+
 export async function disablePush() {
   const sub = await getPushSubscription();
   if (sub) {

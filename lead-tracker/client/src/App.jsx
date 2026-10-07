@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole } from "./push.js";
+import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -1520,9 +1520,16 @@ function App() {
   }, [showPushPrompt]);
 
   // keeps an already-subscribed device's role current on the server every
-  // time the app opens — see syncPushSubscriptionRole for why this matters
+  // time the app opens — see syncPushSubscriptionRole for why this matters.
+  // ensurePushSubscription covers the other failure mode: a subscription
+  // that silently died after permission was already granted, which
+  // otherwise had no way to ever get fixed (the enable prompt only offers
+  // once per device) — see its own comment for why.
   useEffect(() => {
-    if (role) syncPushSubscriptionRole();
+    if (role) {
+      syncPushSubscriptionRole();
+      ensurePushSubscription();
+    }
   }, [role]);
 
   // owner-only monthly ritual: every time the app opens (not just once) in
