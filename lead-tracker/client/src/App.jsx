@@ -8525,7 +8525,7 @@ function LeadProfileModal({
           )}
         </ProfileSection>
 
-        {editable && AT_OR_AFTER_SCHEDULED_STAGES.has(lead.stage) && (
+        {editable && (
           <ProfileSection
             title="Subs & PM payments"
             right={
