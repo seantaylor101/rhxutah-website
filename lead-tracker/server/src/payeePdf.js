@@ -32,7 +32,25 @@ function row(doc, label, value) {
   doc.font("Helvetica").fontSize(11).text(` ${value || "—"}`);
 }
 
-export async function buildPayeePdf({ lead, payee, media }) {
+function fmtDate(isoDate) {
+  if (!isoDate) return "";
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return isoDate;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function materialsLine(materials) {
+  if (materials?.subProviding) return "Providing their own materials for this job.";
+  if (materials?.ordered) {
+    const when = materials.availability === "date" && materials.availableDate
+      ? `available ${fmtDate(materials.availableDate)}`
+      : "available now";
+    return `Ordered from ${materials.supplier} — ${when}.`;
+  }
+  return "Not marked ordered yet.";
+}
+
+export async function buildPayeePdf({ lead, payee, media, jobDetails }) {
   const doc = new PDFDocument({ margin: 50, autoFirstPage: true });
   const chunks = [];
   doc.on("data", (c) => chunks.push(c));
@@ -57,6 +75,25 @@ export async function buildPayeePdf({ lead, payee, media }) {
     .fontSize(11)
     .text(payee.instructions || "No specific instructions written for this job yet.");
   doc.moveDown(1);
+
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#000").text("Materials");
+  doc.moveDown(0.3);
+  const materials = jobDetails?.materialsByPayee?.[payee.id];
+  doc.font("Helvetica").fontSize(11).text(materialsLine(materials));
+  doc.moveDown(1);
+
+  const pickups = jobDetails?.pickups || [];
+  if (pickups.length) {
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#000").text("Shopping list");
+    doc.moveDown(0.3);
+    doc.font("Helvetica").fontSize(11);
+    for (const p of pickups) {
+      const prefix = p.done ? "[x] " : "[ ] ";
+      const where = p.where ? ` — ${p.where}` : "";
+      doc.text(`${prefix}${p.text}${where}`);
+    }
+    doc.moveDown(1);
+  }
 
   const photos = (media || []).filter((m) => m.kind === "image");
   if (photos.length) {

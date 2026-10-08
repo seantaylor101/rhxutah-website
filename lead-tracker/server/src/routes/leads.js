@@ -727,7 +727,7 @@ router.get("/:id/payees/:payeeId/pdf", requireAuth("owner"), async (req, res) =>
   if (!payee) return res.status(404).json({ error: "Payee not found" });
 
   try {
-    const pdf = await buildPayeePdf({ lead: row, payee, media: mediaFor(row.id) });
+    const pdf = await buildPayeePdf({ lead: row, payee, media: mediaFor(row.id), jobDetails: parseJobDetails(row.jobDetails) });
     const safeName = (payee.name || "sub").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "sub";
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${safeName}-job-info.pdf"`);
