@@ -2448,7 +2448,13 @@ function App() {
           onOpenWarranty={openWarrantyFromCalendar}
         />
       ) : view === "appointments" ? (
-        <AppointmentsView leads={leads} onOpenLead={navigateToLead} />
+        <AppointmentsView
+          leads={leads}
+          onOpenLead={(id) => {
+            navigateToLead(id);
+            setProfileLeadId(id);
+          }}
+        />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -3229,6 +3235,51 @@ function useModalBackClose(onClose) {
     // extra swipe-back later that does nothing visible, never a stuck modal
     // or one that closes itself.
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+}
+
+// Edge-swipe navigation through the real History API, standing in for the
+// native OS gesture that useModalBackClose's own comment assumes exists —
+// it doesn't, inside a PWA added to the home screen (display: standalone
+// gets no edge-swipe back/forward from iOS or Android at all, unlike a
+// normal browser tab). Swiping in from within a thumb's-width of the left
+// edge goes back (closes via the same popstate listener useModalBackClose
+// already wires up); from the right edge goes forward. Scoped to the very
+// edge like the gesture it replaces, so it never competes with ordinary
+// horizontal scrolling or swiping inside the screen's own content.
+function useEdgeSwipeHistoryNav() {
+  useEffect(() => {
+    const EDGE = 24;
+    const THRESHOLD = 60;
+    let startX = null;
+    let startY = null;
+    let edge = null;
+
+    const onTouchStart = (e) => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      edge = startX <= EDGE ? "left" : startX >= window.innerWidth - EDGE ? "right" : null;
+    };
+    const onTouchEnd = (e) => {
+      if (!edge || startX == null) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (edge === "left" && dx > 0) window.history.back();
+        else if (edge === "right" && dx < 0) window.history.forward();
+      }
+      startX = null;
+      edge = null;
+    };
+
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchend", onTouchEnd);
+    };
   }, []);
 }
 
@@ -8431,6 +8482,7 @@ function LeadProfileModal({
   onAddMaterialSupplier,
 }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const details = jobDetailsOf(lead);
   const stage = STAGES.find((s) => s.key === lead.stage);
   const isWonOrLater = AT_OR_AFTER_WON_STAGES.has(lead.stage);
