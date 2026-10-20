@@ -3247,8 +3247,9 @@ function useModalBackClose(onClose) {
 // already wires up); from the right edge goes forward. Scoped to the very
 // edge like the gesture it replaces, so it never competes with ordinary
 // horizontal scrolling or swiping inside the screen's own content.
-function useEdgeSwipeHistoryNav() {
+function useEdgeSwipeHistoryNav(enabled = true) {
   useEffect(() => {
+    if (!enabled) return undefined;
     const EDGE = 24;
     const THRESHOLD = 60;
     let startX = null;
@@ -3280,11 +3281,12 @@ function useEdgeSwipeHistoryNav() {
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchend", onTouchEnd);
     };
-  }, []);
+  }, [enabled]);
 }
 
 function StatDrilldownModal({ title, rangeLabel, breakdown, onOpenLead, onClose }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [tab, setTab] = useState("received");
   const tabs = [
     { key: "received", label: `Received (${breakdown.received.length})` },
@@ -3754,6 +3756,7 @@ function MissingInfoAlertModal({ leads, onClose }) {
 
 function AccountModal({ role, onSwitch, onLogout, onClose, mapsPreference, onSetMapsPreference }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4600,6 +4603,7 @@ function DashboardView({
 // remember which job it was on and open it
 function PaymentsDueModal({ duePayees, onOpenLead, onClose }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   return (
     <div style={modalOverlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -5413,6 +5417,7 @@ const POPUP_TOGGLES = [
 
 function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [draft, setDraft] = useState(String(settings.overheadPercent));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5602,6 +5607,7 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
 
 function BackupsModal({ onClose, onRestored }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [backups, setBackups] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const [confirmTarget, setConfirmTarget] = useState(null);
@@ -6217,6 +6223,7 @@ function WarrantyScheduleModal({ onConfirm, onCancel }) {
 
 function ResolvePhotoModal({ request, onUploadPhotos, onConfirm, onCancel }) {
   useModalBackClose(onCancel);
+  useEdgeSwipeHistoryNav();
   const inputRef = useRef(null);
   const { upload, start, onProgress, stop } = useUploadProgress();
   const busy = !!upload;
@@ -6435,6 +6442,7 @@ function WarrantyPhotos({ request, editable, canMove, onUpload, onDeletePhoto })
 
 function AddWarrantyModal({ onAdd, onClose, contacts }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -6858,6 +6866,7 @@ function ArchiveLeadRow({ lead: l, editable, onOpenReport }) {
 
 function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
   const [commissionDraft, setCommissionDraft] = useState(lead.commission != null ? String(lead.commission) : "");
@@ -8482,7 +8491,6 @@ function LeadProfileModal({
   onAddMaterialSupplier,
 }) {
   useModalBackClose(onClose);
-  useEdgeSwipeHistoryNav();
   const details = jobDetailsOf(lead);
   const stage = STAGES.find((s) => s.key === lead.stage);
   const isWonOrLater = AT_OR_AFTER_WON_STAGES.has(lead.stage);
@@ -8503,6 +8511,12 @@ function LeadProfileModal({
   const [payingPayee, setPayingPayee] = useState(null); // payee object | null
   const [subProfilePayeeId, setSubProfilePayeeId] = useState(null);
   const subProfilePayee = (lead.payees || []).find((p) => p.id === subProfilePayeeId) || null;
+  // a nested modal (its own tap-outside-to-dismiss screen stacked on top of
+  // this one) is already how those get closed — an edge swipe while one's
+  // open would otherwise pop this profile's history entry too and close
+  // both at once, since they'd share the same popstate event
+  const nestedModalOpen = !!(materialsModalPayeeId || addingPayee || editingPayee || payingPayee || subProfilePayeeId);
+  useEdgeSwipeHistoryNav(!nestedModalOpen);
 
   // pick up a fresh server value (e.g. the owner edited on another device and
   // the board auto-refreshed) as long as there's no unsaved local edit
@@ -11460,6 +11474,7 @@ function WorkDaysModal({ defaultDays, onConfirm, onCancel }) {
 
 function AddLeadModal({ onAdd, onClose, contacts }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
   const [phone, setPhone] = useState("");
@@ -11663,6 +11678,7 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
 // lead already opens from a notification tap
 function LeadSearchModal({ leads, onSelect, onClose }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [query, setQuery] = useState("");
 
   const results = useMemo(() => {
@@ -11770,6 +11786,7 @@ function LeadSearchModal({ leads, onSelect, onClose }) {
 // of remembering/typing the name first
 function ContactPickerModal({ contacts, onPick, onClose }) {
   useModalBackClose(onClose);
+  useEdgeSwipeHistoryNav();
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
