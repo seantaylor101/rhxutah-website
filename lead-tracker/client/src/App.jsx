@@ -1276,7 +1276,7 @@ function App() {
   const [error, setError] = useState("");
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showLeadSearch, setShowLeadSearch] = useState(false);
-  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts' | 'calendar'
+  const [view, setView] = useState("dashboard"); // 'dashboard' | 'goals' | 'metrics' | 'board' | 'archive' | 'warranty' | 'contacts' | 'calendar' | 'appointments'
   const [warrantyRequests, setWarrantyRequests] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [showLookback, setShowLookback] = useState(false);
@@ -2403,6 +2403,8 @@ function App() {
                     ? "Performance Metrics"
                     : view === "calendar"
                     ? "Job Calendar"
+                    : view === "appointments"
+                    ? "Appointments"
                     : view === "archive"
                     ? "Archive"
                     : ""}
@@ -2429,6 +2431,7 @@ function App() {
           onOpenBoard={() => setView("board")}
           onOpenWarranty={() => setView("warranty")}
           onOpenCalendar={() => setView("calendar")}
+          onOpenAppointments={() => setView("appointments")}
           onOpenLead={navigateToLead}
           onOpenLeadProfile={(id) => {
             navigateToLead(id);
@@ -2444,6 +2447,8 @@ function App() {
           onOpenLead={navigateToLead}
           onOpenWarranty={openWarrantyFromCalendar}
         />
+      ) : view === "appointments" ? (
+        <AppointmentsView leads={leads} onOpenLead={navigateToLead} />
       ) : view === "goals" ? (
         <GoalsView
           settings={settings}
@@ -4358,6 +4363,7 @@ function DashboardView({
   onOpenBoard,
   onOpenWarranty,
   onOpenCalendar,
+  onOpenAppointments,
   onOpenLead,
   leads,
   onOpenLeadProfile,
@@ -4488,7 +4494,7 @@ function DashboardView({
         </DashboardTile>
 
         <DashboardTile
-          onClick={() => (upcomingAppointment ? onOpenLead(upcomingAppointment.id) : onOpenBoard())}
+          onClick={onOpenAppointments}
           icon={<Calendar size={15} color={COLORS.amber} />}
           title="Next Appointment"
           accent={COLORS.amber}
@@ -4842,6 +4848,7 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
                 {days.map((dayKey) => {
                   const dayNum = Number(dayKey.slice(8, 10));
                   const isToday = dayKey === todayKey;
+                  const isPast = dayKey < todayKey;
                   return (
                     <div
                       key={dayKey}
@@ -4849,7 +4856,9 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
                         borderRight: `1px solid ${COLORS.border}`,
                         height: DAY_LABEL_H,
                         padding: "4px 0 0 4px",
-                        background: isToday ? "rgba(71,147,107,0.12)" : "transparent",
+                        background: isToday ? "rgba(71,147,107,0.12)" : isPast ? "#F0EEE8" : "transparent",
+                        outline: isToday ? `2px solid ${COLORS.accent}` : "none",
+                        outlineOffset: -2,
                       }}
                     >
                       <span
@@ -4916,6 +4925,222 @@ function CalendarView({ leads, allMetrics, role, warrantyRequests, onOpenLead, o
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function localDayKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// a dedicated month-at-a-time calendar of sales appointments — separate from
+// the Job Calendar above because appointments are a single moment in the
+// day (with a real time-of-day), not a multi-day span, so they're grouped
+// by the viewer's local calendar date rather than the UTC-pinned date keys
+// the job-span grid uses for plain YYYY-MM-DD start/end dates
+function AppointmentsView({ leads, onOpenLead }) {
+  const [monthStart, setMonthStart] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+
+  const monthLabel = monthStart.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+  const todayKey = localDayKey(today);
+
+  const monthEnd = useMemo(() => {
+    const d = new Date(monthStart);
+    d.setMonth(d.getMonth() + 1);
+    d.setDate(0);
+    return d;
+  }, [monthStart]);
+
+  const gridStart = useMemo(() => {
+    const d = new Date(monthStart);
+    d.setDate(d.getDate() - d.getDay());
+    return d;
+  }, [monthStart]);
+  const gridEnd = useMemo(() => {
+    const d = new Date(monthEnd);
+    d.setDate(d.getDate() + (6 - d.getDay()));
+    return d;
+  }, [monthEnd]);
+
+  const weeks = useMemo(() => {
+    const out = [];
+    const cur = new Date(gridStart);
+    while (cur <= gridEnd) {
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(new Date(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      out.push(days);
+    }
+    return out;
+  }, [gridStart, gridEnd]);
+
+  const apptsByDay = useMemo(() => {
+    const map = {};
+    for (const l of leads || []) {
+      if (l.archived || !l.appointmentAt) continue;
+      const date = new Date(l.appointmentAt);
+      if (isNaN(date.getTime())) continue;
+      const key = localDayKey(date);
+      (map[key] || (map[key] = [])).push({ lead: l, date });
+    }
+    for (const key in map) map[key].sort((a, b) => a.date - b.date);
+    return map;
+  }, [leads]);
+
+  const monthHasAppointments = useMemo(
+    () => Object.keys(apptsByDay).some((key) => key >= localDayKey(gridStart) && key <= localDayKey(gridEnd)),
+    [apptsByDay, gridStart, gridEnd]
+  );
+
+  const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MAX_VISIBLE = 3;
+
+  return (
+    <div style={cardsWrap}>
+      <div style={stageHeadRow}>
+        <button
+          onClick={() =>
+            setMonthStart((d) => {
+              const n = new Date(d);
+              n.setMonth(n.getMonth() - 1);
+              return n;
+            })
+          }
+          style={navArrow}
+          aria-label="Previous month"
+        >
+          <ChevronLeft size={18} color={COLORS.ink} />
+        </button>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 16, textAlign: "center", flex: 1 }}>
+          {monthLabel}
+        </div>
+        <button
+          onClick={() =>
+            setMonthStart((d) => {
+              const n = new Date(d);
+              n.setMonth(n.getMonth() + 1);
+              return n;
+            })
+          }
+          style={navArrow}
+          aria-label="Next month"
+        >
+          <ChevronRight size={18} color={COLORS.ink} />
+        </button>
+      </div>
+
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted }}>Tap an appointment to open it.</div>
+
+      {!monthHasAppointments && (
+        <div style={emptyState}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: COLORS.ink, fontSize: 15, marginBottom: 4 }}>
+            Nothing scheduled this month
+          </div>
+          <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
+            Set an appointment time on a lead and it'll show up here.
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...ticket, flexDirection: "column", padding: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${COLORS.border}` }}>
+          {WEEKDAY_LABELS.map((d) => (
+            <div key={d} style={{ fontFamily: FONT_UTIL, fontSize: 11, color: COLORS.muted, textAlign: "center", padding: "6px 0" }}>
+              {d}
+            </div>
+          ))}
+        </div>
+
+        {weeks.map((days, wi) => (
+          <div
+            key={wi}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(7, 1fr)",
+              borderBottom: wi < weeks.length - 1 ? `1px solid ${COLORS.border}` : "none",
+            }}
+          >
+            {days.map((d) => {
+              const key = localDayKey(d);
+              const isToday = key === todayKey;
+              const isPast = key < todayKey;
+              const inMonth = d.getMonth() === monthStart.getMonth();
+              const dayAppts = apptsByDay[key] || [];
+              return (
+                <div
+                  key={key}
+                  style={{
+                    minHeight: 74,
+                    borderRight: `1px solid ${COLORS.border}`,
+                    padding: "4px 3px",
+                    boxSizing: "border-box",
+                    background: isPast ? "#F0EEE8" : "transparent",
+                    opacity: inMonth ? 1 : 0.4,
+                    outline: isToday ? `2px solid ${COLORS.accent}` : "none",
+                    outlineOffset: -2,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: FONT_UTIL,
+                      fontSize: 11,
+                      fontWeight: isToday ? 800 : 500,
+                      color: isPast ? COLORS.muted : isToday ? COLORS.accent : COLORS.ink,
+                      marginBottom: 2,
+                    }}
+                  >
+                    {d.getDate()}
+                  </div>
+                  {dayAppts.slice(0, MAX_VISIBLE).map(({ lead, date }) => (
+                    <button
+                      key={lead.id}
+                      onClick={() => onOpenLead(lead.id)}
+                      title={`${lead.name} · ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        background: isPast ? "#E3E0D8" : "rgba(214,158,46,0.18)",
+                        border: "none",
+                        borderRadius: 4,
+                        padding: "1px 3px",
+                        marginBottom: 2,
+                        fontFamily: FONT_UTIL,
+                        fontSize: 9.5,
+                        color: isPast ? COLORS.muted : "#8A5A00",
+                        cursor: "pointer",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} {lead.name}
+                    </button>
+                  ))}
+                  {dayAppts.length > MAX_VISIBLE && (
+                    <div style={{ fontFamily: FONT_UTIL, fontSize: 9.5, color: COLORS.muted }}>
+                      +{dayAppts.length - MAX_VISIBLE} more
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </div>
   );
