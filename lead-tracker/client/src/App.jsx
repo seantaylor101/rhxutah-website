@@ -2480,6 +2480,7 @@ function App() {
           onBack={() => setView("dashboard")}
           focus={warrantyFocus}
           contacts={contacts}
+          mapsPreference={mapsPreference}
         />
       ) : (
         <>
@@ -5762,6 +5763,7 @@ function WarrantyView({
   onBack,
   focus,
   contacts,
+  mapsPreference,
 }) {
   const [activeStage, setActiveStage] = useState("reported");
   const [showAdd, setShowAdd] = useState(false);
@@ -5892,6 +5894,7 @@ function WarrantyView({
             onDelete={onDelete}
             onUploadPhotos={onUploadPhotos}
             onDeletePhoto={onDeletePhoto}
+            mapsPreference={mapsPreference}
           />
         ))}
       </main>
@@ -5911,13 +5914,15 @@ function WarrantyView({
   );
 }
 
-function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDelete, onUploadPhotos, onDeletePhoto }) {
+function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDelete, onUploadPhotos, onDeletePhoto, mapsPreference }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(request.name);
   const [editingPhone, setEditingPhone] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState(request.phone || "");
   const [editingEmail, setEditingEmail] = useState(false);
   const [emailDraft, setEmailDraft] = useState(request.email || "");
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState(request.address || "");
   const [editingIssue, setEditingIssue] = useState(false);
   const [issueDraft, setIssueDraft] = useState(request.issue || "");
   const [confirmDel, setConfirmDel] = useState(false);
@@ -5941,6 +5946,10 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
   const saveEmail = () => {
     onEditField(request.id, "email", emailDraft.trim());
     setEditingEmail(false);
+  };
+  const saveAddress = () => {
+    onEditField(request.id, "address", addressDraft.trim());
+    setEditingAddress(false);
   };
   const saveIssue = () => {
     onEditField(request.id, "issue", issueDraft.trim());
@@ -6084,6 +6093,43 @@ function WarrantyTicket({ request, editable, canMove, onMove, onEditField, onDel
                 <Check size={18} color="#fff" />
               </button>
               <button onClick={() => setEditingEmail(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel email edit">
+                <X size={18} color="#fff" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* address */}
+        <div
+          onClick={!editingAddress && editable ? () => { setAddressDraft(request.address || ""); setEditingAddress(true); } : undefined}
+          style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, cursor: !editingAddress && editable ? "pointer" : "default" }}
+        >
+          {!editingAddress ? (
+            request.address ? (
+              <a
+                href={mapsHref(request.address, mapsPreference)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ fontFamily: FONT_UTIL, fontSize: 13.5, color: COLORS.accent, fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260 }}
+              >
+                {request.address}
+              </a>
+            ) : (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 14, color: "#B8B0A0" }}>No address set</span>
+            )
+          ) : (
+            <>
+              <input
+                autoFocus
+                value={addressDraft}
+                onChange={(e) => setAddressDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveAddress()}
+                placeholder="e.g. 123 Main St, Provo, UT"
+                style={{ ...inlineInput, flex: 1 }}
+              />
+              <button onClick={saveAddress} style={{ ...iconBtn, background: COLORS.accent }} aria-label="Save address">
+                <Check size={18} color="#fff" />
+              </button>
+              <button onClick={() => setEditingAddress(false)} style={{ ...iconBtn, background: "#B8B0A0" }} aria-label="Cancel address edit">
                 <X size={18} color="#fff" />
               </button>
             </>
@@ -6445,7 +6491,7 @@ function AddWarrantyModal({ onAdd, onClose, contacts }) {
   useEdgeSwipeHistoryNav();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [address, setAddress] = useState("");
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -6458,7 +6504,7 @@ function AddWarrantyModal({ onAdd, onClose, contacts }) {
     setBusy(true);
     setErr("");
     try {
-      await onAdd({ name: name.trim(), phone: phone.trim(), email: email.trim(), issue: issue.trim() });
+      await onAdd({ name: name.trim(), phone: phone.trim(), address: address.trim(), issue: issue.trim() });
     } catch (e) {
       setErr(e.message || "Couldn't add that request");
       setBusy(false);
@@ -6468,7 +6514,7 @@ function AddWarrantyModal({ onAdd, onClose, contacts }) {
   const pickContact = (c) => {
     setName(c.name);
     if (c.phone) setPhone(c.phone);
-    if (c.email) setEmail(c.email);
+    if (c.address) setAddress(c.address);
     setShowContactPicker(false);
   };
 
@@ -6523,12 +6569,11 @@ function AddWarrantyModal({ onAdd, onClose, contacts }) {
           placeholder="e.g. (801) 555-0100"
           style={modalInput}
         />
-        <label style={modalLabel}>Email</label>
+        <label style={modalLabel}>Address</label>
         <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="e.g. name@example.com"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="e.g. 123 Main St, Provo, UT"
           style={modalInput}
         />
         <label style={modalLabel}>What's the issue?</label>
@@ -6864,29 +6909,38 @@ function ArchiveLeadRow({ lead: l, editable, onOpenReport }) {
   );
 }
 
+// Keep in sync with REPORT_TAGS in server/src/jobReportTags.js. One-tap,
+// no-writing alternative to a "what went well/wrong" essay prompt — still
+// builds a pattern over time (which jobs run into weather delays, which get
+// underbid) without the friction that was the actual reason reports went
+// unfinished.
+const REPORT_TAGS = [
+  { key: "weather_delay", label: "Weather delay" },
+  { key: "material_delay", label: "Material delay" },
+  { key: "underbid_labor", label: "Underbid labor" },
+  { key: "underbid_materials", label: "Underbid materials" },
+  { key: "crew_issue", label: "Crew issue" },
+  { key: "customer_issue", label: "Customer issue" },
+  { key: "great_crew", label: "Great crew" },
+  { key: "ahead_of_schedule", label: "Ahead of schedule" },
+  { key: "nothing_notable", label: "Nothing notable" },
+];
+
 function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, onClose }) {
   useModalBackClose(onClose);
   useEdgeSwipeHistoryNav();
   const [materialDraft, setMaterialDraft] = useState(lead.materialCost != null ? String(lead.materialCost) : "");
   const [laborDraft, setLaborDraft] = useState(lead.laborCost != null ? String(lead.laborCost) : "");
   const [commissionDraft, setCommissionDraft] = useState(lead.commission != null ? String(lead.commission) : "");
-  const [wentWellDraft, setWentWellDraft] = useState(lead.wentWell || "");
-  const [wentWrongDraft, setWentWrongDraft] = useState(lead.wentWrong || "");
+  const [tagsDraft, setTagsDraft] = useState(lead.reportTags || []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
   const [editingWorkDays, setEditingWorkDays] = useState(false);
   const [workDaysDraft, setWorkDaysDraft] = useState("");
-  const wentWellRef = useRef(null);
-  const wentWrongRef = useRef(null);
 
-  const autoResizeTextarea = (el) => {
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  };
-  useLayoutEffect(() => autoResizeTextarea(wentWellRef.current), [wentWellDraft]);
-  useLayoutEffect(() => autoResizeTextarea(wentWrongRef.current), [wentWrongDraft]);
+  const toggleTag = (key) =>
+    setTagsDraft((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   useEffect(() => {
     if (!saved) return;
@@ -6916,8 +6970,7 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
       materialCost: material == null || isNaN(material) ? null : material,
       laborCost: labor == null || isNaN(labor) ? null : labor,
       commission: commission == null || isNaN(commission) ? null : commission,
-      wentWell: wentWellDraft,
-      wentWrong: wentWrongDraft,
+      reportTags: tagsDraft,
     };
   };
 
@@ -7112,44 +7165,73 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
           </>
         )}
 
-        <div style={{ ...reportSectionLabel, marginTop: 18 }}>Retrospective</div>
+        <div style={{ ...reportSectionLabel, marginTop: 18 }}>What happened on this job?</div>
         {editable ? (
           <>
-            <label style={modalLabel}>What went well?</label>
-            <textarea
-              ref={wentWellRef}
-              value={wentWellDraft}
-              onChange={(e) => setWentWellDraft(e.target.value)}
-              placeholder="e.g. Crew finished ahead of schedule, client was easy to reach"
-              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
-            />
-            <label style={modalLabel}>What went wrong?</label>
-            <textarea
-              ref={wentWrongRef}
-              value={wentWrongDraft}
-              onChange={(e) => setWentWrongDraft(e.target.value)}
-              placeholder="e.g. Material delivery was late, underbid the labor"
-              style={{ ...modalTextarea, overflow: "hidden", resize: "none" }}
-            />
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: COLORS.muted, marginBottom: 10 }}>
+              Optional — tap anything that applies, no writing required.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              {REPORT_TAGS.map((tag) => {
+                const active = tagsDraft.includes(tag.key);
+                return (
+                  <button
+                    key={tag.key}
+                    type="button"
+                    onClick={() => toggleTag(tag.key)}
+                    style={{
+                      padding: "7px 12px",
+                      borderRadius: 999,
+                      border: `1.5px solid ${active ? COLORS.accent : COLORS.border}`,
+                      background: active ? COLORS.accent : COLORS.surface,
+                      color: active ? "#fff" : COLORS.ink,
+                      fontFamily: FONT_BODY,
+                      fontSize: 13,
+                      fontWeight: active ? 700 : 500,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {tag.label}
+                  </button>
+                );
+              })}
+            </div>
             <button
               onClick={saveReport}
               disabled={busy}
-              style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: busy ? 0.6 : 1 }}
+              style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 4, opacity: busy ? 0.6 : 1 }}
             >
               Save
             </button>
           </>
         ) : (
-          <>
-            <div style={{ marginTop: 6 }}>
-              <div style={reportRowLabel}>What went well?</div>
-              <div style={{ ...reportRowValue, textAlign: "left", marginTop: 2 }}>{lead.wentWell || "not set"}</div>
-            </div>
-            <div style={{ marginTop: 10 }}>
-              <div style={reportRowLabel}>What went wrong?</div>
-              <div style={{ ...reportRowValue, textAlign: "left", marginTop: 2 }}>{lead.wentWrong || "not set"}</div>
-            </div>
-          </>
+          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {(lead.reportTags || []).length === 0 ? (
+              <span style={{ ...reportRowValue, textAlign: "left" }}>Nothing noted</span>
+            ) : (
+              (lead.reportTags || []).map((key) => {
+                const tag = REPORT_TAGS.find((t) => t.key === key);
+                if (!tag) return null;
+                return (
+                  <span
+                    key={key}
+                    style={{
+                      fontFamily: FONT_UTIL,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: COLORS.ink,
+                      background: COLORS.surfaceMuted,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: 999,
+                      padding: "4px 10px",
+                    }}
+                  >
+                    {tag.label}
+                  </span>
+                );
+              })
+            )}
+          </div>
         )}
 
         {err && <div style={{ color: COLORS.rust, fontFamily: FONT_BODY, fontSize: 13, marginTop: 8 }}>{err}</div>}
@@ -7193,14 +7275,17 @@ function FinalReportModal({ lead, settings, allMetrics, editable, onSaveReport, 
             ) : (
               <>
                 <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginBottom: 8 }}>
-                  You'll get a daily reminder to finish this report until it's marked complete.
+                  Finishes itself once material and labor cost are both filled in — no extra step needed. You'll
+                  get a daily reminder until then, or you can mark it done now without the costs.
                 </div>
                 <button
                   onClick={toggleComplete}
                   disabled={busy}
-                  style={{ ...addBtn, width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1 }}
+                  style={{ ...roleOption, justifyContent: "center", cursor: "pointer", opacity: busy ? 0.6 : 1 }}
                 >
-                  Mark report complete
+                  <span style={{ fontFamily: FONT_BODY, fontWeight: 600, color: COLORS.ink, fontSize: 14 }}>
+                    Mark report complete
+                  </span>
                 </button>
               </>
             )}

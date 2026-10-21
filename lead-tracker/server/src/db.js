@@ -63,6 +63,12 @@ if (!existingColumns.has("wentWell")) {
 if (!existingColumns.has("wentWrong")) {
   db.exec(`ALTER TABLE leads ADD COLUMN wentWrong TEXT DEFAULT ''`);
 }
+if (!existingColumns.has("reportTags")) {
+  // replaces the wentWell/wentWrong free-text pair above with a JSON array
+  // of one-tap tag keys (see jobReportTags.js) — those two columns are left
+  // in place, just unused by anything new, rather than migrated/dropped
+  db.exec(`ALTER TABLE leads ADD COLUMN reportTags TEXT DEFAULT '[]'`);
+}
 if (!existingColumns.has("actualWorkDays")) {
   db.exec(`ALTER TABLE leads ADD COLUMN actualWorkDays REAL`);
 }
@@ -196,6 +202,10 @@ db.exec(`
     resolvedAt TEXT
   );
 `);
+
+if (!db.prepare(`PRAGMA table_info(warranty_requests)`).all().some((c) => c.name === "address")) {
+  db.exec(`ALTER TABLE warranty_requests ADD COLUMN address TEXT DEFAULT ''`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS warranty_photos (

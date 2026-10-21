@@ -10,6 +10,7 @@ import { logMove } from "../activityLog.js";
 import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
+import { cleanReportTags, parseReportTags } from "../jobReportTags.js";
 import {
   parsePayees,
   validatePayeeInput,
@@ -92,7 +93,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -442,7 +443,7 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   const row = getLeadOr404(req.params.id, res);
   if (!row) return;
 
-  const { materialCost, laborCost, commission, actualWorkDays, wentWell, wentWrong, markComplete } = req.body || {};
+  const { materialCost, laborCost, commission, actualWorkDays, reportTags, markComplete } = req.body || {};
   const patch = {};
   if (materialCost !== undefined) {
     patch.materialCost = materialCost === null || materialCost === "" ? null : Number(materialCost);
@@ -456,10 +457,26 @@ router.patch("/:id/report", requireAuth("owner"), (req, res) => {
   if (actualWorkDays !== undefined) {
     patch.actualWorkDays = actualWorkDays === null || actualWorkDays === "" ? null : Number(actualWorkDays);
   }
-  if (wentWell !== undefined) patch.wentWell = String(wentWell || "").trim();
-  if (wentWrong !== undefined) patch.wentWrong = String(wentWrong || "").trim();
+  if (reportTags !== undefined) {
+    const result = cleanReportTags(reportTags);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    patch.reportTags = JSON.stringify(result.value);
+  }
   if (markComplete === true) patch.reportCompletedAt = new Date().toISOString();
   if (markComplete === false) patch.reportCompletedAt = null;
+
+  // the report finishes itself once both costs are on file — no separate
+  // "mark complete" ritual required. Only kicks in on a normal save
+  // (markComplete wasn't explicitly given here) and only ever turns
+  // completion on, never off, so an explicit reopen (markComplete: false)
+  // always sticks regardless of what's already filled in.
+  if (markComplete === undefined && !row.reportCompletedAt) {
+    const nextMaterial = "materialCost" in patch ? patch.materialCost : row.materialCost;
+    const nextLabor = "laborCost" in patch ? patch.laborCost : row.laborCost;
+    if (nextMaterial != null && nextLabor != null) {
+      patch.reportCompletedAt = new Date().toISOString();
+    }
+  }
 
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: "No editable fields given" });
