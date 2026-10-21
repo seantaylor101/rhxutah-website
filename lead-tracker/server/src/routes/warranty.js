@@ -11,7 +11,7 @@ import { logMove } from "../activityLog.js";
 const router = Router();
 
 const STAGES = new Set(["reported", "scheduled", "resolved"]);
-const EDITABLE_FIELDS = new Set(["name", "phone", "email", "issue", "createdAt"]);
+const EDITABLE_FIELDS = new Set(["name", "phone", "email", "address", "issue", "createdAt"]);
 
 function photosFor(requestId) {
   return db
@@ -34,7 +34,7 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, phone, email, issue } = req.body || {};
+  const { name, phone, email, address, issue } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
 
   const row = {
@@ -42,6 +42,7 @@ router.post("/", requireAuth("owner"), (req, res) => {
     name: String(name).trim(),
     phone: String(phone || "").trim(),
     email: String(email || "").trim(),
+    address: String(address || "").trim(),
     issue: String(issue || "").trim(),
     stage: "reported",
     createdAt: new Date().toISOString(),
@@ -50,8 +51,8 @@ router.post("/", requireAuth("owner"), (req, res) => {
   };
 
   db.prepare(
-    `INSERT INTO warranty_requests (id, name, phone, email, issue, stage, createdAt, scheduledAt, resolvedAt)
-     VALUES (@id, @name, @phone, @email, @issue, @stage, @createdAt, @scheduledAt, @resolvedAt)`
+    `INSERT INTO warranty_requests (id, name, phone, email, address, issue, stage, createdAt, scheduledAt, resolvedAt)
+     VALUES (@id, @name, @phone, @email, @address, @issue, @stage, @createdAt, @scheduledAt, @resolvedAt)`
   ).run(row);
 
   res.status(201).json(withPhotos(row));
@@ -155,6 +156,7 @@ router.patch("/:id", requireAuth("owner"), (req, res) => {
   }
   if ("phone" in updates) updates.phone = String(updates.phone || "").trim();
   if ("email" in updates) updates.email = String(updates.email || "").trim();
+  if ("address" in updates) updates.address = String(updates.address || "").trim();
   if ("issue" in updates) updates.issue = String(updates.issue || "").trim();
 
   const fields = Object.keys(updates);
