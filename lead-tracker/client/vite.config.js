@@ -7,6 +7,9 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:4000",
     },
+    // shared/ (house geometry used by both client and server) sits next to
+    // client/, outside the dev server's default allowed root
+    fs: { allow: [".."] },
   },
   build: {
     outDir: "dist",

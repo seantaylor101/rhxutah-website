@@ -298,3 +298,46 @@ db.exec(`
     createdAt TEXT NOT NULL
   );
 `);
+
+// house-measurement projects (one per lead): the roof outline traced from
+// aerial data — or adjusted by hand — plus the overhang, which side is the
+// front, and the Solar API roof pitch. Walls aren't stored; they're derived
+// from this every time by shared/houseGeometry.js so there's one source of
+// truth. data = JSON { source, roofOutline: [[lat, lng], ...], overhangIn,
+// frontAz, entrance, roof, satellite: { lat, lng, zoom }, lookedUpAt }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS measure_projects (
+    leadId TEXT PRIMARY KEY,
+    address TEXT DEFAULT '',
+    data TEXT NOT NULL DEFAULT '{}',
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+`);
+
+// photos shot for measuring, with the phone's sensor readings at the moment
+// of capture (location, compass, tilt, lens) — those can't be recovered
+// later, and they're what auto-assigns each photo to a wall and, later,
+// what lets the measurement engine stitch a sweep of overlapping shots.
+// clientId is generated on the phone when the photo is taken, so a retry
+// of an upload that actually went through (spotty jobsite signal) is
+// recognized instead of saved twice.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS measure_photos (
+    id TEXT PRIMARY KEY,
+    leadId TEXT NOT NULL,
+    clientId TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    sensors TEXT NOT NULL DEFAULT '{}',
+    exif TEXT NOT NULL DEFAULT '{}',
+    wallId TEXT,
+    assignMethod TEXT,
+    assignConfidence REAL,
+    wallRef TEXT,
+    capturedAt TEXT,
+    createdAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_measure_photos_leadId ON measure_photos (leadId)`);

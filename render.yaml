@@ -27,6 +27,8 @@ services:
         sync: false
       - key: VAPID_PRIVATE_KEY
         sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
     disk:
       name: rhx-lead-tracker-data
       mountPath: /app/data

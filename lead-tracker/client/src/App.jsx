@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
+import MeasureScreen from "./measure/MeasureScreen.jsx";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -8600,7 +8601,8 @@ function LeadProfileModal({
   // this one) is already how those get closed — an edge swipe while one's
   // open would otherwise pop this profile's history entry too and close
   // both at once, since they'd share the same popstate event
-  const nestedModalOpen = !!(materialsModalPayeeId || addingPayee || editingPayee || payingPayee || subProfilePayeeId);
+  const [measuring, setMeasuring] = useState(false);
+  const nestedModalOpen = !!(materialsModalPayeeId || addingPayee || editingPayee || payingPayee || subProfilePayeeId || measuring);
   useEdgeSwipeHistoryNav(!nestedModalOpen);
 
   // pick up a fresh server value (e.g. the owner edited on another device and
@@ -8920,6 +8922,16 @@ function LeadProfileModal({
             ))}
           </ProfileSection>
         )}
+
+        <ProfileSection title="House measurements">
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: COLORS.muted, marginBottom: 8 }}>
+            Wall map from satellite plus photos of every side, sorted onto walls automatically.
+          </div>
+          <button style={addBtn} onClick={() => setMeasuring(true)}>
+            Measure house
+          </button>
+        </ProfileSection>
+        {measuring && <MeasureScreen lead={lead} editable={editable} onClose={() => setMeasuring(false)} />}
 
         <ProfileSection title="Job instruction photo and video references">
           <JobMediaGallery
