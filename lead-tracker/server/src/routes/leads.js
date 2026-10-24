@@ -24,6 +24,7 @@ import {
 import { jobMediaUpload, jobMediaKind, JOB_MEDIA_DIR, SAFE_JOB_MEDIA_FILENAME } from "../uploads.js";
 import { validateMeasureData, parseMeasureData } from "../measureData.js";
 import { buildPayeePdf } from "../payeePdf.js";
+import { deleteMeasureDataForLead } from "./measure.js";
 
 const router = Router();
 
@@ -761,6 +762,7 @@ router.delete("/:id", requireAuth("owner"), (req, res) => {
   db.prepare(`DELETE FROM lead_media WHERE leadId = ?`).run(row.id);
   db.prepare(`DELETE FROM lead_shares WHERE leadId = ?`).run(row.id);
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);
+  deleteMeasureDataForLead(row.id);
   res.status(204).end();
 
   for (const m of media) fs.unlink(path.join(JOB_MEDIA_DIR, m.filename), () => {});

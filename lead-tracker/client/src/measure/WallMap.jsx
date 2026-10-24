@@ -1,0 +1,331 @@
+import { useMemo, useRef, useState } from "react";
+import {
+  worldPixel,
+  latLngFromWorldPixel,
+  toLatLng,
+  toLocal,
+  centroidLatLng,
+  cleanOutline,
+  buildHouseModel,
+  SATELLITE_SIZE,
+} from "../../../shared/houseGeometry.js";
+import { C, FONT_BODY, btnPrimary, btnSecondary, fmtFeetInches, coverageColor } from "./theme.js";
+import { measureApi } from "./measureApi.js";
+
+// Static-map pixel space: the satellite picture is SATELLITE_SIZE "map
+// pixels" across (served at 2x for sharpness), centered on project.satellite
+function makeProjector(sat) {
+  const c = worldPixel(sat.lat, sat.lng, sat.zoom);
+  const half = SATELLITE_SIZE / 2;
+  return {
+    toPx: (lat, lng) => {
+      const w = worldPixel(lat, lng, sat.zoom);
+      return [w[0] - c[0] + half, w[1] - c[1] + half];
+    },
+    fromPx: (x, y) => latLngFromWorldPixel(x - half + c[0], y - half + c[1], sat.zoom),
+  };
+}
+
+function viewBoxAround(points, pad) {
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * pad;
+  return [cx - size / 2, cy - size / 2, size, size];
+}
+
+// The wall map: satellite picture with the roof outline (orange, what the
+// aerial data sees) and the wall line inside it (inset by the overhang),
+// each wall numbered and colored by how well it's been photographed.
+// In edit mode the roof corners drag; "+" handles add a corner.
+export default function WallMap({
+  leadId,
+  project,
+  model,
+  coverage,
+  editable,
+  onSaveOutline,
+  pickingFront,
+  onPickFront,
+  selectedWallId,
+  onSelectWall,
+}) {
+  const svgRef = useRef(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null); // [[lat, lng], ...] while editing
+  const [dragIdx, setDragIdx] = useState(null);
+  const [selIdx, setSelIdx] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
+
+  const sat = project?.satellite;
+  const proj = useMemo(() => (sat ? makeProjector(sat) : null), [sat]);
+  const outline = editing && draft ? draft : project?.roofOutline || [];
+  const shownModel = useMemo(
+    () => (editing && draft ? buildHouseModel({ ...project, roofOutline: draft }) : model),
+    [editing, draft, project, model],
+  );
+
+  if (!proj || outline.length < 3) return null;
+
+  const roofPx = outline.map(([lat, lng]) => proj.toPx(lat, lng));
+  const localToPx = (x, y) => {
+    const ll = toLatLng(shownModel.origin, x, y);
+    return proj.toPx(ll.lat, ll.lng);
+  };
+  // frame the house, not the whole 640px picture, so corners are big
+  // enough to drag with a finger
+  const vb = viewBoxAround(roofPx, 1.9);
+  const unit = vb[2] / 320; // ≈ one screen-ish pixel at typical phone width
+
+  const svgPoint = (e) => {
+    const svg = svgRef.current;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    return [p.x, p.y];
+  };
+
+  const startEdit = () => {
+    setDraft(project.roofOutline.map((p) => p.slice()));
+    setSelIdx(null);
+    setEditing(true);
+  };
+
+  const onPointerMove = (e) => {
+    if (dragIdx == null) return;
+    const [x, y] = svgPoint(e);
+    const ll = proj.fromPx(x, y);
+    setDraft((d) => d.map((p, i) => (i === dragIdx ? [ll.lat, ll.lng] : p)));
+  };
+
+  const squareUp = () => {
+    const origin = centroidLatLng(draft);
+    const cleaned = cleanOutline(draft.map(([lat, lng]) => toLocal(origin, lat, lng)), { regularize: true });
+    setDraft(
+      cleaned.map(([x, y]) => {
+        const ll = toLatLng(origin, x, y);
+        return [ll.lat, ll.lng];
+      }),
+    );
+    setSelIdx(null);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSaveOutline({ roofOutline: draft });
+      setEditing(false);
+      setDraft(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const walls = shownModel ? shownModel.walls : [];
+
+  return (
+    <div>
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          aspectRatio: "1 / 1",
+          borderRadius: 10,
+          overflow: "hidden",
+          background: "#2b2f2c",
+          touchAction: editing ? "none" : "auto",
+        }}
+      >
+        <svg
+          ref={svgRef}
+          viewBox={vb.join(" ")}
+          style={{ width: "100%", height: "100%", display: "block" }}
+          onPointerMove={onPointerMove}
+          onPointerUp={() => setDragIdx(null)}
+          onPointerCancel={() => setDragIdx(null)}
+        >
+          {!imgFailed && (
+            <image
+              href={measureApi.satelliteUrl(leadId, `${sat.lat},${sat.lng},${sat.zoom}`)}
+              x={0}
+              y={0}
+              width={SATELLITE_SIZE}
+              height={SATELLITE_SIZE}
+              onError={() => setImgFailed(true)}
+            />
+          )}
+          <polygon
+            points={roofPx.map((p) => p.join(",")).join(" ")}
+            fill="rgba(255,176,32,0.12)"
+            stroke={C.roofLine}
+            strokeWidth={1.4 * unit}
+            strokeDasharray={editing ? "none" : `${3 * unit} ${2 * unit}`}
+          />
+          {walls.map((w) => {
+            const a = localToPx(w.a[0], w.a[1]);
+            const b = localToPx(w.b[0], w.b[1]);
+            const color = editing ? "#fff" : coverageColor(coverage?.[w.id]);
+            const selected = selectedWallId === w.id;
+            return (
+              <g key={w.id}>
+                <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="rgba(0,0,0,0.55)" strokeWidth={(selected ? 6 : 4.5) * unit} strokeLinecap="round" />
+                <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={color} strokeWidth={(selected ? 4 : 2.6) * unit} strokeLinecap="round" />
+                {!editing && (
+                  <line
+                    x1={a[0]}
+                    y1={a[1]}
+                    x2={b[0]}
+                    y2={b[1]}
+                    stroke="transparent"
+                    strokeWidth={22 * unit}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => (pickingFront ? onPickFront(w) : onSelectWall?.(w.id === selectedWallId ? null : w.id))}
+                  />
+                )}
+              </g>
+            );
+          })}
+          {!editing &&
+            walls.map((w) => {
+              // label just outside the wall, along its outward normal
+              const n = [Math.sin((w.normalAz * Math.PI) / 180), Math.cos((w.normalAz * Math.PI) / 180)];
+              const p = localToPx(w.mid[0] + n[0] * 1.6, w.mid[1] + n[1] * 1.6);
+              return (
+                <g key={`l-${w.id}`} style={{ pointerEvents: "none" }}>
+                  <rect x={p[0] - 11 * unit} y={p[1] - 6.5 * unit} width={22 * unit} height={13 * unit} rx={3 * unit} fill="rgba(0,0,0,0.72)" />
+                  <text
+                    x={p[0]}
+                    y={p[1] + 3.6 * unit}
+                    textAnchor="middle"
+                    fontSize={10 * unit}
+                    fontFamily={FONT_BODY}
+                    fontWeight={700}
+                    fill={w.side === "front" ? C.roofLine : "#fff"}
+                  >
+                    {w.id}
+                  </text>
+                </g>
+              );
+            })}
+          {editing &&
+            roofPx.map((p, i) => {
+              const q = roofPx[(i + 1) % roofPx.length];
+              const m = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+              return (
+                <g key={`mid-${i}`}>
+                  <circle
+                    cx={m[0]}
+                    cy={m[1]}
+                    r={5 * unit}
+                    fill="rgba(0,0,0,0.6)"
+                    stroke="#fff"
+                    strokeWidth={unit}
+                    onClick={() => {
+                      const ll = proj.fromPx(m[0], m[1]);
+                      setDraft((d) => [...d.slice(0, i + 1), [ll.lat, ll.lng], ...d.slice(i + 1)]);
+                      setSelIdx(i + 1);
+                    }}
+                  />
+                  <text x={m[0]} y={m[1] + 3 * unit} textAnchor="middle" fontSize={9 * unit} fill="#fff" style={{ pointerEvents: "none" }}>
+                    +
+                  </text>
+                </g>
+              );
+            })}
+          {editing &&
+            roofPx.map((p, i) => (
+              <g key={`v-${i}`}>
+                <circle cx={p[0]} cy={p[1]} r={6 * unit} fill={i === selIdx ? C.roofLine : "#fff"} stroke="#000" strokeWidth={1.2 * unit} />
+                {/* bigger invisible target than the dot — fingers aren't precise */}
+                <circle
+                  cx={p[0]}
+                  cy={p[1]}
+                  r={16 * unit}
+                  fill="transparent"
+                  onPointerDown={(e) => {
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
+                    setDragIdx(i);
+                    setSelIdx(i);
+                  }}
+                />
+              </g>
+            ))}
+        </svg>
+        {imgFailed && (
+          <div style={{ position: "absolute", top: 8, left: 8, right: 8, fontFamily: FONT_BODY, fontSize: 12, color: "#fff" }}>
+            Satellite picture didn't load (no signal?). The outline still works.
+          </div>
+        )}
+        {pickingFront && (
+          <div style={banner}>Tap the wall with the front door</div>
+        )}
+      </div>
+
+      {editable && !editing && (
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          <button style={btnSecondary} onClick={startEdit}>
+            Adjust outline
+          </button>
+        </div>
+      )}
+      {editing && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+            Drag the corners onto the roof edge (the outside of the gutters). Tap + to add a corner.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button style={btnSecondary} onClick={squareUp}>
+              Square up corners
+            </button>
+            <button
+              style={{ ...btnSecondary, opacity: selIdx == null || draft.length <= 3 ? 0.5 : 1 }}
+              disabled={selIdx == null || draft.length <= 3}
+              onClick={() => {
+                setDraft((d) => d.filter((_, i) => i !== selIdx));
+                setSelIdx(null);
+              }}
+            >
+              Delete corner
+            </button>
+            <div style={{ flex: 1 }} />
+            <button
+              style={btnSecondary}
+              onClick={() => {
+                setEditing(false);
+                setDraft(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button style={btnPrimary} disabled={saving} onClick={save}>
+              {saving ? "Saving…" : "Save outline"}
+            </button>
+          </div>
+        </div>
+      )}
+      {!editing && shownModel && (
+        <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.muted, marginTop: 6 }}>
+          Orange dashes = roof edge from above. Solid = walls ({Math.round(shownModel.overhangIn)}" overhang in).
+        </div>
+      )}
+    </div>
+  );
+}
+
+const banner = {
+  position: "absolute",
+  left: 8,
+  right: 8,
+  bottom: 8,
+  padding: "8px 10px",
+  borderRadius: 8,
+  background: "rgba(0,0,0,0.75)",
+  color: "#fff",
+  fontFamily: FONT_BODY,
+  fontSize: 13,
+  fontWeight: 600,
+  textAlign: "center",
+};

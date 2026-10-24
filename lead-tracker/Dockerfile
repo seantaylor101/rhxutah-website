@@ -4,6 +4,8 @@ WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm install
 COPY client/ ./
+# house geometry shared with the server (imported as ../../shared from client/src)
+COPY shared/ /app/shared/
 RUN npm run build
 
 # ---- runtime: server + built client ----
@@ -16,6 +18,7 @@ WORKDIR /app
 COPY server/package*.json ./server/
 RUN npm --prefix server install --omit=dev
 COPY server/ ./server/
+COPY shared/ ./shared/
 COPY --from=client-build /app/client/dist ./client/dist
 
 ENV NODE_ENV=production

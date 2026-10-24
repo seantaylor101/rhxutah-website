@@ -92,6 +92,36 @@ All of these work the same way with this repo, since it's one Dockerfile:
    (`PORT`, default 4000), so there's nothing else to configure — no separate frontend host,
    no CORS setup.
 
+## House measuring (step 1: wall map + photo capture)
+
+Open a lead → **Measure house**. Code lives in `client/src/measure/`, `server/src/routes/measure.js`,
+`server/src/measure/`, and `shared/houseGeometry.js` (geometry used by both sides, so the phone
+can sort photos onto walls offline with the same math the server uses).
+
+1. **Wall map.** The address is looked up through Google: the building outline (squared up),
+   the side with the front entrance, and roof pitch from the Solar API. The outline is the
+   *roof edge* seen from above, so walls are drawn inset by the overhang (default 16", adjustable).
+   Corners can be dragged, added, or squared up by hand.
+2. **Capture.** An in-app camera that saves, with every photo, the phone's GPS, compass
+   heading, tilt, and lens. Each photo is auto-assigned to a wall by casting a few hundred
+   sight lines jittered by the phone's own reported GPS/compass accuracy and counting which wall
+   they hit first. Photos under 70% confidence go in a **Check these** list; tapping a wall on the
+   camera's mini-map locks the next shots to it (the fix for tight side yards, where GPS error is
+   wider than the yard). Back-to-back shots of the same wall share a `sweepId` so the measurement
+   engine can stitch overlapping shots.
+3. **Offline.** Every photo is written to IndexedDB the moment it's taken and deleted there only
+   after the server confirms it. Uploads retry on their own with backoff; each photo carries an
+   id made on the phone, so a retried upload is never saved twice. The last wall map is cached on
+   the phone too. Caveat: the app itself still needs signal to *open* — start the measure screen
+   before walking into a dead zone.
+
+Setup: one Google Maps Platform key in `GOOGLE_MAPS_API_KEY` with **Geocoding API**, **Solar
+API**, and **Maps Static API** enabled. Without it the satellite lookup is off, but photos can
+still be shot and get sorted once the map exists. Building outlines come from the Geocoding API's
+`extra_computations=BUILDING_AND_ENTRANCES` option (a preview feature at time of writing).
+
+Tests for the geometry: `node --test shared/houseGeometry.test.js`.
+
 ## Changing passcodes
 
 Update `OWNER_PASSCODE` / `VIEWER_PASSCODE` in your environment and restart the app. Existing
@@ -126,5 +156,12 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | POST   | /api/leads/:id/payees/:payeeId/payments | owner | record a payment (amount, method, date required) |
 | DELETE | /api/leads/:id/payees/:payeeId/payments/:paymentId | owner | remove a logged payment |
 | DELETE | /api/leads/:id    | owner  | delete a lead                              |
+| GET    | /api/measure/lead/:leadId | viewer | measuring project, derived walls, and photos for a lead |
+| POST   | /api/measure/lead/:leadId/lookup | viewer | address → Google building outline, front side, roof pitch |
+| PUT    | /api/measure/lead/:leadId/outline | viewer | edit roof outline / overhang / front side |
+| GET    | /api/measure/lead/:leadId/satellite.jpg | viewer | proxied satellite image (keeps the API key server-side) |
+| POST   | /api/measure/lead/:leadId/photos | viewer | upload one measuring photo + its sensor readings (idempotent by `clientId`) |
+| PATCH  | /api/measure/photos/:id | viewer | pin a photo to a wall, or `wallId: null` for automatic |
+| DELETE | /api/measure/photos/:id | owner | delete a measuring photo |
 | GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
 | GET    | /api/activity/access | owner | project-manager (viewer) app-open history |
