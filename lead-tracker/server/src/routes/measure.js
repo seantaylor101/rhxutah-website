@@ -28,6 +28,8 @@ import {
 } from "../../../shared/houseGeometry.js";
 import { googleConfigured, geocodeWithBuilding, roofFromSolar, fetchSatelliteImage } from "../measure/google.js";
 import { createZipWriter } from "../measure/zip.js";
+import { startReport, latestReport } from "../measure/report.js";
+import { anthropicConfigured } from "../measure/vision.js";
 import {
   measurePhotoUpload,
   processUpload,
@@ -142,10 +144,19 @@ function reassignAll(leadId) {
   })();
 }
 
+function reportSummary(leadId) {
+  const r = latestReport(leadId);
+  if (!r) return null;
+  const { result, ...rest } = r;
+  return { ...rest, hasResult: !!result };
+}
+
 function payload(leadId) {
   const project = loadProject(leadId);
   return {
     googleConfigured: googleConfigured(),
+    anthropicConfigured: anthropicConfigured(),
+    report: reportSummary(leadId),
     project,
     model: buildHouseModel(project),
     photos: photoRows(leadId).map(photoToJson),
@@ -418,9 +429,32 @@ router.delete("/photos/:id", requireAuth("owner"), (req, res) => {
   const photo = db.prepare(`SELECT * FROM measure_photos WHERE id = ?`).get(req.params.id);
   if (!photo) return res.status(404).json({ error: "Photo not found" });
   db.prepare(`DELETE FROM measure_photos WHERE id = ?`).run(photo.id);
+  db.prepare(`DELETE FROM measure_photo_markups WHERE photoId = ?`).run(photo.id);
   reassignAll(photo.leadId);
   res.json(payload(photo.leadId));
   fs.unlink(path.join(MEASURE_PHOTOS_DIR, photo.filename), () => {});
+});
+
+// Create report: Claude marks up the photos, the geometry measures them.
+// Runs in the background; the phone polls GET .../report for progress.
+router.post("/lead/:leadId/report", requireAuth("viewer"), (req, res) => {
+  const lead = leadOr404(req.params.leadId, res);
+  if (!lead) return;
+  if (!anthropicConfigured()) return res.status(503).json({ error: "Reports aren't set up yet (ANTHROPIC_API_KEY)" });
+  const project = loadProject(lead.id);
+  const model = buildHouseModel(project);
+  if (!model) return res.status(400).json({ error: "Set up the wall map first" });
+  if (model.frontAz == null) return res.status(400).json({ error: "Set the front of the house on the wall map first" });
+  const rows = photoRows(lead.id);
+  if (!rows.length) return res.status(400).json({ error: "Take the walk-around photos first" });
+  startReport({ leadId: lead.id, project, model, photoRows: rows });
+  res.status(202).json(latestReport(lead.id));
+});
+
+router.get("/lead/:leadId/report", requireAuth("viewer"), (req, res) => {
+  const lead = leadOr404(req.params.leadId, res);
+  if (!lead) return;
+  res.json(latestReport(lead.id));
 });
 
 // Everything captured for a lead in one zip: each photo (named by its
@@ -482,8 +516,10 @@ router.get("/photos/:filename", requireAuth("viewer"), (req, res) => {
 // called when a lead is deleted
 export function deleteMeasureDataForLead(leadId) {
   const files = db.prepare(`SELECT filename FROM measure_photos WHERE leadId = ?`).all(leadId);
+  db.prepare(`DELETE FROM measure_photo_markups WHERE photoId IN (SELECT id FROM measure_photos WHERE leadId = ?)`).run(leadId);
   db.prepare(`DELETE FROM measure_photos WHERE leadId = ?`).run(leadId);
   db.prepare(`DELETE FROM measure_projects WHERE leadId = ?`).run(leadId);
+  db.prepare(`DELETE FROM measure_reports WHERE leadId = ?`).run(leadId);
   for (const f of files) fs.unlink(path.join(MEASURE_PHOTOS_DIR, f.filename), () => {});
 }
 

@@ -120,12 +120,23 @@ can sort photos onto walls offline with the same math the server uses).
    the phone too. Caveat: the app itself still needs signal to *open* — start the measure screen
    before walking into a dead zone.
 
+5. **Create report.** `server/src/measure/report.js` runs in the background: Claude (`claude-opus-5-5`,
+   `server/src/measure/vision.js`) marks up each photo with structured output — every visible wall's
+   four corners at base and eave, gable peak, cladding regions, and each window/door's corners, in
+   pixels. It never estimates sizes. `shared/facadeGeometry.js` does the measuring: from a wall's four
+   corners and the camera's focal length it recovers the wall's true width-to-height ratio (Zhang & He
+   rectangle method), scales it by the satellite wall width, and maps everything else on the wall
+   through the resulting homography. Heights are weighted toward square-on views (angled views are
+   far more sensitive to lens error); openings and materials come from the single best view so
+   nothing is counted twice. Markups are cached per photo + wall list, so a re-run only pays for what
+   changed. Needs `ANTHROPIC_API_KEY`; roughly $0.50–1.50 per house at list price.
+
 Setup: one Google Maps Platform key in `GOOGLE_MAPS_API_KEY` with **Geocoding API**, **Solar
 API**, and **Maps Static API** enabled. Without it the satellite lookup is off, but photos can
 still be shot and get sorted once the map exists. Building outlines come from the Geocoding API's
 `extra_computations=BUILDING_AND_ENTRANCES` option (a preview feature at time of writing).
 
-Tests for the geometry: `node --test shared/houseGeometry.test.js`.
+Tests for the geometry: `node --test shared/houseGeometry.test.js shared/facadeGeometry.test.js`.
 
 ## Changing passcodes
 
@@ -168,5 +179,8 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | POST   | /api/measure/lead/:leadId/photos | viewer | upload one measuring photo + its sensor readings (idempotent by `clientId`) |
 | PATCH  | /api/measure/photos/:id | viewer | pin a photo to a wall, or `wallId: null` for automatic |
 | DELETE | /api/measure/photos/:id | owner | delete a measuring photo |
+| POST   | /api/measure/lead/:leadId/report | viewer | start a measurement report (background) |
+| GET    | /api/measure/lead/:leadId/report | viewer | latest report: status, progress, result |
+| GET    | /api/measure/lead/:leadId/export.zip | viewer | photos + measurement.json in one zip |
 | GET    | /api/activity/log | viewer | lead/warranty stage-move history            |
 | GET    | /api/activity/access | owner | project-manager (viewer) app-open history |
