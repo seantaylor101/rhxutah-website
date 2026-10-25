@@ -23,9 +23,11 @@ import {
   DEFAULT_OVERHANG_IN,
   SLOT_KEYS,
   slotByKey,
+  GUIDED_SLOTS,
   wallForSlot,
 } from "../../../shared/houseGeometry.js";
 import { googleConfigured, geocodeWithBuilding, roofFromSolar, fetchSatelliteImage } from "../measure/google.js";
+import { createZipWriter } from "../measure/zip.js";
 import {
   measurePhotoUpload,
   processUpload,
@@ -71,6 +73,7 @@ function photoRows(leadId) {
 }
 
 const isGuided = (slot) => !!slotByKey(slot);
+const GUIDED_SLOT_ORDER = GUIDED_SLOTS.map((g) => g.key);
 
 function photoToJson(p) {
   return {
@@ -418,6 +421,53 @@ router.delete("/photos/:id", requireAuth("owner"), (req, res) => {
   reassignAll(photo.leadId);
   res.json(payload(photo.leadId));
   fs.unlink(path.join(MEASURE_PHOTOS_DIR, photo.filename), () => {});
+});
+
+// Everything captured for a lead in one zip: each photo (named by its
+// walk-around shot), plus measurement.json with the wall map, the derived
+// walls, and every photo's saved sensor readings / EXIF / shot / wall.
+// For handing the raw capture to the measuring engine or to a person.
+router.get("/lead/:leadId/export.zip", requireAuth("viewer"), (req, res) => {
+  const lead = db.prepare(`SELECT id, name, address FROM leads WHERE id = ?`).get(req.params.leadId);
+  if (!lead) return res.status(404).json({ error: "Lead not found" });
+  const data = payload(lead.id);
+  const order = new Map(GUIDED_SLOT_ORDER.map((k, i) => [k, i]));
+  const rows = photoRows(lead.id).sort(
+    (a, b) => (order.get(a.slot) ?? 99) - (order.get(b.slot) ?? 99) || String(a.capturedAt || a.createdAt).localeCompare(String(b.capturedAt || b.createdAt)),
+  );
+  const used = new Map();
+  const files = rows.map((r) => {
+    const ext = path.extname(r.filename).toLowerCase() || ".jpg";
+    const pos = order.has(r.slot) ? String(order.get(r.slot) + 1).padStart(2, "0") : "x";
+    const base = `${pos}-${r.slot || "extra"}`;
+    const n = (used.get(base) || 0) + 1;
+    used.set(base, n);
+    return { row: r, zipName: `photos/${base}${n > 1 || !order.has(r.slot) ? `-${n}` : ""}${ext}` };
+  });
+
+  const safeName = (lead.name || "house").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40) || "house";
+  res.set("Content-Type", "application/zip");
+  res.set("Content-Disposition", `attachment; filename="${safeName}-measure.zip"`);
+  res.set("Cache-Control", "no-store");
+  const zip = createZipWriter((buf) => res.write(buf));
+
+  const json = {
+    exportedAt: new Date().toISOString(),
+    lead: { id: lead.id, name: lead.name, address: lead.address },
+    project: data.project,
+    model: data.model,
+    photos: files.map(({ row, zipName }) => ({ file: zipName, ...photoToJson(row) })),
+  };
+  zip.add("measurement.json", Buffer.from(JSON.stringify(json, null, 2)));
+  for (const { row, zipName } of files) {
+    try {
+      zip.add(zipName, fs.readFileSync(path.join(MEASURE_PHOTOS_DIR, row.filename)));
+    } catch {
+      // file missing on disk — the JSON still lists it
+    }
+  }
+  zip.finish();
+  res.end();
 });
 
 router.get("/photos/:filename", requireAuth("viewer"), (req, res) => {
