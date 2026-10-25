@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, FONT_BODY, FONT_DISPLAY, btnPrimary, btnSecondary, btnDanger, sectionLabel, fmtFeetInches, coverageColor } from "./theme.js";
+import { C, FONT_BODY, FONT_DISPLAY, btnPrimary, btnSecondary, btnDanger, sectionLabel, fmtFeetInches } from "./theme.js";
 import { useMeasureData } from "./useMeasureData.js";
 import { measureApi } from "./measureApi.js";
 import { offlineStore } from "./offlineStore.js";
 import { retryFailed, discardQueued, kickUploads, enqueuePhoto } from "./uploader.js";
 import WallMap from "./WallMap.jsx";
 import CaptureScreen from "./CaptureScreen.jsx";
+import { GUIDED_SLOTS, slotByKey } from "../../../shared/houseGeometry.js";
 
 function useObjectUrl(blob) {
   const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob]);
@@ -44,7 +45,7 @@ function Thumb({ photo, size = 64, onClick }) {
   );
 }
 
-function PhotoSheet({ photo, model, canDelete, onAssign, onDelete, onRetry, onClose }) {
+function PhotoSheet({ photo, model, canDelete, onAssign, onSetSlot, onDelete, onRetry, onClose }) {
   const blobUrl = useObjectUrl(photo.pending ? photo.blob : null);
   const src = photo.pending ? blobUrl : photo.url;
   const s = photo.sensors || {};
@@ -57,7 +58,9 @@ function PhotoSheet({ photo, model, canDelete, onAssign, onDelete, onRetry, onCl
             ? `Upload refused: ${photo.lastError || "unknown error"}`
             : photo.pending
               ? "Saved on this phone, waiting to upload."
-              : photo.assignMethod === "manual"
+              : slotByKey(photo.slot)
+                ? `Walk-around shot: ${slotByKey(photo.slot).label}.`
+                : photo.assignMethod === "manual"
                 ? "Wall picked by hand."
                 : photo.wallId
                   ? `Auto-matched from location + compass (${Math.round((photo.assignConfidence || 0) * 100)}% sure).`
@@ -65,7 +68,22 @@ function PhotoSheet({ photo, model, canDelete, onAssign, onDelete, onRetry, onCl
           {Number.isFinite(s.gpsAccuracy) && ` GPS ±${Math.round(s.gpsAccuracy * 3.28)} ft.`}
           {s.lens && ` ${s.lens}.`}
         </div>
-        {model && (
+        <div style={{ ...sectionLabel, marginBottom: 6 }}>Which shot is this?</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+          {[...GUIDED_SLOTS, { key: "extra", label: "Extra" }].map((g) => {
+            const on = (photo.slot || "extra") === g.key;
+            return (
+              <button
+                key={g.key}
+                onClick={() => onSetSlot(g.key)}
+                style={{ ...btnSecondary, padding: "7px 10px", background: on ? C.accent : C.surfaceMuted, color: on ? "#fff" : C.ink }}
+              >
+                {g.label}
+              </button>
+            );
+          })}
+        </div>
+        {model && !slotByKey(photo.slot) && (
           <>
             <div style={{ ...sectionLabel, marginBottom: 6 }}>Which wall is this?</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
@@ -110,12 +128,41 @@ function PhotoSheet({ photo, model, canDelete, onAssign, onDelete, onRetry, onCl
   );
 }
 
+// 3×3 layout of the walk-around, as seen from above with the street at the bottom
+const GRID = ["back-left", "back", "back-right", "left", "house", "right", "front-left", "front", "front-right"];
+
+function SlotCell({ slot, photos, onOpen, onEmpty }) {
+  const latest = photos[photos.length - 1];
+  const blobUrl = useObjectUrl(latest && latest.pending ? latest.blob : null);
+  const src = latest ? (latest.pending ? blobUrl : latest.url) : null;
+  const short = slot.label.replace(" corner", "").replace(" side", "");
+  return (
+    <button onClick={() => (latest ? onOpen(latest) : onEmpty())} style={{ ...cell, padding: 0, overflow: "hidden", position: "relative", borderStyle: latest ? "solid" : "dashed" }}>
+      {src ? (
+        <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+      ) : (
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.muted, padding: 4 }}>
+          <span style={{ display: "block", fontSize: 20, color: C.accent }}>+</span>
+          {short}
+        </span>
+      )}
+      {latest && (
+        <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 10.5, fontWeight: 700, padding: "2px 4px" }}>
+          ✓ {short}
+          {photos.length > 1 ? ` · ${photos.length}` : ""}
+          {latest.pending ? " ⇡" : ""}
+        </span>
+      )}
+    </button>
+  );
+}
+
 // Full-screen house measuring for one lead: find the house from the
 // address, check/adjust the outline, shoot photos, and see which walls are
 // covered. Measuring itself (wall heights, openings) is the next step.
 export default function MeasureScreen({ lead, editable, onClose }) {
   const data = useMeasureData(lead.id);
-  const { project, model, photos, coverage, googleConfigured } = data;
+  const { project, model, photos, googleConfigured } = data;
   const [address, setAddress] = useState(lead.address || "");
   const [busy, setBusy] = useState(null); // "lookup" | "save" | null
   const [capturing, setCapturing] = useState(false);
@@ -126,14 +173,18 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const fileInputRef = useRef(null);
   const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
   const [adding, setAdding] = useState(0);
+  const [captureSlot, setCaptureSlot] = useState(null); // open the camera on this shot
+  const [slotMenu, setSlotMenu] = useState(null); // empty grid cell tapped: take or upload?
+  const uploadSlotRef = useRef(null);
 
   // photos already on the phone (taken with the regular camera, or someone
   // else's): queued exactly like in-app shots, so they survive a dead zone
   // too. No live sensor readings — the server fills location/heading from
   // the photo's own EXIF when the camera recorded it; otherwise they land in
   // "Check these" unless added to a specific wall.
-  const pickPhotos = (wallId) => {
+  const pickPhotos = (wallId, slot) => {
     uploadWallRef.current = wallId || null;
+    uploadSlotRef.current = slot || null;
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
       fileInputRef.current.click();
@@ -155,6 +206,7 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           blob,
           sensors: { source: "library" },
           wallId: uploadWallRef.current,
+          slot: uploadSlotRef.current || "extra",
         });
       }
       await data.refreshQueued();
@@ -184,7 +236,12 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const openPhoto = photos.find((p) => p.key === openPhotoKey) || null;
   const review = photos.filter((p) => !p.pending && p.needsReview && p.assignMethod !== "manual");
   const failed = photos.filter((p) => p.failed);
-  const unassignedPending = photos.filter((p) => p.pending && !p.wallId);
+  const unassignedPending = photos.filter((p) => p.pending && !p.wallId && !slotByKey(p.slot));
+  // latest photo per walk-around shot, and everything else
+  const bySlot = {};
+  for (const p of photos) if (slotByKey(p.slot)) (bySlot[p.slot] = bySlot[p.slot] || []).push(p);
+  const extras = photos.filter((p) => !slotByKey(p.slot));
+  const doneCount = GUIDED_SLOTS.filter((g) => bySlot[g.key]).length;
 
   const assign = async (photo, wallId) => {
     if (photo.pending) {
@@ -194,6 +251,21 @@ export default function MeasureScreen({ lead, editable, onClose }) {
       return;
     }
     await run("save", () => measureApi.assignPhoto(photo.id, wallId)).catch(() => {});
+  };
+
+  const setSlot = async (photo, slot) => {
+    if (photo.pending) {
+      const item = await offlineStore.getQueued(photo.clientId);
+      if (item) await offlineStore.putQueued({ ...item, slot, wallId: slotByKey(slot) ? null : item.wallId });
+      await data.refreshQueued();
+      return;
+    }
+    await run("save", () => measureApi.setPhotoSlot(photo.id, slot)).catch(() => {});
+  };
+
+  const openCamera = (slot) => {
+    setCaptureSlot(slot || null);
+    setCapturing(true);
   };
 
   const removePhoto = async (photo) => {
@@ -285,7 +357,6 @@ export default function MeasureScreen({ lead, editable, onClose }) {
               leadId={lead.id}
               project={project}
               model={model}
-              coverage={coverage}
               editable={!data.offline}
               onSaveOutline={saveOutline}
               pickingFront={pickingFront}
@@ -320,14 +391,50 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           </div>
         )}
 
-        {/* 2. shoot */}
-        <div style={{ display: "flex", gap: 8, margin: "14px 0" }}>
-          <button style={{ ...btnPrimary, flex: 2, padding: "14px 12px", fontSize: 16 }} onClick={() => setCapturing(true)}>
-            📷 Shoot photos
-          </button>
-          <button style={{ ...btnSecondary, flex: 1, padding: "14px 10px", fontSize: 14.5 }} disabled={!!adding} onClick={() => pickPhotos(null)}>
-            {adding ? `Adding ${adding}…` : "⬆︎ Upload"}
-          </button>
+        {/* 2. the walk-around: 8 shots laid out like the house from above,
+            front at the bottom (where you'd stand at the street) */}
+        <div style={card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+            <div style={sectionLabel}>Walk-around photos</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: doneCount === 8 ? C.accent : C.muted }}>{doneCount} of 8</div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            {GRID.map((key) =>
+              key === "house" ? (
+                <div key="house" style={{ ...cell, background: C.surfaceMuted, border: "none", color: C.muted, fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ fontSize: 22 }}>🏠</span>
+                  front ↓
+                </div>
+              ) : (
+                <SlotCell
+                  key={key}
+                  slot={slotByKey(key)}
+                  photos={bySlot[key] || []}
+                  onOpen={(p) => setOpenPhotoKey(p.key)}
+                  onEmpty={() => setSlotMenu(key)}
+                />
+              ),
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button style={{ ...btnPrimary, flex: 2, padding: "13px 12px", fontSize: 15.5 }} onClick={() => openCamera(null)}>
+              📷 {doneCount === 0 ? "Start walk-around" : doneCount < 8 ? `Continue (${doneCount}/8)` : "Take more photos"}
+            </button>
+            <button style={{ ...btnSecondary, flex: 1, padding: "13px 10px", fontSize: 14.5 }} disabled={!!adding} onClick={() => pickPhotos(null, null)}>
+              {adding ? `Adding ${adding}…` : "⬆︎ Upload"}
+            </button>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>
+            One centered shot of each side and one off each outside corner, like HOVER. Tap a box to take or upload just that shot.
+          </div>
+          <div style={{ ...sectionLabel, margin: "14px 0 6px" }}>Extra photos ({extras.length})</div>
+          <div style={thumbRow}>
+            {extras.length ? (
+              extras.map((p) => <Thumb key={p.key} photo={p} onClick={() => setOpenPhotoKey(p.key)} />)
+            ) : (
+              <span style={{ fontSize: 12.5, color: C.muted }}>Optional: close-ups, tight side yards, gables, anything blocked.</span>
+            )}
+          </div>
         </div>
         <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickedFiles} />
 
@@ -354,12 +461,11 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           </div>
         )}
 
-        {/* 3. walls + coverage */}
+        {/* 3. walls */}
         {model && (
           <div style={card}>
             <div style={{ ...sectionLabel, marginBottom: 8 }}>Walls</div>
             {model.walls.map((w) => {
-              const cov = coverage[w.id] || { photos: 0, fraction: 0 };
               const wallPhotos = photos.filter((p) => p.wallId === w.id);
               const open = selectedWallId === w.id;
               return (
@@ -368,7 +474,6 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                     onClick={() => setSelectedWallId(open ? null : w.id)}
                     style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontFamily: FONT_BODY, color: C.ink }}
                   >
-                    <span style={{ width: 12, height: 12, borderRadius: 6, background: coverageColor(cov), flex: "0 0 auto", border: "1px solid rgba(0,0,0,0.15)" }} />
                     <span style={{ fontWeight: 700, minWidth: 34 }}>{w.id}</span>
                     <span style={{ flex: 1 }}>
                       {w.label}
@@ -376,16 +481,13 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                     </span>
                     <span style={{ fontWeight: 600 }}>{fmtFeetInches(w.lengthIn)}</span>
                   </button>
-                  <div style={{ fontSize: 12, color: C.muted, margin: "3px 0 0 22px" }}>
-                    {cov.photos ? `${cov.photos} photo${cov.photos === 1 ? "" : "s"} · ~${Math.round(cov.fraction * 100)}% of its length in view` : "No photos yet"}
-                  </div>
                   {open && (
                     <div style={{ ...thumbRow, marginTop: 8, alignItems: "center" }}>
                       {wallPhotos.map((p) => (
                         <Thumb key={p.key} photo={p} onClick={() => setOpenPhotoKey(p.key)} />
                       ))}
                       <button
-                        onClick={() => pickPhotos(w.id)}
+                        onClick={() => pickPhotos(w.id, "extra")}
                         disabled={!!adding}
                         style={{ ...btnSecondary, flex: "0 0 auto", width: 64, height: 64, padding: 4, fontSize: 11.5, flexDirection: "column", gap: 2 }}
                       >
@@ -404,16 +506,6 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           </div>
         )}
 
-        {!model && photos.length > 0 && (
-          <div style={card}>
-            <div style={{ ...sectionLabel, marginBottom: 8 }}>Photos ({photos.length})</div>
-            <div style={thumbRow}>
-              {photos.map((p) => (
-                <Thumb key={p.key} photo={p} onClick={() => setOpenPhotoKey(p.key)} />
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {openPhoto && (
@@ -422,17 +514,49 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           model={model}
           canDelete={editable}
           onAssign={(wallId) => assign(openPhoto, wallId)}
+          onSetSlot={(slot) => setSlot(openPhoto, slot)}
           onDelete={() => removePhoto(openPhoto)}
           onRetry={() => retryFailed(openPhoto.clientId).then(() => data.refreshQueued())}
           onClose={() => setOpenPhotoKey(null)}
         />
       )}
 
+      {slotMenu && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setSlotMenu(null)}>
+          <div style={{ background: C.surface, borderRadius: "16px 16px 0 0", width: "100%", maxWidth: 560, padding: 16 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 17, marginBottom: 12 }}>{slotByKey(slotMenu)?.label}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                style={{ ...btnPrimary, flex: 1, padding: "12px" }}
+                onClick={() => {
+                  const k = slotMenu;
+                  setSlotMenu(null);
+                  openCamera(k);
+                }}
+              >
+                📷 Take it
+              </button>
+              <button
+                style={{ ...btnSecondary, flex: 1, padding: "12px" }}
+                onClick={() => {
+                  const k = slotMenu;
+                  setSlotMenu(null);
+                  pickPhotos(null, k);
+                }}
+              >
+                ⬆︎ Upload
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {capturing && (
         <CaptureScreen
           leadId={lead.id}
           model={model}
-          coverage={coverage}
+          photos={photos}
+          startSlot={captureSlot}
           queuedCount={data.queuedCount}
           offline={data.offline}
           onClose={() => {
@@ -445,6 +569,19 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   );
 }
 
+const cell = {
+  aspectRatio: "1 / 1",
+  borderRadius: 10,
+  border: `1.5px dashed ${C.border}`,
+  background: C.bg,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  textAlign: "center",
+  cursor: "pointer",
+  fontFamily: FONT_BODY,
+};
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 };
 const note = { border: "1px solid", borderRadius: 8, padding: "9px 11px", fontSize: 13, marginBottom: 12, lineHeight: 1.45 };
 const input = {

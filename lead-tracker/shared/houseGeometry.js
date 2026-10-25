@@ -649,3 +649,64 @@ export function pickSatelliteZoom(latLngs) {
   }
   return 16;
 }
+
+// ---- guided walk-around (HOVER-style 8 shots) ----
+
+// The standard set: one centered shot of each side from far enough back to
+// fit it, and one from off each outside corner showing the two sides that
+// meet there at an angle. Listed in walking order around the house.
+export const GUIDED_SLOTS = [
+  { key: "front", label: "Front", kind: "side", sides: ["front"] },
+  { key: "front-right", label: "Front-right corner", kind: "corner", sides: ["front", "right"] },
+  { key: "right", label: "Right side", kind: "side", sides: ["right"] },
+  { key: "back-right", label: "Back-right corner", kind: "corner", sides: ["back", "right"] },
+  { key: "back", label: "Back", kind: "side", sides: ["back"] },
+  { key: "back-left", label: "Back-left corner", kind: "corner", sides: ["back", "left"] },
+  { key: "left", label: "Left side", kind: "side", sides: ["left"] },
+  { key: "front-left", label: "Front-left corner", kind: "corner", sides: ["front", "left"] },
+];
+export const SLOT_KEYS = new Set([...GUIDED_SLOTS.map((s) => s.key), "extra"]);
+export const slotByKey = (key) => GUIDED_SLOTS.find((s) => s.key === key) || null;
+
+// Where to stand for each guided shot and which way to aim, in the model's
+// local meters. Sides: back far enough that the whole side fits a ~60° view
+// (5–18 m); corners: ~8 m out on the diagonal. Only a suggestion — fences
+// and neighbors' yards decide the real spot. Null without a known front.
+export function slotTargets(model) {
+  if (!model || model.frontAz == null) return null;
+  const f = dirFromAzimuth(model.frontAz); // out the front
+  const r = dirFromAzimuth(model.frontAz - 90); // out the right side
+  const pf = model.wallLocal.map((p) => dot(p, f));
+  const pr = model.wallLocal.map((p) => dot(p, r));
+  const F = [Math.min(...pf), Math.max(...pf)];
+  const R = [Math.min(...pr), Math.max(...pr)];
+  const cF = (F[0] + F[1]) / 2;
+  const cR = (R[0] + R[1]) / 2;
+  const at = (a, b) => add(mul(f, a), mul(r, b));
+  const back = (len) => Math.min(18, Math.max(5, len / 2 / Math.tan(30 * DEG)));
+  const CORNER = 8 / Math.SQRT2;
+  const spots = {
+    front: { pos: at(F[1] + back(R[1] - R[0]), cR), look: at(F[1], cR) },
+    back: { pos: at(F[0] - back(R[1] - R[0]), cR), look: at(F[0], cR) },
+    right: { pos: at(cF, R[1] + back(F[1] - F[0])), look: at(cF, R[1]) },
+    left: { pos: at(cF, R[0] - back(F[1] - F[0])), look: at(cF, R[0]) },
+    "front-right": { pos: at(F[1] + CORNER, R[1] + CORNER), look: at(F[1], R[1]) },
+    "back-right": { pos: at(F[0] - CORNER, R[1] + CORNER), look: at(F[0], R[1]) },
+    "back-left": { pos: at(F[0] - CORNER, R[0] - CORNER), look: at(F[0], R[0]) },
+    "front-left": { pos: at(F[1] + CORNER, R[0] - CORNER), look: at(F[1], R[0]) },
+  };
+  for (const s of Object.values(spots)) s.aimAz = azimuthOf(sub(s.look, s.pos));
+  return spots;
+}
+
+// The wall a guided shot belongs to: the one the sensors point at if it's on
+// one of the slot's sides, otherwise the longest wall on the slot's (first)
+// side. Corner shots show two sides, so this is just the primary one.
+export function wallForSlot(model, slotKey, sensorWallId) {
+  const slot = slotByKey(slotKey);
+  if (!model || !slot) return null;
+  const sensed = sensorWallId && model.walls.find((w) => w.id === sensorWallId);
+  if (sensed && slot.sides.includes(sensed.side)) return sensed.id;
+  const onSide = model.walls.filter((w) => w.side === slot.sides[0]).sort((a, b) => b.lengthM - a.lengthM);
+  return onSide[0] ? onSide[0].id : null;
+}

@@ -21,6 +21,9 @@ import {
   SATELLITE_SIZE,
   SATELLITE_SCALE,
   DEFAULT_OVERHANG_IN,
+  SLOT_KEYS,
+  slotByKey,
+  wallForSlot,
 } from "../../../shared/houseGeometry.js";
 import { googleConfigured, geocodeWithBuilding, roofFromSolar, fetchSatelliteImage } from "../measure/google.js";
 import {
@@ -67,6 +70,8 @@ function photoRows(leadId) {
   return db.prepare(`SELECT * FROM measure_photos WHERE leadId = ? ORDER BY capturedAt ASC, createdAt ASC`).all(leadId);
 }
 
+const isGuided = (slot) => !!slotByKey(slot);
+
 function photoToJson(p) {
   return {
     id: p.id,
@@ -79,7 +84,8 @@ function photoToJson(p) {
     wallId: p.wallId,
     assignMethod: p.assignMethod,
     assignConfidence: p.assignConfidence,
-    needsReview: p.assignMethod !== "manual" && (p.wallId == null || (p.assignConfidence ?? 0) < 0.7),
+    slot: p.slot || null,
+    needsReview: !isGuided(p.slot) && p.assignMethod !== "manual" && (p.wallId == null || (p.assignConfidence ?? 0) < 0.7),
     capturedAt: p.capturedAt,
     createdAt: p.createdAt,
   };
@@ -105,9 +111,17 @@ function reassignAll(leadId) {
       const w = ref ? matchWall(model, ref) : null;
       manualWallId = w ? w.id : null;
     }
-    return { key: r.id, sensors: parseJson(r.sensors, {}), manualWallId, wasManual: r.assignMethod === "manual" };
+    return { key: r.id, sensors: parseJson(r.sensors, {}), manualWallId, wasManual: r.assignMethod === "manual", slot: r.slot };
   });
   const result = assignShots(model, shots);
+  // a guided shot's slot outranks the sensors: it's the wall the slot names
+  // (the sensed one if that's on the right side of the house)
+  for (const s of shots) {
+    if (s.wasManual && s.manualWallId) continue;
+    if (!isGuided(s.slot)) continue;
+    const wallId = wallForSlot(model, s.slot, result[s.key]?.wallId);
+    if (wallId) result[s.key] = { wallId, confidence: 1, needsReview: false, slot: true };
+  }
   db.transaction(() => {
     for (const s of shots) {
       const a = result[s.key];
@@ -116,7 +130,7 @@ function reassignAll(leadId) {
       const manual = s.wasManual && s.manualWallId;
       update.run(
         a?.wallId ?? null,
-        manual ? "manual" : a?.wallId ? "auto" : null,
+        manual ? "manual" : a?.slot ? "slot" : a?.wallId ? "auto" : null,
         a?.wallId ? a.confidence : null,
         a?.wallId ? JSON.stringify(wallRef(model, a.wallId)) : null,
         s.key,
@@ -332,12 +346,13 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
         sensors.imageHeight = processed.height;
       }
       const lockedWallId = typeof req.body?.wallId === "string" && /^W\d{1,3}$/.test(req.body.wallId) ? req.body.wallId : null;
+      const slot = SLOT_KEYS.has(req.body?.slot) ? req.body.slot : null;
       const model = buildHouseModel(loadProject(lead.id));
       const ref = lockedWallId && model ? wallRef(model, lockedWallId) : null;
 
       db.prepare(
-        `INSERT INTO measure_photos (id, leadId, clientId, filename, width, height, sensors, exif, wallId, assignMethod, wallRef, capturedAt, createdAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO measure_photos (id, leadId, clientId, filename, width, height, sensors, exif, wallId, assignMethod, wallRef, capturedAt, createdAt, slot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         randomUUID(),
         lead.id,
@@ -352,6 +367,7 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
         ref ? JSON.stringify(ref) : null,
         sensors.capturedAt,
         new Date().toISOString(),
+        slot,
       );
       reassignAll(lead.id);
       res.status(201).json(payload(lead.id));
@@ -367,6 +383,17 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
 router.patch("/photos/:id", requireAuth("viewer"), (req, res) => {
   const photo = db.prepare(`SELECT * FROM measure_photos WHERE id = ?`).get(req.params.id);
   if (!photo) return res.status(404).json({ error: "Photo not found" });
+  if ("slot" in (req.body || {})) {
+    // which walk-around shot this is (or "extra") — picking a slot hands
+    // the wall choice back to the slot
+    const slot = req.body.slot === null ? null : String(req.body.slot);
+    if (slot !== null && !SLOT_KEYS.has(slot)) return res.status(400).json({ error: "Unknown shot" });
+    db.prepare(`UPDATE measure_photos SET slot = ?, assignMethod = NULL, wallRef = NULL WHERE id = ?`).run(slot, photo.id);
+    if (!("wallId" in req.body)) {
+      reassignAll(photo.leadId);
+      return res.json(payload(photo.leadId));
+    }
+  }
   const wallId = req.body?.wallId;
   if (wallId === null) {
     db.prepare(`UPDATE measure_photos SET assignMethod = NULL, wallRef = NULL WHERE id = ?`).run(photo.id);

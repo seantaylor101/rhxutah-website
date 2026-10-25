@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { assignShotProbabilities, REVIEW_BELOW } from "../../../shared/houseGeometry.js";
+import { assignShotProbabilities, REVIEW_BELOW, GUIDED_SLOTS, slotByKey, slotTargets, toLocal } from "../../../shared/houseGeometry.js";
 import { FONT_BODY, FONT_DISPLAY, btnPrimary } from "./theme.js";
 import { requestOrientationPermission, startSensors, snapshot, compassLabel } from "./sensors.js";
 import { enqueuePhoto } from "./uploader.js";
@@ -44,7 +44,18 @@ function writePref(v) {
   }
 }
 
-export default function CaptureScreen({ leadId, model, coverage, queuedCount, offline, onClose }) {
+const SIDE_WORD = { front: "front", right: "right side", back: "back", left: "left side" };
+
+function slotInstructions(slot) {
+  if (!slot) return "Close-ups, a tight side yard, a gable, anything blocked. Tap a wall on the map to tag it, or let the phone work it out.";
+  if (slot.kind === "side")
+    return `Step back until the whole ${SIDE_WORD[slot.sides[0]]} fits, roof to ground, aimed at the middle. Can't back up that far? Take it from an angle and add extras.`;
+  return `Stand off the corner so both the ${SIDE_WORD[slot.sides[0]]} and the ${SIDE_WORD[slot.sides[1]]} show, corner in the middle of the frame.`;
+}
+
+// photos: everything already on this lead (server + queued) so the
+// walk-around picks up where it left off. startSlot: open on that shot.
+export default function CaptureScreen({ leadId, model, photos = [], startSlot, queuedCount, offline, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const stopSensorsRef = useRef(null);
@@ -60,6 +71,41 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
   const [flash, setFlash] = useState(false);
   const [busy, setBusy] = useState(false);
   const [orientationDenied, setOrientationDenied] = useState(false);
+
+  // ---- guided walk-around ----
+  const takenBefore = useMemo(() => {
+    const m = {};
+    for (const p of photos) if (p.slot) m[p.slot] = (m[p.slot] || 0) + 1;
+    return m;
+  }, [photos]);
+  const [shotNow, setShotNow] = useState({}); // slot → count taken this visit (queue refresh lags a beat)
+  const [skipped, setSkipped] = useState(() => new Set());
+  const isDone = (key) => (takenBefore[key] || 0) + (shotNow[key] || 0) > 0;
+  const [mode, setMode] = useState(() => {
+    if (startSlot) return startSlot;
+    const firstOpen = GUIDED_SLOTS.find((g) => !photos.some((p) => p.slot === g.key));
+    return firstOpen ? firstOpen.key : "extra";
+  });
+  const slot = slotByKey(mode);
+  const targets = useMemo(() => slotTargets(model), [model]);
+  const target = slot && targets ? targets[slot.key] : null;
+  const doneCount = GUIDED_SLOTS.filter((g) => isDone(g.key)).length;
+
+  // next shot that's neither done nor skipped, going on around the house
+  const advanceFrom = (key, justDone) => {
+    const i = GUIDED_SLOTS.findIndex((g) => g.key === key);
+    for (let k = 1; k <= GUIDED_SLOTS.length; k++) {
+      const g = GUIDED_SLOTS[(i + k) % GUIDED_SLOTS.length];
+      if (g.key === justDone) continue;
+      if (!isDone(g.key) && !skipped.has(g.key)) return g.key;
+    }
+    return "extra";
+  };
+  const skip = () => {
+    if (!slot) return;
+    setSkipped((s0) => new Set(s0).add(slot.key));
+    setMode(advanceFrom(slot.key, slot.key));
+  };
 
   const stopCamera = () => {
     if (streamRef.current) for (const t of streamRef.current.getTracks()) t.stop();
@@ -159,7 +205,7 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
       // consecutive shots of the same wall a few seconds apart are one sweep
       // (tilting up a two-story side, stepping along it) — the engine stitches
       // a sweep together using the rotation recorded between its shots
-      const wallNow = lockedWallId || live?.wallId || null;
+      const wallNow = slot ? `slot:${slot.key}` : lockedWallId || live?.wallId || null;
       const sw = sweepRef.current;
       if (!sw.id || now - sw.at > SWEEP_GAP_MS || sw.wall !== wallNow) sweepRef.current = { id: newId(), at: now, wall: wallNow };
       sweepRef.current.at = now;
@@ -173,8 +219,19 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
       setTimeout(() => setFlash(false), 120);
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
       if (!blob) throw new Error("Couldn't save that photo");
-      await enqueuePhoto({ clientId: newId(), leadId, blob, sensors: sensorSnap, wallId: lockedWallId });
+      await enqueuePhoto({
+        clientId: newId(),
+        leadId,
+        blob,
+        sensors: sensorSnap,
+        slot: slot ? slot.key : "extra",
+        wallId: slot ? null : lockedWallId,
+      });
       setShots((n) => n + 1);
+      if (slot) {
+        setShotNow((m) => ({ ...m, [slot.key]: (m[slot.key] || 0) + 1 }));
+        setMode(advanceFrom(slot.key, slot.key));
+      }
     } catch (err) {
       setError(err.message || "Couldn't save that photo");
     } finally {
@@ -191,7 +248,14 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
   const gpsAcc = sensors.gpsAccuracy;
   const unsure = !lockedWallId && (!live || live.p < REVIEW_BELOW);
   let hint = null;
-  if (phase === "live") {
+  let distFt = null;
+  if (target && Number.isFinite(sensors.lat) && model) {
+    const p = toLocal(model.origin, sensors.lat, sensors.lng);
+    distFt = Math.round(Math.hypot(p[0] - target.pos[0], p[1] - target.pos[1]) * 3.28);
+  }
+  if (phase === "live" && slot) {
+    hint = null; // the shot card says what to do
+  } else if (phase === "live") {
     if (orientationDenied && !Number.isFinite(sensors.heading)) hint = "Compass is off, so walls can't be auto-detected. Tap the wall you're shooting on the map.";
     else if (!model) hint = "No wall map yet. Photos are saved and get sorted onto walls once the map is set up.";
     else if (lockedWallId) hint = `Locked to ${lockedWallId}. Tap it again to unlock.`;
@@ -226,12 +290,16 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
       {phase !== "live" && (
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ maxWidth: 420, background: "rgba(20,20,20,0.92)", borderRadius: 14, padding: 20 }}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Shoot the house</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Walk around the house</div>
             <ul style={{ margin: "0 0 14px", paddingLeft: 18, fontSize: 14, lineHeight: 1.5, color: "rgba(255,255,255,0.88)" }}>
-              <li>Walk around: front, each side, back. Any angle works; it doesn't have to be straight on.</li>
-              <li>Tight side yard? Switch to <b>0.5×</b>, then take overlapping shots along the wall or tilting up, about ⅓ overlap each time.</li>
-              <li>Try to get each corner of a wall in at least one shot, and the gable peak if you can.</li>
-              <li>Bushes or an AC unit in the way is fine. Catch the bottom of the wall wherever it shows.</li>
+              <li>
+                <b>8 shots</b>: the middle of each side (front, right, back, left) and each outside corner. The app tells you which one is next and
+                where to stand.
+              </li>
+              <li>Can't get one (fence, dog, neighbor's yard)? Tap <b>Skip</b>. Can't back up far enough? Shoot it from an angle, then add extras.</li>
+              <li>
+                <b>Extras</b> are optional: close-ups, a tight side yard (0.5× helps), gables, anything blocked.
+              </li>
               <li>No signal? Keep shooting. Photos save on the phone and upload later.</li>
             </ul>
             {phase === "error" && <div style={{ color: "#FF8A80", fontSize: 13.5, marginBottom: 12 }}>{error}</div>}
@@ -247,6 +315,55 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
 
       {phase === "live" && (
         <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "10px 12px max(14px, env(safe-area-inset-bottom))", background: "linear-gradient(transparent, rgba(0,0,0,0.8) 30%)" }}>
+          <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, marginBottom: 2 }}>
+            {GUIDED_SLOTS.map((g, i) => {
+              const done = isDone(g.key);
+              const cur = mode === g.key;
+              return (
+                <button
+                  key={g.key}
+                  onClick={() => setMode(g.key)}
+                  style={{
+                    ...chip,
+                    flex: "0 0 auto",
+                    border: cur ? "2px solid #FFB020" : "2px solid transparent",
+                    background: done ? "rgba(61,220,132,0.85)" : chip.background,
+                    color: done ? "#002611" : skipped.has(g.key) ? "rgba(255,255,255,0.45)" : "#fff",
+                  }}
+                >
+                  {done ? "✓ " : skipped.has(g.key) ? "– " : `${i + 1} `}
+                  {g.label.replace(" corner", "").replace(" side", "")}
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setMode("extra")}
+              style={{ ...chip, flex: "0 0 auto", border: mode === "extra" ? "2px solid #FFB020" : "2px solid transparent" }}
+            >
+              + Extras
+            </button>
+          </div>
+          <div style={{ background: "rgba(0,0,0,0.6)", borderRadius: 10, padding: "8px 10px", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, flex: 1 }}>
+                {slot ? `${GUIDED_SLOTS.indexOf(slot) + 1} of 8 · ${slot.label}` : doneCount === 8 ? "All 8 shots done ✓ · Extras" : `Extras · ${doneCount} of 8 shots done`}
+              </div>
+              {slot && (
+                <button onClick={skip} style={{ ...chip, background: "rgba(255,255,255,0.15)" }}>
+                  Skip
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.85)", marginTop: 3, lineHeight: 1.4 }}>
+              {slotInstructions(slot)}
+              {target &&
+                (distFt == null
+                  ? " Stand about where the orange spot is on the map."
+                  : distFt < 15
+                    ? " You're about at the orange spot."
+                    : ` The orange spot on the map is about ${distFt} ft from you.`)}
+            </div>
+          </div>
           {hint && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, textShadow: "0 1px 2px #000" }}>{hint}</div>}
           {error && (
             <div style={{ fontSize: 13, color: "#FF8A80", marginBottom: 8 }} onClick={() => setError(null)}>
@@ -257,14 +374,15 @@ export default function CaptureScreen({ leadId, model, coverage, queuedCount, of
             <div>
               <MiniMap
                 model={model}
-                coverage={coverage}
                 sensors={sensors}
-                liveWallId={!lockedWallId ? live?.wallId : null}
-                lockedWallId={lockedWallId}
-                onTapWall={(id) => setLockedWallId((cur) => (cur === id ? null : id))}
+                liveWallId={!slot && !lockedWallId ? live?.wallId : null}
+                lockedWallId={slot ? null : lockedWallId}
+                onTapWall={slot ? undefined : (id) => setLockedWallId((cur) => (cur === id ? null : id))}
+                target={target}
+                highlightSides={slot ? slot.sides : null}
                 size={132}
               />
-              {model && (
+              {model && !slot && (
                 <div style={{ fontSize: 12, marginTop: 4, color: "rgba(255,255,255,0.85)" }}>
                   {lockedWallId
                     ? `🔒 ${model.walls.find((w) => w.id === lockedWallId)?.label || lockedWallId}`

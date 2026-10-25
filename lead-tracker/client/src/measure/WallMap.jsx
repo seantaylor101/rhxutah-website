@@ -259,7 +259,7 @@ export default function WallMap({
           {walls.map((w) => {
             const a = localToPx(w.a[0], w.a[1]);
             const b = localToPx(w.b[0], w.b[1]);
-            const color = editing ? "#fff" : coverageColor(coverage?.[w.id]);
+            const color = editing || !coverage ? "#fff" : coverageColor(coverage[w.id]);
             const selected = selectedWallId === w.id;
             return (
               <g key={w.id}>

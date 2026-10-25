@@ -13,6 +13,9 @@ import {
   wallRef,
   sideFor,
   signedArea,
+  slotTargets,
+  wallForSlot,
+  pointInPolygon,
   worldPixel,
   latLngFromWorldPixel,
 } from "./houseGeometry.js";
@@ -229,4 +232,24 @@ test("matchWall finds the same wall after the outline shifts slightly", () => {
   const ref = wallRef(model, right.id);
   const shifted = buildHouseModel({ ...projectFromLocal(model.wallLocal.map(([x, y]) => [x + 0.4, y - 0.2])), frontAz: 180 });
   assert.equal(matchWall(shifted, ref).side, "right");
+});
+
+test("guided shot spots sit outside the house on the right sides, aimed back at it", () => {
+  const model = boxModel(); // front faces south
+  const t = slotTargets(model);
+  const front = t.front.pos;
+  assert.ok(front[1] < -15 * FT, "front spot is south of the house");
+  assert.ok(Math.abs(t.front.aimAz - 0) < 1, "aimed north at the front");
+  assert.ok(t.right.pos[0] > 20 * FT, "right spot is east (standing at the street, east is right)");
+  assert.ok(t["back-left"].pos[0] < -20 * FT && t["back-left"].pos[1] > 15 * FT, "back-left is north-west");
+  for (const s of Object.values(t)) assert.ok(!pointInPolygon(s.pos, model.wallLocal));
+});
+
+test("wallForSlot prefers the sensed wall when it's on the slot's side", () => {
+  const model = boxModel();
+  const right = model.walls.find((w) => w.side === "right");
+  const front = model.walls.find((w) => w.side === "front");
+  assert.equal(wallForSlot(model, "right", front.id), right.id);
+  assert.equal(wallForSlot(model, "front-right", right.id), right.id);
+  assert.equal(wallForSlot(model, "front-right", null), front.id);
 });

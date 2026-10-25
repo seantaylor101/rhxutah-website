@@ -102,14 +102,19 @@ can sort photos onto walls offline with the same math the server uses).
    the side with the front entrance, and roof pitch from the Solar API. The outline is the
    *roof edge* seen from above, so walls are drawn inset by the overhang (default 16", adjustable).
    Corners can be dragged, added, or squared up by hand.
-2. **Capture.** An in-app camera that saves, with every photo, the phone's GPS, compass
+2. **Walk-around.** Like HOVER: 8 guided shots — one centered on each side and one off each outside
+   corner — shown as a 3×3 grid (front at the bottom). The camera steps through them in walking
+   order, marks where to stand on the mini-map (`slotTargets` in `shared/houseGeometry.js`), and
+   lets any shot be skipped, retaken, or uploaded instead. A guided shot's wall comes from its slot,
+   so it never needs checking. Extras are optional and assigned by sensors as below.
+3. **Capture.** An in-app camera that saves, with every photo, the phone's GPS, compass
    heading, tilt, and lens. Each photo is auto-assigned to a wall by casting a few hundred
    sight lines jittered by the phone's own reported GPS/compass accuracy and counting which wall
    they hit first. Photos under 70% confidence go in a **Check these** list; tapping a wall on the
    camera's mini-map locks the next shots to it (the fix for tight side yards, where GPS error is
    wider than the yard). Back-to-back shots of the same wall share a `sweepId` so the measurement
    engine can stitch overlapping shots.
-3. **Offline.** Every photo is written to IndexedDB the moment it's taken and deleted there only
+4. **Offline.** Every photo is written to IndexedDB the moment it's taken and deleted there only
    after the server confirms it. Uploads retry on their own with backoff; each photo carries an
    id made on the phone, so a retried upload is never saved twice. The last wall map is cached on
    the phone too. Caveat: the app itself still needs signal to *open* — start the measure screen
