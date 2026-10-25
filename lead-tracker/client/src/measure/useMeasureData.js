@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { measureApi } from "./measureApi.js";
 import { offlineStore } from "./offlineStore.js";
 import { onQueueChange, kickUploads } from "./uploader.js";
-import { buildHouseModel, assignShots, wallCoverage } from "../../../shared/houseGeometry.js";
+import { buildHouseModel, assignShots, wallCoverage, slotByKey, wallForSlot } from "../../../shared/houseGeometry.js";
 
 // Server state for one lead's measuring project, with an offline fallback:
 // the last good payload is cached on the phone, and photos still waiting in
@@ -103,6 +103,8 @@ export function useMeasureData(leadId) {
       ...serverPhotos.map((p) => ({ ...p, key: p.clientId, pending: false })),
       ...pending.map((q) => {
         const a = local[q.clientId] || {};
+        const guided = !!slotByKey(q.slot);
+        const slotWall = guided && !q.wallId && model ? wallForSlot(model, q.slot, a.wallId) : null;
         return {
           key: q.clientId,
           clientId: q.clientId,
@@ -111,10 +113,11 @@ export function useMeasureData(leadId) {
           lastError: q.lastError,
           blob: q.blob,
           sensors: q.sensors,
-          wallId: q.wallId || a.wallId || null,
-          assignMethod: q.wallId ? "manual" : "auto",
-          assignConfidence: q.wallId ? 1 : a.confidence ?? null,
-          needsReview: !q.wallId && (a.needsReview ?? true),
+          slot: q.slot || null,
+          wallId: q.wallId || slotWall || a.wallId || null,
+          assignMethod: q.wallId ? "manual" : guided ? "slot" : "auto",
+          assignConfidence: q.wallId || guided ? 1 : a.confidence ?? null,
+          needsReview: !q.wallId && !guided && (a.needsReview ?? true),
           capturedAt: q.sensors?.capturedAt,
         };
       }),

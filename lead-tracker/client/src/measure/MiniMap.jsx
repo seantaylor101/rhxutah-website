@@ -6,9 +6,13 @@ import { C, FONT_BODY, coverageColor } from "./theme.js";
 // (blue), and which walls are done (green) or partly shot (amber). Tapping a
 // wall locks every following shot to it — the one-tap fix for a tight side
 // yard where GPS can't tell side from front.
-export default function MiniMap({ model, coverage, sensors, liveWallId, lockedWallId, onTapWall, size = 150 }) {
+//
+// During the guided walk-around it also shows where to stand for the current
+// shot (orange target, arrow pointing the way to aim) and lights up the
+// side(s) of the house that shot is for.
+export default function MiniMap({ model, coverage, sensors, liveWallId, lockedWallId, onTapWall, target, highlightSides, size = 150 }) {
   if (!model) return null;
-  const pts = model.wallLocal;
+  const pts = target ? [...model.wallLocal, target.pos] : model.wallLocal;
   const xs = pts.map((p) => p[0]);
   const ys = pts.map((p) => p[1]);
   const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
@@ -30,8 +34,10 @@ export default function MiniMap({ model, coverage, sensors, liveWallId, lockedWa
   return (
     <svg viewBox={vb.join(" ")} width={size} height={size} style={{ display: "block", background: "rgba(0,0,0,0.55)", borderRadius: 10 }}>
       {model.walls.map((w) => {
-        const color = w.id === lockedWallId ? C.roofLine : w.id === liveWallId ? C.wallLive : coverageColor(coverage?.[w.id]);
-        const strong = w.id === lockedWallId || w.id === liveWallId;
+        const lit = highlightSides && highlightSides.includes(w.side);
+        const color =
+          w.id === lockedWallId ? C.roofLine : w.id === liveWallId || lit ? C.wallLive : coverage ? coverageColor(coverage[w.id]) : "rgba(255,255,255,0.75)";
+        const strong = w.id === lockedWallId || w.id === liveWallId || lit;
         return (
           <g key={w.id} onClick={() => onTapWall?.(w.id)} style={{ cursor: "pointer" }}>
             <line x1={w.a[0]} y1={-w.a[1]} x2={w.b[0]} y2={-w.b[1]} stroke={color} strokeWidth={(strong ? 5 : 3) * u} strokeLinecap="round" />
@@ -57,6 +63,21 @@ export default function MiniMap({ model, coverage, sensors, liveWallId, lockedWa
           </text>
         );
       })}
+      {target && (
+        <g style={{ pointerEvents: "none" }}>
+          <line
+            x1={target.pos[0]}
+            y1={-target.pos[1]}
+            x2={target.pos[0] + Math.sin((target.aimAz * Math.PI) / 180) * 14 * u}
+            y2={-(target.pos[1] + Math.cos((target.aimAz * Math.PI) / 180) * 14 * u)}
+            stroke={C.roofLine}
+            strokeWidth={2.5 * u}
+            strokeLinecap="round"
+          />
+          <circle cx={target.pos[0]} cy={-target.pos[1]} r={7 * u} fill="none" stroke={C.roofLine} strokeWidth={2.5 * u} />
+          <circle cx={target.pos[0]} cy={-target.pos[1]} r={2.5 * u} fill={C.roofLine} />
+        </g>
+      )}
       {cam && Number.isFinite(sensors.heading) && (
         <path
           d={(() => {

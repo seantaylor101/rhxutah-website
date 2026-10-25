@@ -20,15 +20,17 @@ export const measureApi = {
   lookup: (leadId, address) => request(`/lead/${leadId}/lookup`, { method: "POST", body: JSON.stringify({ address }) }),
   saveOutline: (leadId, patch) => request(`/lead/${leadId}/outline`, { method: "PUT", body: JSON.stringify(patch) }),
   assignPhoto: (photoId, wallId) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ wallId }) }),
+  setPhotoSlot: (photoId, slot) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ slot }) }),
   deletePhoto: (photoId) => request(`/photos/${photoId}`, { method: "DELETE" }),
   satelliteUrl: (leadId, version) => `${BASE}/lead/${leadId}/satellite.jpg?v=${encodeURIComponent(version || "")}`,
   // multipart — must not set a JSON content-type, the browser sets the
   // boundary itself
-  async uploadPhoto(leadId, { blob, clientId, sensors, wallId }) {
+  async uploadPhoto(leadId, { blob, clientId, sensors, wallId, slot }) {
     const fd = new FormData();
     fd.append("clientId", clientId);
     fd.append("sensors", JSON.stringify(sensors || {}));
     if (wallId) fd.append("wallId", wallId);
+    if (slot) fd.append("slot", slot);
     fd.append("photo", blob, `${clientId}.jpg`);
     const res = await fetch(`${BASE}/lead/${leadId}/photos`, { method: "POST", credentials: "include", body: fd });
     const data = await res.json().catch(() => null);

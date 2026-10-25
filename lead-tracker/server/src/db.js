@@ -341,3 +341,11 @@ db.exec(`
   );
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_measure_photos_leadId ON measure_photos (leadId)`);
+
+if (!db.prepare(`PRAGMA table_info(measure_photos)`).all().some((c) => c.name === "slot")) {
+  // which shot of the guided walk-around this is ("front", "front-right",
+  // … see shared/houseGeometry.js GUIDED_SLOTS) or "extra"/NULL for a
+  // free-form photo. A guided shot already says what it shows, so it's
+  // never sent to "Check these".
+  db.exec(`ALTER TABLE measure_photos ADD COLUMN slot TEXT`);
+}
