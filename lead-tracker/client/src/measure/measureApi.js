@@ -22,6 +22,17 @@ export const measureApi = {
   assignPhoto: (photoId, wallId) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ wallId }) }),
   setPhotoSlot: (photoId, slot) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ slot }) }),
   deletePhoto: (photoId) => request(`/photos/${photoId}`, { method: "DELETE" }),
+  async exportZip(leadId) {
+    const res = await fetch(`${BASE}/lead/${leadId}/export.zip`, { credentials: "include" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      const err = new Error((data && data.error) || `Export failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    const name = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || "measure.zip";
+    return new File([await res.blob()], name, { type: "application/zip" });
+  },
   satelliteUrl: (leadId, version) => `${BASE}/lead/${leadId}/satellite.jpg?v=${encodeURIComponent(version || "")}`,
   // multipart — must not set a JSON content-type, the browser sets the
   // boundary itself

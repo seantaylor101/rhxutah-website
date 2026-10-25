@@ -173,6 +173,8 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const fileInputRef = useRef(null);
   const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
   const [adding, setAdding] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportFile, setExportFile] = useState(null); // built zip, waiting for a tap to save/share
   const [captureSlot, setCaptureSlot] = useState(null); // open the camera on this shot
   const [slotMenu, setSlotMenu] = useState(null); // empty grid cell tapped: take or upload?
   const uploadSlotRef = useRef(null);
@@ -261,6 +263,41 @@ export default function MeasureScreen({ lead, editable, onClose }) {
       return;
     }
     await run("save", () => measureApi.setPhotoSlot(photo.id, slot)).catch(() => {});
+  };
+
+  // Two taps on purpose: building the zip takes a moment, and iOS only lets
+  // the share sheet open straight from a tap — so the first tap builds it,
+  // the second hands it to the share sheet (Save to Files, Messages, …).
+  const buildExport = async () => {
+    setExporting(true);
+    setActionError(null);
+    try {
+      setExportFile(await measureApi.exportZip(lead.id));
+    } catch (err) {
+      setActionError(!err.status ? "No signal. Export once you're back online." : err.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+  const saveExport = async () => {
+    const file = exportFile;
+    if (!file) return;
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: file.name });
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return; // closed the share sheet
+    }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const openCamera = (slot) => {
@@ -437,6 +474,28 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           </div>
         </div>
         <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickedFiles} />
+
+        <div style={card}>
+          <div style={{ ...sectionLabel, marginBottom: 6 }}>Export</div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+            One zip with every photo (named by shot) and their saved location/compass readings plus the wall map.
+            {data.queuedCount > 0 && <b style={{ color: C.rust }}> {data.queuedCount} photo{data.queuedCount === 1 ? " is" : "s are"} still waiting to upload and won't be in it yet.</b>}
+          </div>
+          {!exportFile ? (
+            <button style={btnSecondary} disabled={exporting || !photos.length} onClick={buildExport}>
+              {exporting ? "Building zip…" : "⬇︎ Export photos + data"}
+            </button>
+          ) : (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button style={btnPrimary} onClick={saveExport}>
+                Save / share {exportFile.name} ({(exportFile.size / 1048576).toFixed(1)} MB)
+              </button>
+              <button style={linkBtn} onClick={() => setExportFile(null)}>
+                Start over
+              </button>
+            </div>
+          )}
+        </div>
 
         {failed.length > 0 && (
           <div style={card}>
