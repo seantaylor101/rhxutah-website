@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { C, FONT_BODY, FONT_DISPLAY, btnPrimary, btnSecondary, btnDanger, sectionLabel, fmtFeetInches, coverageColor } from "./theme.js";
 import { useMeasureData } from "./useMeasureData.js";
 import { measureApi } from "./measureApi.js";
 import { offlineStore } from "./offlineStore.js";
-import { retryFailed, discardQueued, kickUploads } from "./uploader.js";
+import { retryFailed, discardQueued, kickUploads, enqueuePhoto } from "./uploader.js";
 import WallMap from "./WallMap.jsx";
 import CaptureScreen from "./CaptureScreen.jsx";
 
@@ -123,6 +123,47 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const [selectedWallId, setSelectedWallId] = useState(null);
   const [openPhotoKey, setOpenPhotoKey] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const fileInputRef = useRef(null);
+  const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
+  const [adding, setAdding] = useState(0);
+
+  // photos already on the phone (taken with the regular camera, or someone
+  // else's): queued exactly like in-app shots, so they survive a dead zone
+  // too. No live sensor readings — the server fills location/heading from
+  // the photo's own EXIF when the camera recorded it; otherwise they land in
+  // "Check these" unless added to a specific wall.
+  const pickPhotos = (wallId) => {
+    uploadWallRef.current = wallId || null;
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  };
+  const onPickedFiles = async (e) => {
+    const files = [...(e.target.files || [])];
+    if (!files.length) return;
+    setAdding(files.length);
+    setActionError(null);
+    try {
+      for (const file of files) {
+        // copy into memory — a File handed over by the iOS photo picker can
+        // stop being readable later, and this one has to sit in the queue
+        const blob = new Blob([await file.arrayBuffer()], { type: file.type || "image/jpeg" });
+        await enqueuePhoto({
+          clientId: window.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`,
+          leadId: lead.id,
+          blob,
+          sensors: { source: "library" },
+          wallId: uploadWallRef.current,
+        });
+      }
+      await data.refreshQueued();
+    } catch (err) {
+      setActionError(err.message || "Couldn't add those photos");
+    } finally {
+      setAdding(0);
+    }
+  };
 
   const run = async (kind, fn) => {
     setBusy(kind);
@@ -280,9 +321,15 @@ export default function MeasureScreen({ lead, editable, onClose }) {
         )}
 
         {/* 2. shoot */}
-        <button style={{ ...btnPrimary, width: "100%", padding: "14px 16px", fontSize: 16, margin: "14px 0" }} onClick={() => setCapturing(true)}>
-          📷 Shoot photos
-        </button>
+        <div style={{ display: "flex", gap: 8, margin: "14px 0" }}>
+          <button style={{ ...btnPrimary, flex: 2, padding: "14px 12px", fontSize: 16 }} onClick={() => setCapturing(true)}>
+            📷 Shoot photos
+          </button>
+          <button style={{ ...btnSecondary, flex: 1, padding: "14px 10px", fontSize: 14.5 }} disabled={!!adding} onClick={() => pickPhotos(null)}>
+            {adding ? `Adding ${adding}…` : "⬆︎ Upload"}
+          </button>
+        </div>
+        <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickedFiles} />
 
         {failed.length > 0 && (
           <div style={card}>
@@ -333,12 +380,18 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                     {cov.photos ? `${cov.photos} photo${cov.photos === 1 ? "" : "s"} · ~${Math.round(cov.fraction * 100)}% of its length in view` : "No photos yet"}
                   </div>
                   {open && (
-                    <div style={{ ...thumbRow, marginTop: 8 }}>
-                      {wallPhotos.length ? (
-                        wallPhotos.map((p) => <Thumb key={p.key} photo={p} onClick={() => setOpenPhotoKey(p.key)} />)
-                      ) : (
-                        <span style={{ fontSize: 12.5, color: C.muted }}>Nothing assigned here yet.</span>
-                      )}
+                    <div style={{ ...thumbRow, marginTop: 8, alignItems: "center" }}>
+                      {wallPhotos.map((p) => (
+                        <Thumb key={p.key} photo={p} onClick={() => setOpenPhotoKey(p.key)} />
+                      ))}
+                      <button
+                        onClick={() => pickPhotos(w.id)}
+                        disabled={!!adding}
+                        style={{ ...btnSecondary, flex: "0 0 auto", width: 64, height: 64, padding: 4, fontSize: 11.5, flexDirection: "column", gap: 2 }}
+                      >
+                        <span style={{ fontSize: 18 }}>+</span>
+                        Add to {w.id}
+                      </button>
                     </div>
                   )}
                 </div>
