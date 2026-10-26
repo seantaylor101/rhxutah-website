@@ -14,6 +14,7 @@ import {
   sideFor,
   signedArea,
   slotTargets,
+  suggestUpperOutline,
   wallForSlot,
   pointInPolygon,
   worldPixel,
@@ -252,4 +253,97 @@ test("wallForSlot prefers the sensed wall when it's on the slot's side", () => {
   assert.equal(wallForSlot(model, "right", front.id), right.id);
   assert.equal(wallForSlot(model, "front-right", right.id), right.id);
   assert.equal(wallForSlot(model, "front-right", null), front.id);
+});
+
+test("two levels: flush walls become two-story, set-back walls ride on the lower roof", () => {
+  // main two-story block 12 x 9 m, one-story garage 6 x 6 m sticking out
+  // the front-left (front faces south)
+  const ll = (pts) =>
+    pts.map(([x, y]) => {
+      const p = toLatLng({ lat: 41, lng: -111.9 }, x, y);
+      return [p.lat, p.lng];
+    });
+  const ground = ll([
+    [0, -6],
+    [6, -6],
+    [6, 0],
+    [12, 0],
+    [12, 9],
+    [0, 9],
+  ]);
+  const upper = ll([
+    [0, 0],
+    [12, 0],
+    [12, 9],
+    [0, 9],
+  ]);
+  const model = buildHouseModel({ roofOutline: ground, upperOutline: upper, overhangIn: 0, frontAz: 180 });
+  const byKey = (tier, side) => model.walls.filter((w) => w.tier === tier && w.side === side);
+  const back = byKey("ground", "back");
+  assert.equal(back.length, 1);
+  assert.equal(back[0].stories, 2, "back is flush with the upper story");
+  const front = byKey("ground", "front").sort((a, b) => a.mid[0] - b.mid[0]);
+  assert.deepEqual(
+    front.map((w) => [Math.round(w.lengthM), w.stories]),
+    [
+      [6, 1],
+      [6, 2],
+    ],
+    "garage front is one story; the main block's front right of it is flush two-story",
+  );
+  const upperFront = byKey("upper", "front");
+  assert.equal(upperFront.length, 1, "the main block's front above the garage roof");
+  assert.ok(Math.abs(upperFront[0].lengthM - 6) < 0.01);
+  assert.ok(Math.abs(upperFront[0].setbackM - 6) < 0.01, `set back over the 6 m garage, got ${upperFront[0].setbackM}`);
+  // left side: garage (one story) then main block flush (two story)
+  const left = byKey("ground", "left").sort((a, b) => a.mid[1] - b.mid[1]);
+  assert.deepEqual(left.map((w) => w.stories), [1, 2]);
+  // sight lines ignore upper walls
+  const shot = { lat: toLatLng(model.origin, 3, -20).lat, lng: toLatLng(model.origin, 3, -20).lng, gpsAccuracy: 2, heading: 0, headingAccuracy: 5 };
+  const probs = assignShotProbabilities(model, shot, "x");
+  assert.ok(Object.keys(probs).every((id) => model.walls.find((w) => w.id === id).tier === "ground"));
+});
+
+test("upper outline suggestion picks the high roof planes and stays inside the house", () => {
+  const ll = (x, y) => toLatLng({ lat: 41, lng: -111.9 }, x, y);
+  const corner = (x, y) => {
+    const p = ll(x, y);
+    return { lat: p.lat, lng: p.lng };
+  };
+  const ring = [
+    [0, -6],
+    [6, -6],
+    [6, 0],
+    [12, 0],
+    [12, 9],
+    [0, 9],
+  ].map(([x, y]) => {
+    const p = ll(x, y);
+    return [p.lat, p.lng];
+  });
+  const project = {
+    roofOutline: ring,
+    frontAz: 180,
+    roof: {
+      segments: [
+        { pitchDeg: 30, azimuthDeg: 90, areaM2: 60, heightM: 1300, bbox: { sw: corner(6, 0), ne: corner(12, 9) } },
+        { pitchDeg: 30, azimuthDeg: 270, areaM2: 60, heightM: 1300, bbox: { sw: corner(0, 0), ne: corner(6, 9) } },
+        { pitchDeg: 30, azimuthDeg: 180, areaM2: 20, heightM: 1296, bbox: { sw: corner(0, -6), ne: corner(6, 0) } },
+      ],
+    },
+  };
+  const up = suggestUpperOutline(project);
+  assert.equal(up.length, 4);
+  const m = buildHouseModel({ ...project, upperOutline: up, overhangIn: 0 });
+  // compare in the model's own frame (centered on the outline)
+  const toM = (x, y) => {
+    const p = ll(x, y);
+    return toLocal(m.origin, p.lat, p.lng);
+  };
+  const [x0, y0] = toM(0, 0);
+  const [x1, y1] = toM(12, 9);
+  const xs = m.upperWallLocal.map((p) => p[0]);
+  const ys = m.upperWallLocal.map((p) => p[1]);
+  assert.ok(Math.abs(Math.min(...ys) - y0) < 0.05 && Math.abs(Math.max(...ys) - y1) < 0.05, `y ${Math.min(...ys)}..${Math.max(...ys)}`);
+  assert.ok(Math.abs(Math.min(...xs) - x0) < 0.05 && Math.abs(Math.max(...xs) - x1) < 0.05);
 });

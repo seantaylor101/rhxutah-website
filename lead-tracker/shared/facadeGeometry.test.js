@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { measureFace, rectangleAspect, focalPx, buildFacadeReport, homography, applyH } from "./facadeGeometry.js";
+import { measureFace, rectangleAspect, focalPx, buildFacadeReport, homography, applyH, checkOpenings } from "./facadeGeometry.js";
 import { buildHouseModel, toLatLng } from "./houseGeometry.js";
 
 // A virtual camera photographing a known wall in feet: wall in the z=0
@@ -164,4 +164,93 @@ test("full report: heights, gable from pitch when unseen, openings, squares, cor
   assert.equal(rep.totals.corners.outside.count, 4);
   assert.equal(rep.totals.corners.inside.count, 0);
   assert.ok(rep.totals.squares[1].area > rep.totals.squares[0].area);
+});
+
+test("opening checks: impossible ones are flagged, doors snap to the ground, duplicates drop", () => {
+  const rect = (x0, y0, w, h) => [
+    [x0, y0 + h],
+    [x0 + w, y0 + h],
+    [x0 + w, y0],
+    [x0, y0],
+  ];
+  const op = (type, x0, y0, w, h) => ({ type, plane: rect(x0, y0, w, h), width: w, height: h, area: w * h });
+  const out = checkOpenings(
+    [
+      op("garage_door", 2, 0.4, 16, 7), // fine; bottom snaps to 0
+      op("garage_door", 2, 9, 16, 7), // floating 9 ft up → suspect
+      op("door", 25, 1.2, 3, 6.7), // entry door up two steps — fine, snapped
+      op("window", 30, 3, 5, 5),
+      op("window", 30.2, 3.1, 5, 5), // same window twice
+      op("window", 38, 3, 14, 5), // 14 ft wide window → suspect
+    ],
+    { widthFt: 40, heightFt: 18, groundWall: true },
+  );
+  const good = out.filter((o) => !o.suspect);
+  const bad = out.filter((o) => o.suspect);
+  assert.equal(good.length, 3);
+  assert.equal(bad.length, 2);
+  const garage = good.find((o) => o.type === "garage_door");
+  assert.equal(Math.min(...garage.plane.map((p) => p[1])), 0);
+  near(garage.height, 7.4, 1e-9, "garage door grows down to the slab");
+  assert.ok(bad.some((o) => o.reasons.some((r) => /above the ground/.test(r))));
+});
+
+test("two levels: an unseen upper wall isn't counted; a seen one is measured from the roof up", () => {
+  const ll = (pts) =>
+    pts.map(([x, y]) => {
+      const p = toLatLng({ lat: 41, lng: -111.9 }, x * 0.3048, y * 0.3048);
+      return [p.lat, p.lng];
+    });
+  // 40 x 30 ft two-story block, 20 x 20 ft one-story garage out front-left
+  const ground = ll([[0, -20], [20, -20], [20, 0], [40, 0], [40, 30], [0, 30]]);
+  const upper = ll([[0, 0], [40, 0], [40, 30], [0, 30]]);
+  const model = buildHouseModel({ roofOutline: ground, upperOutline: upper, overhangIn: 0, frontAz: 180 });
+  const upperFront = model.walls.find((w) => w.tier === "upper" && w.side === "front");
+  const garage = model.walls.find((w) => w.tier === "ground" && w.side === "front" && w.stories === 1);
+  // photo of the front: garage wall 20 wide x 9 tall; upper wall 20 wide,
+  // 8 ft visible above the garage roof
+  const cam = camera({ pos: [20, 5, 80], lookAt: [20, 10, 0], f: 3000 });
+  const p = (x, y) => cam.project([x, y, 0]);
+  const facesFor = (withUpper) => [
+    { wallId: garage.id, leftIsCorner: true, rightIsCorner: true, baseVisible: true, corners: { baseLeft: p(0, 0), baseRight: p(20, 0), topLeft: p(0, 9), topRight: p(20, 9) }, peakVisible: false, peak: { x: 0, y: 0 }, material: "brick", materialRegions: [], openings: [] },
+    ...(withUpper
+      ? [{ wallId: upperFront.id, leftIsCorner: true, rightIsCorner: true, baseVisible: true, corners: { baseLeft: p(0, 12), baseRight: p(20, 12), topLeft: p(0, 20), topRight: p(20, 20) }, peakVisible: false, peak: { x: 0, y: 0 }, material: "stucco", materialRegions: [], openings: [] }]
+      : []),
+  ];
+  const run = (withUpper) =>
+    buildFacadeReport(model, [{ photoId: "f", slotKind: "side", imageWidth: cam.imageWidth, imageHeight: cam.imageHeight, focal35: (3000 * 34.6) / 4032, faces: facesFor(withUpper) }], { pitch12: 6 });
+  const without = run(false).walls.find((w) => w.id === upperFront.id);
+  assert.equal(without.counted, false);
+  assert.equal(without.grossArea, 0);
+  const rep = run(true);
+  const up = rep.walls.find((w) => w.id === upperFront.id);
+  assert.equal(up.counted, true);
+  near(up.height, 8, 0.05, "visible height above the garage roof");
+  near(up.grossArea, 160, 1, "20 x 8");
+  assert.equal(rep.walls.find((w) => w.id === garage.id).stories, 1);
+  near(rep.heights.h1, 9, 0.05, "one-story height");
+  // flush two-story walls with no photo fall back to the default two-story height
+  const back = rep.walls.find((w) => w.side === "back" && w.tier === "ground");
+  assert.equal(back.stories, 2);
+  near(back.height, 18, 1e-9, "default two-story height");
+});
+
+test("benchmark scoring compares against the HOVER reference", async () => {
+  const { scoreOutline, scoreReport } = await import("./benchmark.js");
+  const fs = await import("node:fs");
+  const ref = JSON.parse(fs.readFileSync(new URL("./benchmarks/house-a-hover.json", import.meta.url)));
+  const o = scoreOutline({ footprintAreaFt2: 1876, perimeterFt: 199 }, ref);
+  assert.equal(Math.round(o[0].diffPct), 15);
+  const result = {
+    walls: [{ side: "back", byMaterial: { siding: 683 } }],
+    totals: {
+      facades: { siding: 1647, other: 744 },
+      openings: { siding: { count: 17, area: 298 }, other: { count: 10, area: 302 } },
+      squares: [{ squares: 16.94 }],
+    },
+    heights: { h1: 8.83, h2: 18.42 },
+  };
+  const rows = scoreReport(result, ref);
+  assert.equal(rows.find((r) => r.metric === "Siding facades (net)").diffPct, 0);
+  assert.equal(rows.find((r) => r.metric === "Siding, back").diffPct, 0);
 });

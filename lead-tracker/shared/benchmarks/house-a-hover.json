@@ -1,0 +1,27 @@
+{
+  "name": "Benchmark house A: two-story with a one-story front garage and wing, Davis County UT",
+  "source": "HOVER Complete Measurements report for the same house (Oct 2026)",
+  "frontAz": 180,
+  "footprint": { "areaFt2": 1629, "perimeterFt": 185.92, "widthFt": 42.08, "depthFt": 49.0 },
+  "heights": { "oneStoryFt": 8.83, "twoStoryFt": 18.42 },
+  "facades": {
+    "sidingFt2": 1647,
+    "brickFt2": 333,
+    "stuccoFt2": 411,
+    "otherFt2": 744,
+    "bySide": { "front": 17, "right": 280, "left": 667, "back": 683 }
+  },
+  "openings": {
+    "siding": { "count": 17, "areaFt2": 298, "topsFt": 57.42, "sillsFt": 58.42, "sidesFt": 151.17 },
+    "other": { "count": 10, "areaFt2": 302 },
+    "windows": 23,
+    "doors": 4,
+    "garageDoor": { "widthIn": 192, "heightIn": 96 }
+  },
+  "corners": {
+    "siding": { "insideCount": 5, "insideFt": 52.33, "outsideCount": 6, "outsideFt": 79.83 },
+    "other": { "insideCount": 4, "insideFt": 31.75, "outsideCount": 14, "outsideFt": 89.75 }
+  },
+  "squares": { "zero": 16.94, "plus10": 18.65, "plus18": 19.98 },
+  "roof": { "areaFt2": 2195, "pitch12": 7, "eavesFt": 163.58, "rakesFt": 113.42 }
+}

@@ -316,8 +316,170 @@ function roofEdgeHint(wall, roofSegments) {
   return eave >= gable ? "eave" : "gable";
 }
 
+// ---- levels (tiers) ----
+//
+// Satellite only sees the outer edge of the roof, so a house with a one-story
+// garage in front of a two-story section looks like one outline. The second
+// story's own roof edge is traced as a second, inner outline (upperOutline).
+// Where a second-story wall sits flush on a first-story wall (the back of a
+// typical two-story house) that stretch is one two-story wall from the
+// ground; where it's set back (above a garage roof) it's an upper wall that
+// starts on top of the lower roof.
+
+const FLUSH_DIST_M = 0.7;
+
+function lerp2(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+
+function edgesOf(ring) {
+  return ring.map((a, i) => {
+    const b = ring[(i + 1) % ring.length];
+    const u = norm(sub(b, a));
+    const normal = [u[1], -u[0]]; // outward for a counter-clockwise ring
+    return { a, b, lengthM: len(sub(b, a)), normalAz: azimuthOf(normal), mid: mul(add(a, b), 0.5), dir: u, n: normal };
+  });
+}
+
+// the part of `g` (as 0..1 along it) that edge `o` lies flush against
+function flushInterval(g, o) {
+  if (Math.abs(angleDiff(g.normalAz, o.normalAz)) > 12) return null;
+  if (Math.abs(dot(sub(o.mid, g.a), g.n)) > FLUSH_DIST_M) return null;
+  const ta = dot(sub(o.a, g.a), g.dir) / g.lengthM;
+  const tb = dot(sub(o.b, g.a), g.dir) / g.lengthM;
+  const lo = Math.max(0, Math.min(ta, tb));
+  const hi = Math.min(1, Math.max(ta, tb));
+  return (hi - lo) * g.lengthM >= 0.3 ? [lo, hi] : null;
+}
+
+// splits an edge into pieces flagged flush / not flush against `others`
+function splitEdge(g, others) {
+  const iv = others
+    .map((o) => flushInterval(g, o))
+    .filter(Boolean)
+    .sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const [lo, hi] of iv) {
+    const last = merged[merged.length - 1];
+    if (last && lo <= last[1] + 1e-6) last[1] = Math.max(last[1], hi);
+    else merged.push([lo, hi]);
+  }
+  const pieces = [];
+  let t = 0;
+  for (const [lo, hi] of merged) {
+    if (lo - t > 0.3 / g.lengthM) pieces.push([t, lo, false]);
+    pieces.push([lo, hi, true]);
+    t = hi;
+  }
+  if (1 - t > 0.3 / g.lengthM || !pieces.length) pieces.push([t, 1, false]);
+  return pieces.map(([t0, t1, flush]) => {
+    const a = lerp2(g.a, g.b, t0);
+    const b = lerp2(g.a, g.b, t1);
+    return { a, b, lengthM: len(sub(b, a)), normalAz: g.normalAz, mid: mul(add(a, b), 0.5), flush };
+  });
+}
+
+// how far an upper wall sits back from the outer (ground-level) walls in
+// front of it: the width of lower roof it rises from
+function setbackFrom(groundEdges, p, normalAz) {
+  const d = dirFromAzimuth(normalAz);
+  let best = null;
+  for (const g of groundEdges) {
+    const e = sub(g.b, g.a);
+    const den = cross(d, e);
+    if (Math.abs(den) < 1e-9) continue;
+    const ap = sub(g.a, p);
+    const t = cross(ap, e) / den;
+    const s = cross(ap, d) / den;
+    if (t > 0.05 && s >= -0.01 && s <= 1.01 && (best == null || t < best)) best = t;
+  }
+  return best;
+}
+
+// Rough upper-story outline from Google's roof planes, as a starting point
+// to drag into place: the house's high (main) roof planes, as a rectangle
+// lined up with the house. Uses plane heights when Google gave them,
+// otherwise plane size (the main roof's planes are the big ones).
+export function suggestUpperOutline(project) {
+  const segs = (project && project.roof && project.roof.segments) || [];
+  const outline = project && project.roofOutline;
+  if (!outline || outline.length < 3 || segs.length < 2) return null;
+  const origin = centroidLatLng(outline);
+  const frontAz = Number.isFinite(project.frontAz) ? project.frontAz : 180;
+  const f = dirFromAzimuth(frontAz);
+  const r = dirFromAzimuth(frontAz - 90);
+
+  let upper;
+  const withH = segs.filter((s) => Number.isFinite(s.heightM));
+  if (withH.length >= 2) {
+    const hs = withH.map((s) => s.heightM).sort((a, b) => a - b);
+    let gap = 0;
+    let cut = null;
+    for (let i = 1; i < hs.length; i++)
+      if (hs[i] - hs[i - 1] > gap) {
+        gap = hs[i] - hs[i - 1];
+        cut = (hs[i] + hs[i - 1]) / 2;
+      }
+    upper = gap >= 1.2 ? withH.filter((s) => s.heightM > cut) : null;
+  }
+  if (!upper) {
+    const maxA = Math.max(...segs.map((s) => s.areaM2 || 0));
+    upper = segs.filter((s) => (s.areaM2 || 0) >= maxA * 0.35);
+  }
+  if (!upper.length || upper.length === segs.length) return null;
+
+  const toFR = (lat, lng) => {
+    const p = toLocal(origin, lat, lng);
+    return [dot(p, f), dot(p, r)];
+  };
+  let pts = [];
+  for (const s of upper) {
+    if (s.bbox && s.bbox.sw && s.bbox.ne) {
+      const { sw, ne } = s.bbox;
+      pts.push(toFR(sw.lat, sw.lng), toFR(sw.lat, ne.lng), toFR(ne.lat, ne.lng), toFR(ne.lat, sw.lng));
+    }
+  }
+  if (!pts.length) {
+    // no bounding boxes on file: size a rectangle from the planes' total
+    // footprint, centered on them, long side along the main ridge
+    const area = upper.reduce((t, s) => t + (s.areaM2 || 0) * Math.cos(((s.pitchDeg || 30) * Math.PI) / 180), 0);
+    const cs = upper.filter((s) => s.center).map((s) => toFR(s.center.lat, s.center.lng));
+    const c = [cs.reduce((t, p) => t + p[0], 0) / cs.length, cs.reduce((t, p) => t + p[1], 0) / cs.length];
+    // planes facing the sides (not the front/back) mean a ridge running front to back
+    const ridgeAlongF = upper.some((s) => Math.abs(Math.cos(((s.azimuthDeg - frontAz) * Math.PI) / 180)) < 0.5);
+    const short = Math.sqrt(area / 1.3);
+    const long = area / short;
+    const [hf, hr] = ridgeAlongF ? [long / 2, short / 2] : [short / 2, long / 2];
+    pts = [
+      [c[0] - hf, c[1] - hr],
+      [c[0] + hf, c[1] + hr],
+    ];
+  }
+  const ofr = outline.map(([lat, lng]) => toFR(lat, lng));
+  const clampF = (v) => Math.min(Math.max(v, Math.min(...ofr.map((p) => p[0]))), Math.max(...ofr.map((p) => p[0])));
+  const clampR = (v) => Math.min(Math.max(v, Math.min(...ofr.map((p) => p[1]))), Math.max(...ofr.map((p) => p[1])));
+  const F = [clampF(Math.min(...pts.map((p) => p[0]))), clampF(Math.max(...pts.map((p) => p[0])))];
+  const R = [clampR(Math.min(...pts.map((p) => p[1]))), clampR(Math.max(...pts.map((p) => p[1])))];
+  if (F[1] - F[0] < 2 || R[1] - R[0] < 2) return null;
+  return [
+    [F[0], R[0]],
+    [F[0], R[1]],
+    [F[1], R[1]],
+    [F[1], R[0]],
+  ].map(([a, b]) => {
+    const p = add(mul(f, a), mul(r, b));
+    const ll = toLatLng(origin, p[0], p[1]);
+    return [ll.lat, ll.lng];
+  });
+}
+
 // The whole derived model for a measurement project. `project` holds what's
-// stored: { roofOutline: [[lat, lng], ...], overhangIn, frontAz, roof }.
+// stored: { roofOutline: [[lat, lng], ...], upperOutline?, overhangIn,
+// frontAz, roof }. Every wall has:
+//   tier "ground" — stands on the ground: stories 1 or 2 (null when the
+//                   house has no upper outline, i.e. unknown)
+//   tier "upper"  — a second-story wall set back above a lower roof;
+//                   setbackM is that roof's width in front of it
 export function buildHouseModel(project) {
   const outline = project && Array.isArray(project.roofOutline) ? project.roofOutline : [];
   if (outline.length < 3) return null;
@@ -325,62 +487,103 @@ export function buildHouseModel(project) {
   let roofLocal = outline.map(([lat, lng]) => toLocal(origin, lat, lng));
   if (signedArea(roofLocal) < 0) roofLocal = roofLocal.reverse();
   const overhangIn = Number.isFinite(project.overhangIn) ? project.overhangIn : DEFAULT_OVERHANG_IN;
-  const wallLocal = insetPolygon(roofLocal, overhangIn / IN_PER_M);
+  const inset = overhangIn / IN_PER_M;
+  const wallLocal = insetPolygon(roofLocal, inset);
   const frontAz = Number.isFinite(project.frontAz) ? project.frontAz : null;
+
+  let upperRoofLocal = null;
+  let upperWallLocal = null;
+  if (Array.isArray(project.upperOutline) && project.upperOutline.length >= 3) {
+    upperRoofLocal = project.upperOutline.map(([lat, lng]) => toLocal(origin, lat, lng));
+    if (signedArea(upperRoofLocal) < 0) upperRoofLocal = upperRoofLocal.reverse();
+    upperWallLocal = insetPolygon(upperRoofLocal, inset);
+  }
 
   const roofSegments = (project.roof && project.roof.segments ? project.roof.segments : []).map((s) => ({
     ...s,
     local: s.center ? toLocal(origin, s.center.lat, s.center.lng) : null,
   }));
 
-  const raw = wallLocal.map((a, i) => {
-    const b = wallLocal[(i + 1) % wallLocal.length];
-    const u = norm(sub(b, a));
-    const normal = [u[1], -u[0]]; // outward for a counter-clockwise ring
-    return { a, b, lengthM: len(sub(b, a)), normalAz: azimuthOf(normal), mid: mul(add(a, b), 0.5) };
-  });
+  // start numbering at the front (longest front edge), else the southmost
+  const startIndex = (edges) => {
+    let start = 0;
+    let best = -Infinity;
+    edges.forEach((w, i) => {
+      const score = frontAz != null ? (sideFor(w.normalAz, frontAz) === "front" ? 1000 + w.lengthM : -1) : -w.mid[1];
+      if (score > best) {
+        best = score;
+        start = i;
+      }
+    });
+    return start;
+  };
+  const rotate = (arr, k) => arr.slice(k).concat(arr.slice(0, k));
 
-  // number walls starting at the front (longest front wall first), else at
-  // the southern-most wall, then counter-clockwise around the house
-  let start = 0;
-  let best = -Infinity;
-  raw.forEach((w, i) => {
-    const score =
-      frontAz != null
-        ? sideFor(w.normalAz, frontAz) === "front"
-          ? 1000 + w.lengthM
-          : -1
-        : -w.mid[1];
-    if (score > best) {
-      best = score;
-      start = i;
-    }
-  });
-  const ordered = raw.slice(start).concat(raw.slice(0, start));
+  const groundEdges = edgesOf(wallLocal);
+  const upperEdges = upperWallLocal ? edgesOf(upperWallLocal) : [];
+  const gStart = startIndex(groundEdges);
+  const groundOrdered = rotate(groundEdges, gStart);
+  const groundPieces = groundOrdered.flatMap((g) =>
+    splitEdge(g, upperEdges).map((p) => ({ ...p, tier: "ground", stories: upperWallLocal ? (p.flush ? 2 : 1) : null })),
+  );
+  const uStart = upperEdges.length ? startIndex(upperEdges) : 0;
+  const upperRing = rotate(upperEdges, uStart).map((u) => splitEdge(u, groundEdges));
+  const upperPieces = upperRing.flat().filter((p) => !p.flush).map((p) => ({
+    ...p,
+    tier: "upper",
+    stories: null,
+    setbackM: setbackFrom(groundEdges, p.mid, p.normalAz),
+  }));
+
+  const all = [...groundPieces, ...upperPieces];
   const sideCounts = {};
-  const walls = ordered.map((w, i) => {
+  const walls = all.map((w, i) => {
     const side = sideFor(w.normalAz, frontAz);
-    sideCounts[side] = (sideCounts[side] || 0) + 1;
-    return { ...w, id: `W${i + 1}`, side, sideIndex: sideCounts[side] };
+    const key = `${w.tier}:${side}`;
+    sideCounts[key] = (sideCounts[key] || 0) + 1;
+    const { flush, ...rest } = w;
+    return { ...rest, id: `W${i + 1}`, side, sideIndex: sideCounts[key] };
   });
   for (const w of walls) {
-    const many = sideCounts[w.side] > 1;
-    w.label = w.side
-      ? `${SIDE_LABEL[w.side]}${many ? ` ${String.fromCharCode(64 + w.sideIndex)}` : ""}`
-      : `Wall ${w.id.slice(1)}`;
+    const many = sideCounts[`${w.tier}:${w.side}`] > 1;
+    const base = w.side ? SIDE_LABEL[w.side] : `Wall ${w.id.slice(1)}`;
+    const letter = many ? ` ${String.fromCharCode(64 + w.sideIndex)}` : "";
+    w.label = w.tier === "upper" ? `Upper ${base.toLowerCase()}${letter}` : `${base}${letter}`;
     w.lengthIn = w.lengthM * IN_PER_M;
     w.roofEdge = roofEdgeHint(w, roofSegments);
+  }
+
+  // corners where two upper walls meet above the lower roof (the ground
+  // ring's corners are found from the ground walls in order)
+  const upperCorners = [];
+  if (upperRing.length) {
+    const pieceId = (p) => walls.find((w) => w.tier === "upper" && w.a[0] === p.a[0] && w.a[1] === p.a[1])?.id || null;
+    for (let i = 0; i < upperRing.length; i++) {
+      const lastOfThis = upperRing[i][upperRing[i].length - 1];
+      const firstOfNext = upperRing[(i + 1) % upperRing.length][0];
+      if (lastOfThis.flush && firstOfNext.flush) continue;
+      const e1 = sub(lastOfThis.b, lastOfThis.a);
+      const e2 = sub(firstOfNext.b, firstOfNext.a);
+      const turn = cross(e1, e2);
+      if (Math.abs(turn) < 1e-6) continue;
+      upperCorners.push({ outside: turn > 0, wallIds: [lastOfThis, firstOfNext].filter((p) => !p.flush).map(pieceId).filter(Boolean) });
+    }
   }
 
   return {
     origin,
     roofLocal,
-    wallLocal: ordered.map((w) => w.a),
+    wallLocal: groundOrdered.map((w) => w.a),
+    upperRoofLocal,
+    upperWallLocal,
     walls,
+    groundRing: walls.filter((w) => w.tier === "ground").map((w) => w.id),
+    upperCorners,
+    hasUpper: !!upperWallLocal,
     frontAz,
     overhangIn,
     footprintAreaFt2: Math.abs(signedArea(wallLocal)) * 10.7639,
-    perimeterFt: walls.reduce((s, w) => s + w.lengthM, 0) * 3.28084,
+    perimeterFt: groundEdges.reduce((s, w) => s + w.lengthM, 0) * 3.28084,
     pitch12: project.roof && Number.isFinite(project.roof.predominantPitchDeg) ? rise12FromDeg(project.roof.predominantPitchDeg) : null,
   };
 }
@@ -435,6 +638,7 @@ function castRay(model, p, dir) {
   let hit = null;
   let bestT = Infinity;
   for (const w of model.walls) {
+    if (w.tier === "upper") continue; // above the lower roof — the outer walls are what a sight line hits
     const e = sub(w.b, w.a);
     const denom = cross(dir, e);
     if (Math.abs(denom) < 1e-9) continue;
@@ -493,6 +697,7 @@ export function assignShotProbabilities(model, shot, seedKey = "") {
   // no location — fall back on which walls face the camera at all; walls on
   // the same side tie, and the burst/sequence prior in assignShots breaks it
   for (const w of model.walls) {
+    if (w.tier === "upper") continue;
     const theta = Math.abs(angleDiff(shot.heading, w.normalAz + 180));
     if (theta > 80) continue;
     const s = Math.exp(-((theta / 40) ** 2)) * Math.min(1, w.lengthM / 4);
@@ -707,6 +912,6 @@ export function wallForSlot(model, slotKey, sensorWallId) {
   if (!model || !slot) return null;
   const sensed = sensorWallId && model.walls.find((w) => w.id === sensorWallId);
   if (sensed && slot.sides.includes(sensed.side)) return sensed.id;
-  const onSide = model.walls.filter((w) => w.side === slot.sides[0]).sort((a, b) => b.lengthM - a.lengthM);
+  const onSide = model.walls.filter((w) => w.side === slot.sides[0] && w.tier !== "upper").sort((a, b) => b.lengthM - a.lengthM);
   return onSide[0] ? onSide[0].id : null;
 }

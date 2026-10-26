@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
 import { slotByKey } from "../../../shared/houseGeometry.js";
 import { buildFacadeReport } from "../../../shared/facadeGeometry.js";
-import { markUpPhoto, prepareImage, visionContext, cacheKey, VISION_MODEL, PROMPT_VERSION } from "./vision.js";
+import { markUpPhoto, prepareImage, visionContext, cacheKey, zoomCrop, mapFaceBack, wallListText, VISION_MODEL, PROMPT_VERSION } from "./vision.js";
 import { MEASURE_PHOTOS_DIR } from "./photos.js";
 
 const CONCURRENCY = 3;
@@ -64,18 +64,69 @@ async function markUpOne(photo, model, markUp) {
     lens: sensors.lens || exif.lensModel || null,
   };
 
+  const filePath = path.join(MEASURE_PHOTOS_DIR, photo.filename);
+  const save = (imageWidth, imageHeight, markup, cost) =>
+    db
+      .prepare(
+        `INSERT OR REPLACE INTO measure_photo_markups (photoId, cacheKey, imageWidth, imageHeight, markup, costUsd, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(photo.id, key, imageWidth, imageHeight, JSON.stringify(markup), cost, new Date().toISOString());
+
+  let imageWidth;
+  let imageHeight;
+  let markup;
+  let cost = 0;
+  let prevCost = 0;
   const cached = db.prepare(`SELECT * FROM measure_photo_markups WHERE photoId = ? AND cacheKey = ?`).get(photo.id, key);
   if (cached) {
-    return { ...base, imageWidth: cached.imageWidth, imageHeight: cached.imageHeight, ...parse(cached.markup, { faces: [] }), cost: 0, cached: true };
+    imageWidth = cached.imageWidth;
+    imageHeight = cached.imageHeight;
+    markup = parse(cached.markup, { faces: [] });
+    prevCost = cached.costUsd || 0;
+  } else {
+    const image = await prepareImage(filePath);
+    const { cost: c = 0, ...keep } = await markUp({ image, contextText: ctx.text, wallIds });
+    imageWidth = image.width;
+    imageHeight = image.height;
+    markup = keep;
+    cost += c;
+    save(imageWidth, imageHeight, markup, prevCost + cost);
   }
 
-  const image = await prepareImage(path.join(MEASURE_PHOTOS_DIR, photo.filename));
-  const markup = await markUp({ image, contextText: ctx.text, wallIds });
-  const { cost = 0, ...keep } = markup;
-  db.prepare(
-    `INSERT OR REPLACE INTO measure_photo_markups (photoId, cacheKey, imageWidth, imageHeight, markup, costUsd, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(photo.id, key, image.width, image.height, JSON.stringify(keep), cost, new Date().toISOString());
-  return { ...base, imageWidth: image.width, imageHeight: image.height, ...keep, cost, cached: false };
+  // second, zoomed-in look at each of the photo's main walls (up to 3,
+  // biggest first) for more precise corners and openings
+  if (markup.usable && !markup.zoomed) {
+    const span = (f) => {
+      const c = f.corners || {};
+      const p = [c.baseLeft, c.baseRight, c.topLeft, c.topRight].filter(Boolean);
+      if (p.length < 4) return 0;
+      return (Math.max(...p.map((q) => q.x)) - Math.min(...p.map((q) => q.x))) * (Math.max(...p.map((q) => q.y)) - Math.min(...p.map((q) => q.y)));
+    };
+    const targets = (markup.faces || [])
+      .map((f, i) => ({ f, i }))
+      .filter(({ f }) => model.walls.some((w) => w.id === f.wallId))
+      .sort((a, b) => span(b.f) - span(a.f))
+      .slice(0, 3);
+    const faces = [...(markup.faces || [])];
+    for (const { f, i } of targets) {
+      try {
+        const crop = await zoomCrop(filePath, { width: imageWidth, height: imageHeight }, f);
+        if (!crop) continue;
+        const wall = model.walls.find((w) => w.id === f.wallId);
+        const line = wallListText(model, [wall.side]).split("\n").find((l) => l.trim().startsWith(`${wall.id}:`)) || "";
+        const zoomText = `This crop shows wall ${wall.id} (${wall.label}), from ${ctx.text.split("\n")[0].replace(/^This photo is /, "a photo that is ")}\n${line.trim()}\nMark only ${wall.id}.`;
+        const { cost: c = 0, ...z } = await markUp({ image: crop.image, contextText: zoomText, wallIds: [wall.id], zoom: true });
+        cost += c;
+        const zf = (z.faces || []).find((x) => x.wallId === wall.id);
+        if (z.usable && zf) faces[i] = { ...mapFaceBack(zf, crop.back), zoomed: true };
+      } catch {
+        // keep the first look for this wall
+      }
+    }
+    markup = { ...markup, faces, zoomed: true };
+    save(imageWidth, imageHeight, markup, prevCost + cost);
+  }
+  return { ...base, imageWidth, imageHeight, ...markup, cost, cached: !!cached && cost === 0 };
 }
 
 // Starts a report and returns its id right away; the work continues in the

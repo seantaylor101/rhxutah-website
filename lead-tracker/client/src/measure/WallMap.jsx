@@ -61,9 +61,11 @@ export default function WallMap({
   onPickFront,
   selectedWallId,
   onSelectWall,
+  onSuggestUpper,
 }) {
   const svgRef = useRef(null);
   const [editing, setEditing] = useState(false);
+  const [layer, setLayer] = useState("main"); // which outline is being edited: main | upper
   const [draft, setDraft] = useState(null); // [[lat, lng], ...] while editing
   const [selIdx, setSelIdx] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -72,21 +74,28 @@ export default function WallMap({
   // purpose so it does NOT re-center on the outline while a corner is being
   // dragged (that made the picture slide under the finger and the corner run)
   const [viewState, setViewState] = useState(null);
+  const [showLengths, setShowLengths] = useState(true);
   const gesture = useRef({ pointers: new Map(), mode: null });
 
   const sat = project?.satellite;
   const satKey = sat ? `${sat.lat},${sat.lng},${sat.zoom}` : "";
   const proj = useMemo(() => (sat ? makeProjector(sat) : null), [satKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const outline = editing && draft ? draft : project?.roofOutline || [];
+  const layerKey = layer === "upper" ? "upperOutline" : "roofOutline";
+  const outline = project?.roofOutline || [];
+  const mainRing = editing && layer === "main" && draft ? draft : outline;
+  const upperRing = editing && layer === "upper" && draft ? draft : project?.upperOutline || null;
   const shownModel = useMemo(
-    () => (editing && draft ? buildHouseModel({ ...project, roofOutline: draft }) : model),
-    [editing, draft, project, model],
+    () => (editing && draft ? buildHouseModel({ ...project, [layerKey]: draft }) : model),
+    [editing, draft, project, model, layerKey],
   );
   useEffect(() => setViewState(null), [satKey, leadId]);
 
   if (!proj || outline.length < 3) return null;
 
-  const roofPx = outline.map(([lat, lng]) => proj.toPx(lat, lng));
+  const mainPx = mainRing.map(([lat, lng]) => proj.toPx(lat, lng));
+  const upperPx = upperRing && upperRing.length >= 3 ? upperRing.map(([lat, lng]) => proj.toPx(lat, lng)) : null;
+  // the ring whose corners are draggable right now
+  const roofPx = editing ? (layer === "upper" ? upperPx || [] : mainPx) : mainPx;
   const localToPx = (x, y) => {
     const ll = toLatLng(shownModel.origin, x, y);
     return proj.toPx(ll.lat, ll.lng);
@@ -106,9 +115,30 @@ export default function WallMap({
 
   const zoomBy = (factor) => setViewState(clampView({ ...view, size: view.size * factor }));
 
-  const startEdit = () => {
-    setDraft(project.roofOutline.map((p) => p.slice()));
+  const startEdit = async (which) => {
+    setLayer(which);
     setSelIdx(null);
+    if (which === "upper") {
+      let ring = project.upperOutline;
+      if (!ring || ring.length < 3) {
+        // start from Google's roof planes when possible, else a box in the
+        // middle of the house to drag into place
+        ring = (onSuggestUpper && (await onSuggestUpper().catch(() => null))) || null;
+        if (!ring) {
+          const xs = outline.map((p) => p[0]);
+          const ys = outline.map((p) => p[1]);
+          const [cy, cx] = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+          const [hy, hx] = [(Math.max(...xs) - Math.min(...xs)) * 0.3, (Math.max(...ys) - Math.min(...ys)) * 0.3];
+          ring = [
+            [cy - hy, cx - hx],
+            [cy - hy, cx + hx],
+            [cy + hy, cx + hx],
+            [cy + hy, cx - hx],
+          ];
+        }
+      }
+      setDraft(ring.map((p) => p.slice()));
+    } else setDraft(project.roofOutline.map((p) => p.slice()));
     setEditing(true);
   };
 
@@ -205,7 +235,7 @@ export default function WallMap({
   const save = async () => {
     setSaving(true);
     try {
-      await onSaveOutline({ roofOutline: draft });
+      await onSaveOutline({ [layerKey]: draft });
       setEditing(false);
       setDraft(null);
     } finally {
@@ -250,16 +280,28 @@ export default function WallMap({
             />
           )}
           <polygon
-            points={roofPx.map((p) => p.join(",")).join(" ")}
+            points={mainPx.map((p) => p.join(",")).join(" ")}
             fill="rgba(255,176,32,0.12)"
             stroke={C.roofLine}
             strokeWidth={1.4 * unit}
-            strokeDasharray={editing ? "none" : `${3 * unit} ${2 * unit}`}
+            strokeDasharray={editing && layer === "main" ? "none" : `${3 * unit} ${2 * unit}`}
+            opacity={editing && layer === "upper" ? 0.5 : 1}
           />
+          {upperPx && (
+            <polygon
+              points={upperPx.map((p) => p.join(",")).join(" ")}
+              fill="rgba(79,195,247,0.14)"
+              stroke={C.wallLive}
+              strokeWidth={1.4 * unit}
+              strokeDasharray={editing && layer === "upper" ? "none" : `${3 * unit} ${2 * unit}`}
+              opacity={editing && layer === "main" ? 0.5 : 1}
+            />
+          )}
           {walls.map((w) => {
             const a = localToPx(w.a[0], w.a[1]);
             const b = localToPx(w.b[0], w.b[1]);
-            const color = editing || !coverage ? "#fff" : coverageColor(coverage[w.id]);
+            // white: one story · yellow: two stories from the ground · blue: upper wall above a lower roof
+            const color = w.tier === "upper" ? C.wallLive : w.stories === 2 ? "#FFE066" : editing || !coverage ? "#fff" : coverageColor(coverage[w.id]);
             const selected = selectedWallId === w.id;
             return (
               <g key={w.id}>
@@ -284,20 +326,27 @@ export default function WallMap({
             walls.map((w) => {
               // label just outside the wall, along its outward normal
               const n = [Math.sin((w.normalAz * Math.PI) / 180), Math.cos((w.normalAz * Math.PI) / 180)];
-              const p = localToPx(w.mid[0] + n[0] * 1.6, w.mid[1] + n[1] * 1.6);
+              // upper walls are labeled on their inner side so they don't
+              // collide with the outer walls' labels
+              const off = w.tier === "upper" ? -1.4 : 1.6;
+              const p = localToPx(w.mid[0] + n[0] * off, w.mid[1] + n[1] * off);
+              const ft = Math.floor((w.lengthM * 3.28084 * 12 + 0.5) / 12);
+              const inch = Math.round(w.lengthM * 3.28084 * 12 - ft * 12);
+              const text = showLengths ? `${w.id} ${ft}'${inch ? ` ${inch}"` : ""}` : w.id;
+              const wpx = (text.length * 5.6 + 6) * unit;
               return (
                 <g key={`l-${w.id}`} style={{ pointerEvents: "none" }}>
-                  <rect x={p[0] - 11 * unit} y={p[1] - 6.5 * unit} width={22 * unit} height={13 * unit} rx={3 * unit} fill="rgba(0,0,0,0.72)" />
+                  <rect x={p[0] - wpx / 2} y={p[1] - 6.5 * unit} width={wpx} height={13 * unit} rx={3 * unit} fill="rgba(0,0,0,0.72)" />
                   <text
                     x={p[0]}
                     y={p[1] + 3.6 * unit}
                     textAnchor="middle"
-                    fontSize={10 * unit}
+                    fontSize={9.5 * unit}
                     fontFamily={FONT_BODY}
                     fontWeight={700}
-                    fill={w.side === "front" ? C.roofLine : "#fff"}
+                    fill={w.tier === "upper" ? C.wallLive : w.side === "front" ? C.roofLine : "#fff"}
                   >
-                    {w.id}
+                    {text}
                   </text>
                 </g>
               );
@@ -361,16 +410,30 @@ export default function WallMap({
 
       {editable && !editing && (
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          <button style={btnSecondary} onClick={startEdit}>
+          <button style={btnSecondary} onClick={() => startEdit("main")}>
             Adjust outline
+          </button>
+          <button style={btnSecondary} onClick={() => startEdit("upper")}>
+            {project.upperOutline ? "Adjust upper story" : "+ Add upper story"}
+          </button>
+          <button style={{ ...btnSecondary, padding: "9px 10px" }} onClick={() => setShowLengths((v) => !v)}>
+            {showLengths ? "Hide lengths" : "Show lengths"}
           </button>
         </div>
       )}
       {editing && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
-            Drag the corners onto the roof edge (the outside of the gutters). Pinch or use + / − to zoom in for
-            accuracy, drag the picture to move around. Tap a small + on an edge to add a corner.
+            {layer === "upper" ? (
+              <>
+                <b>Upper story (blue):</b> drag its corners onto the edge of the <b>higher</b> roof, the part of the house that's two stories
+                tall. Leave out the garage and any one-story wings. Where the upper story sits flush on the wall below (often the back), put
+                its edge right on the outer outline.
+              </>
+            ) : (
+              <>Drag the corners onto the roof edge (the outside of the gutters).</>
+            )}{" "}
+            Pinch or use + / − to zoom in for accuracy, drag the picture to move around. Tap a small + on an edge to add a corner.
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button style={btnSecondary} onClick={squareUp}>
@@ -386,6 +449,25 @@ export default function WallMap({
             >
               Delete corner
             </button>
+            {layer === "upper" && project.upperOutline && (
+              <button
+                style={{ ...btnSecondary, color: C.rust }}
+                disabled={saving}
+                onClick={async () => {
+                  if (!window.confirm("Remove the upper story? The house goes back to one outline.")) return;
+                  setSaving(true);
+                  try {
+                    await onSaveOutline({ upperOutline: null });
+                    setEditing(false);
+                    setDraft(null);
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                Remove upper story
+              </button>
+            )}
             <div style={{ flex: 1 }} />
             <button
               style={btnSecondary}
@@ -397,14 +479,15 @@ export default function WallMap({
               Cancel
             </button>
             <button style={btnPrimary} disabled={saving} onClick={save}>
-              {saving ? "Saving…" : "Save outline"}
+              {saving ? "Saving…" : layer === "upper" ? "Save upper story" : "Save outline"}
             </button>
           </div>
         </div>
       )}
       {!editing && shownModel && (
         <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.muted, marginTop: 6 }}>
-          Orange dashes = roof edge from above. Solid = walls ({Math.round(shownModel.overhangIn)}" overhang in).
+          Orange dashes = roof edge from above{shownModel.hasUpper ? ", blue = upper story's roof edge" : ""}. Lines = walls (
+          {Math.round(shownModel.overhangIn)}" overhang in){shownModel.hasUpper ? ": white one story, yellow two stories, blue above a lower roof" : ""}.
         </div>
       )}
     </div>

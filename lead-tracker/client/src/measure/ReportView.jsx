@@ -39,9 +39,13 @@ function Table({ head, rows }) {
   );
 }
 
+// height of the wall's own rectangle (upper walls: above the lower roof);
+// reports saved before levels existed only had eaveHeight
+const hOf = (wall) => wall.height ?? wall.eaveHeight;
+
 // elevation drawing of one wall, in feet, like a HOVER wall page
 function WallDrawing({ wall }) {
-  const top = Math.max(wall.eaveHeight, wall.peakHeight || 0);
+  const top = Math.max(hOf(wall), wall.peakHeight || 0);
   const pad = Math.max(2.5, wall.widthFt * 0.06);
   const vb = [-pad, -top - pad, wall.widthFt + pad * 2, top + pad * 2.2];
   const s = vb[2] / 340; // ≈ one screen px
@@ -69,24 +73,32 @@ function WallDrawing({ wall }) {
           </g>
         );
       })}
+      {(wall.suspectOpenings || []).map((o, i) => (
+        <polygon key={`s${i}`} points={pts(o.plane)} fill="none" stroke={C.rust} strokeWidth={1.2 * s} strokeDasharray={`${4 * s} ${3 * s}`} />
+      ))}
+      {wall.tier === "upper" && (
+        <text x={wall.widthFt / 2} y={pad * 0.55 + 24 * s} textAnchor="middle" fontSize={9.5 * s} fill={C.muted} fontFamily={FONT_BODY}>
+          bottom edge = where it meets the lower roof
+        </text>
+      )}
       {/* width along the bottom */}
       <line x1={0} y1={pad * 0.55} x2={wall.widthFt} y2={pad * 0.55} stroke="#3B5BDB" strokeWidth={s} />
       <text x={wall.widthFt / 2} y={pad * 0.55 + 12 * s} textAnchor="middle" fontSize={11 * s} fill="#3B5BDB" fontFamily={FONT_BODY} fontWeight={700}>
         {fmtFtIn(wall.widthFt)}
       </text>
       {/* eave height up the left */}
-      <line x1={-pad * 0.45} y1={0} x2={-pad * 0.45} y2={-wall.eaveHeight} stroke="#3B5BDB" strokeWidth={s} />
+      <line x1={-pad * 0.45} y1={0} x2={-pad * 0.45} y2={-hOf(wall)} stroke="#3B5BDB" strokeWidth={s} />
       <text
         x={-pad * 0.45 - 4 * s}
-        y={-wall.eaveHeight / 2}
+        y={-hOf(wall) / 2}
         textAnchor="middle"
         fontSize={11 * s}
         fill="#3B5BDB"
         fontFamily={FONT_BODY}
         fontWeight={700}
-        transform={`rotate(-90 ${-pad * 0.45 - 4 * s} ${-wall.eaveHeight / 2})`}
+        transform={`rotate(-90 ${-pad * 0.45 - 4 * s} ${-hOf(wall) / 2})`}
       >
-        {fmtFtIn(wall.eaveHeight)}
+        {fmtFtIn(hOf(wall))}
       </text>
       {wall.peakHeight && (
         <text x={wall.widthFt / 2} y={-wall.peakHeight - 5 * s} textAnchor="middle" fontSize={10 * s} fill="#3B5BDB" fontFamily={FONT_BODY}>
@@ -135,10 +147,19 @@ function WallCard({ wall, photo }) {
         <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 16 }}>
           {wall.id} · {wall.label}
         </div>
-        <div style={{ fontSize: 12.5, color: wall.measured ? C.accent : C.amber, fontWeight: 700 }}>{wall.measured ? "Measured" : "Estimated"}</div>
+        <div style={{ fontSize: 12.5, color: wall.measured ? C.accent : C.amber, fontWeight: 700 }}>
+          {wall.measured ? "Measured" : wall.counted === false ? "Not counted" : "Estimated"}
+        </div>
       </div>
       <div style={{ fontSize: 13, color: C.muted, margin: "2px 0 8px" }}>
-        {fmtFtIn(wall.widthFt)} wide × {fmtFtIn(wall.eaveHeight)} to eave
+        {wall.tier === "upper"
+          ? `Upper story above the lower roof${wall.setbackFt ? ` (set back ${Math.round(wall.setbackFt)} ft)` : ""} · `
+          : wall.stories === 2
+            ? "Two stories · "
+            : wall.stories === 1
+              ? "One story · "
+              : ""}
+        {fmtFtIn(wall.widthFt)} wide × {fmtFtIn(hOf(wall))} {wall.tier === "upper" ? "visible" : "to eave"}
         {wall.peakHeight ? `, ${fmtFtIn(wall.peakHeight)} at peak` : ""} · {ft2(wall.grossArea)}
         {wall.openings.length ? ` · ${wall.openings.length} opening${wall.openings.length === 1 ? "" : "s"} (${ft2(openArea)})` : ""}
       </div>
@@ -204,11 +225,24 @@ export default function ReportView({ report, leadName, onClose, onRerun, rerunni
           <Table
             head={["Areas", "Siding", "Other"]}
             rows={[
-              ["Facades", ft2(t.facades.siding), ft2(t.facades.other)],
+              Object.assign(["Facades (net of openings)", ft2(t.facades.siding), ft2(t.facades.other)], { bold: true }),
               ["Openings", ft2(o.siding.area), ft2(o.other.area)],
-              Object.assign(["Net (facades − openings)", ft2(t.sidingNet), ft2(t.otherNet)], { bold: true }),
+              ["Total wall area", ft2(t.gross ? t.gross.siding : t.facades.siding + o.siding.area), ft2(t.gross ? t.gross.other : t.facades.other + o.other.area)],
             ]}
           />
+          <div style={{ fontSize: 12, color: C.muted, margin: "-8px 0 12px" }}>
+            Same as HOVER: "Siding" is lap/panel siding; brick, stucco and stone are "Other". Facades are after window and door deductions.
+            {t.suspectOpenings ? ` ${t.suspectOpenings} opening(s) looked wrong and weren't deducted — see the walls marked ⚠︎.` : ""}
+          </div>
+          {r.heights && (
+            <Table
+              head={["Wall heights used", ""]}
+              rows={[
+                ["One story (ground to eave)", fmtFtIn(r.heights.h1)],
+                ["Two story (ground to eave)", fmtFtIn(r.heights.h2)],
+              ]}
+            />
+          )}
           <Table
             head={["Siding waste totals", "Area", "Squares"]}
             rows={t.squares.map((x) => [x.pct ? `+${x.pct}%` : "Zero waste", ft2(x.area), sq(x.squares)])}

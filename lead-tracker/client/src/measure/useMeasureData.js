@@ -14,6 +14,7 @@ export function useMeasureData(leadId) {
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [duplicates, setDuplicates] = useState(0); // copies turned away this visit
   const mounted = useRef(true);
 
   const accept = useCallback(
@@ -62,6 +63,7 @@ export function useMeasureData(leadId) {
         setOffline(false);
       }
       if (e.type === "error" && e.retryable) setOffline(true);
+      if (e.type === "duplicate") setDuplicates((n) => n + 1);
       refreshQueued();
     });
     // the browser's own online/offline flag — the upload queue doesn't even
@@ -135,6 +137,7 @@ export function useMeasureData(leadId) {
     photos: derived.photos,
     coverage: derived.coverage,
     queuedCount: queued.length,
+    duplicates,
     offline,
     error,
     loading,

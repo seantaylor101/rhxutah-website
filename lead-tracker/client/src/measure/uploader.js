@@ -51,6 +51,12 @@ export async function kickUploads() {
         blocked = null;
         notify({ type: "uploaded", clientId: item.clientId, leadId: item.leadId, payload });
       } catch (err) {
+        if (err.duplicate) {
+          // the same photo is already on this house — drop the copy
+          await offlineStore.deleteQueued(item.clientId);
+          notify({ type: "duplicate", clientId: item.clientId, leadId: item.leadId });
+          continue;
+        }
         if (err.status === 401) {
           blocked = "signed-out";
           notify({ type: "blocked", reason: blocked });

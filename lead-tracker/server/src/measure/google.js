@@ -138,6 +138,16 @@ export async function roofFromSolar(lat, lng) {
         azimuthDeg: s.azimuthDegrees,
         areaM2: s.stats?.areaMeters2 ?? null,
         center: s.center ? { lat: s.center.latitude, lng: s.center.longitude } : null,
+        // how high the plane is (meters above sea level, at its center) and
+        // its extent — what separates a two-story main roof from a garage roof
+        heightM: Number.isFinite(s.planeHeightAtCenterMeters) ? s.planeHeightAtCenterMeters : null,
+        bbox:
+          s.boundingBox?.sw && s.boundingBox?.ne
+            ? {
+                sw: { lat: s.boundingBox.sw.latitude, lng: s.boundingBox.sw.longitude },
+                ne: { lat: s.boundingBox.ne.latitude, lng: s.boundingBox.ne.longitude },
+              }
+            : null,
       }))
       .filter((s) => Number.isFinite(s.pitchDeg) && Number.isFinite(s.azimuthDeg));
     if (!segments.length) return null;

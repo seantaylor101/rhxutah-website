@@ -131,6 +131,22 @@ can sort photos onto walls offline with the same math the server uses).
    nothing is counted twice. Markups are cached per photo + wall list, so a re-run only pays for what
    changed. Needs `ANTHROPIC_API_KEY`; roughly $0.50–1.50 per house at list price.
 
+6. **Levels.** Satellite only sees the outer roof edge, so a second story is traced as its own
+   outline (`upperOutline`, blue on the wall map; a starting suggestion comes from Google's roof
+   planes — `suggestUpperOutline`). `buildHouseModel` splits walls: stretches where the upper story
+   sits flush on a ground wall become two-story walls from the ground; the rest of the upper outline
+   becomes upper walls that start on top of the lower roof (with their set-back). Claude is told each
+   wall's level; upper walls are measured from the roof up, and only counted if a photo shows them.
+   A 3D view (`House3D.jsx`, three.js loaded on demand) shows the levels, heights, gables, openings
+   and roofs to compare with the house.
+7. **Checks.** Duplicate photos (same content hash) are refused; photos under 1600 px are flagged LOW.
+   Openings that can't be right (a garage door off the ground, a 14 ft window, past the wall's edge)
+   are shown but not deducted; doors near the base are snapped to it; double-marked openings drop.
+   Each wall in a photo gets a second, zoomed-in markup pass.
+8. **Benchmark.** `shared/benchmarks/house-a-hover.json` holds HOVER's numbers for benchmark house A (no address or owner kept).
+   `node shared/benchmarks/run.mjs <measurement.json from Export> [report.json]` scores a wall map /
+   report against it. It's a yardstick for tuning — never an adjustment applied to measurements.
+
 Setup: one Google Maps Platform key in `GOOGLE_MAPS_API_KEY` with **Geocoding API**, **Solar
 API**, and **Maps Static API** enabled. Without it the satellite lookup is off, but photos can
 still be shot and get sorted once the map exists. Building outlines come from the Geocoding API's
@@ -179,6 +195,8 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | POST   | /api/measure/lead/:leadId/photos | viewer | upload one measuring photo + its sensor readings (idempotent by `clientId`) |
 | PATCH  | /api/measure/photos/:id | viewer | pin a photo to a wall, or `wallId: null` for automatic |
 | DELETE | /api/measure/photos/:id | owner | delete a measuring photo |
+| POST   | /api/measure/lead/:leadId/roof | viewer | re-read Google's roof planes (heights, extents) |
+| GET    | /api/measure/lead/:leadId/upper-suggestion | viewer | starting upper-story outline from the roof planes |
 | POST   | /api/measure/lead/:leadId/report | viewer | start a measurement report (background) |
 | GET    | /api/measure/lead/:leadId/report | viewer | latest report: status, progress, result |
 | GET    | /api/measure/lead/:leadId/export.zip | viewer | photos + measurement.json in one zip |
