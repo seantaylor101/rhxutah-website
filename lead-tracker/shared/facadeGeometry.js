@@ -263,10 +263,67 @@ function pointInPoly(p, pts) {
   return inside;
 }
 
+// ---- opening sanity checks ----
+//
+// Claude finds openings; these rules catch the markups that can't be right
+// before they're deducted. A failed check doesn't silently drop the opening
+// — it's listed as "suspect" (shown, not deducted) so a person can look.
+const OPENING_RULES = {
+  garage_door: { w: [6.5, 20], h: [6, 10], maxBottom: 1.5, groundOnly: true },
+  door: { w: [2, 7.5], h: [5.5, 9.5], maxBottom: 3.5, groundOnly: false },
+  window: { w: [0.7, 12], h: [0.7, 9] },
+  other: { w: [0.5, 20], h: [0.5, 20] },
+};
+
+function iou(a, b) {
+  const box = (q) => [Math.min(...q.map((p) => p[0])), Math.min(...q.map((p) => p[1])), Math.max(...q.map((p) => p[0])), Math.max(...q.map((p) => p[1]))];
+  const [ax0, ay0, ax1, ay1] = box(a);
+  const [bx0, by0, bx1, by1] = box(b);
+  const iw = Math.max(0, Math.min(ax1, bx1) - Math.max(ax0, bx0));
+  const ih = Math.max(0, Math.min(ay1, by1) - Math.max(ay0, by0));
+  const inter = iw * ih;
+  const uni = (ax1 - ax0) * (ay1 - ay0) + (bx1 - bx0) * (by1 - by0) - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+export function checkOpenings(openings, { widthFt, heightFt, topFt, groundWall }) {
+  const kept = [];
+  for (const o of openings) {
+    const rule = OPENING_RULES[o.type] || OPENING_RULES.other;
+    const ys = o.plane.map((p) => p[1]);
+    const xs = o.plane.map((p) => p[0]);
+    const bottom = Math.min(...ys);
+    const reasons = [];
+    if (o.width < rule.w[0] || o.width > rule.w[1]) reasons.push(`${o.type.replace("_", " ")} ${o.width.toFixed(1)} ft wide is outside the normal ${rule.w[0]}–${rule.w[1]} ft`);
+    if (o.height < rule.h[0] || o.height > rule.h[1]) reasons.push(`${o.height.toFixed(1)} ft tall is outside the normal ${rule.h[0]}–${rule.h[1]} ft`);
+    if (rule.groundOnly && !groundWall) reasons.push("garage door on a wall that doesn't reach the ground");
+    if (rule.maxBottom != null && groundWall && bottom > rule.maxBottom) reasons.push(`bottom is ${bottom.toFixed(1)} ft above the ground`);
+    if (Math.min(...xs) < -1 || Math.max(...xs) > widthFt + 1 || bottom < -1 || Math.max(...ys) > (topFt || heightFt) + 1) reasons.push("extends past the wall");
+    let fixed = o;
+    // a door or garage door that's within reach of the base starts at the base
+    if (!reasons.length && rule.maxBottom != null && groundWall && bottom > 0) {
+      const lift = bottom;
+      fixed = { ...o, plane: o.plane.map(([x, y]) => [x, y - lift]), height: o.height + lift, area: o.area + o.width * lift };
+    }
+    const dup = kept.find((k) => !k.suspect && iou(k.plane, fixed.plane) > 0.5);
+    if (dup) continue; // the same opening marked twice
+    kept.push(reasons.length ? { ...fixed, suspect: true, reasons } : fixed);
+  }
+  return kept;
+}
+
+// typical heights when a wall has no photo of its own, by kind of wall
+const DEFAULT_H1 = 9; // one story, ground to eave
+const DEFAULT_H2 = 18; // two story, ground to eave
+
 // Builds the report from the house model (walls from the satellite outline,
 // see houseGeometry.buildHouseModel) and every photo's vision analysis:
 //   analyses: [{ photoId, slotKind: "side"|"corner"|"extra", imageWidth,
 //               imageHeight, focal35, lens, faces: [...] }]
+//
+// Wall kinds (model.walls[].tier / stories): a ground wall's measured
+// rectangle runs ground → eave; an upper wall's runs from where it meets the
+// lower roof → eave, so its "height" is the visible height above that roof.
 export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2 = null } = {}) {
   const walls = model.walls;
   const candidates = Object.fromEntries(walls.map((w) => [w.id, []]));
@@ -283,117 +340,146 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
         rejected.push({ photoId: a.photoId, wallId: wall.id, reason: m.reason });
         continue;
       }
-      const score = (SLOT_WEIGHT[a.slotKind] || 0.6) * m.frontality * (m.baseVisible ? 1 : 0.85);
-      candidates[wall.id].push({ ...m, photoId: a.photoId, slotKind: a.slotKind, score, face });
+      const res = a.imageWidth && a.imageHeight ? Math.min(1, Math.max(a.imageWidth, a.imageHeight) / 1600) : 1;
+      const score = (SLOT_WEIGHT[a.slotKind] || 0.6) * m.frontality * (m.baseVisible ? 1 : 0.85) * (0.5 + 0.5 * res);
+      candidates[wall.id].push({ ...m, photoId: a.photoId, slotKind: a.slotKind, score, face, lowRes: res < 1 });
     }
   }
 
-  const measuredHeights = walls.map((w) => (candidates[w.id].length ? median(candidates[w.id].map((c) => c.heightFt)) : null));
-  const fallbackHeight = median(measuredHeights) ?? 9;
   const rise = Number.isFinite(pitch12) ? pitch12 / 12 : null;
+  const kindOf = (w) => (w.tier === "upper" ? "upper" : w.stories === 2 ? "two" : "one");
+  const measuredBy = { one: [], two: [], upper: [] };
+  for (const w of walls) if (candidates[w.id].length) measuredBy[kindOf(w)].push(weightedHeight(candidates[w.id].sort((x, y) => y.score - x.score)));
+  const h1 = median(measuredBy.one) ?? (model.hasUpper ? DEFAULT_H1 : median(measuredBy.two) ?? DEFAULT_H1);
+  const h2 = median(measuredBy.two) ?? (model.hasUpper ? DEFAULT_H2 : h1);
+  // an upper wall's absolute base: the lower roof's eave plus the roof's rise
+  // over the set-back distance
+  const upperBase = (w) => h1 + (w.setbackM != null ? w.setbackM * FT_PER_M * (rise ?? 7 / 12) : 0);
 
   const wallReports = walls.map((w, i) => {
+    const kind = kindOf(w);
     const widthFt = w.lengthM * FT_PER_M;
     const cands = candidates[w.id].sort((a, b) => b.score - a.score);
     const best = cands[0] || null;
-    // height: angled views are far more sensitive to lens and marking error
-    // than square-on ones (a 10% lens error moves a 45° view's height by
-    // ~8-15", a square-on view's by ~0), so weight by how square-on each
-    // view is and ignore views much worse than the best
-    const eaveHeight = best ? weightedHeight(cands) : fallbackHeight;
     const notes = [];
-    if (!best) notes.push("Not measured from a photo; height estimated from the other walls");
+    // upper walls only count when a photo shows them: a roof can run straight
+    // up past where an upper outline puts a wall, and a phantom wall would
+    // add siding that isn't there
+    const counted = !!best || kind !== "upper";
+    let height;
+    if (best) height = weightedHeight(cands);
+    else if (kind === "upper") height = Math.max(0, h2 - upperBase(w));
+    else height = kind === "two" ? h2 : h1;
+    if (!best && kind !== "upper") notes.push(`Not measured from a photo; height estimated from the other ${kind === "two" ? "two-story" : "one-story"} walls`);
+    if (!best && kind === "upper") notes.push("Upper wall not seen in any photo, so not counted. If there's siding here, add a photo of it.");
     if (best && !best.baseVisible) notes.push("Bottom of wall hidden; base extended from what was visible");
+    if (best && best.lowRes) notes.push("Measured from a low-resolution photo");
     if (cands.length > 1) {
       const spread = Math.max(...cands.map((c) => c.heightFt)) - Math.min(...cands.map((c) => c.heightFt));
-      if (spread > Math.max(1.5, eaveHeight * 0.15)) notes.push(`Photos disagree on height by ${spread.toFixed(1)} ft`);
+      if (spread > Math.max(1.5, height * 0.15)) notes.push(`Photos disagree on height by ${spread.toFixed(1)} ft`);
     }
+    // where this wall's rectangle starts and ends above the ground — for the
+    // 3D model
+    const baseHeight = kind === "upper" ? (best ? Math.max(h1, h2 - height) : upperBase(w)) : 0;
+    const eaveHeight = baseHeight + height;
 
-    let peakHeight = null;
+    let peak = null; // above this wall's base
     let peakSource = null;
     if (best && best.peak && best.peak[1] > best.heightFt + 0.5) {
-      // re-scale the measured peak to the agreed eave height
-      peakHeight = best.peak[1] * (eaveHeight / best.heightFt);
+      peak = best.peak[1] * (height / best.heightFt);
       peakSource = "photo";
-    } else if (w.roofEdge === "gable" && rise) {
-      peakHeight = eaveHeight + (widthFt / 2) * rise;
+    } else if (w.roofEdge === "gable" && rise && counted) {
+      peak = height + (widthFt / 2) * rise;
       peakSource = "pitch";
       notes.push("Gable peak from roof pitch (not seen in a photo)");
     }
-    const gableArea = peakHeight ? (widthFt * (peakHeight - eaveHeight)) / 2 : 0;
-    const grossArea = widthFt * eaveHeight + gableArea;
+    const gableArea = peak ? (widthFt * (peak - height)) / 2 : 0;
+    const grossArea = counted ? widthFt * height + gableArea : 0;
 
     // materials + openings come from the single best view (using several
     // would count the same window twice)
-    const k = best ? eaveHeight / best.heightFt : 1;
+    const k = best ? height / best.heightFt : 1;
     const scalePts = (pts) => pts.map(([x, y]) => [x, y * k]);
     const regions = best ? best.regions.map((r) => ({ ...r, plane: scalePts(r.plane), area: r.area * k })) : [];
     const primary = best ? best.material : "siding";
-    const byMaterial = {};
+    const byGross = {};
     let regionTotal = 0;
     for (const r of regions) {
       const area = Math.min(r.area, grossArea - regionTotal);
       if (area <= 0) continue;
-      byMaterial[r.material] = (byMaterial[r.material] || 0) + area;
+      byGross[r.material] = (byGross[r.material] || 0) + area;
       regionTotal += area;
     }
-    byMaterial[primary] = (byMaterial[primary] || 0) + Math.max(0, grossArea - regionTotal);
+    if (grossArea > 0) byGross[primary] = (byGross[primary] || 0) + Math.max(0, grossArea - regionTotal);
 
-    const openings = best
+    const rawOpenings = best
       ? best.openings.map((o) => {
           const plane = scalePts(o.plane);
           const center = [o.center[0], o.center[1] * k];
           const region = regions.find((r) => pointInPoly(center, r.plane));
-          return {
-            type: o.type,
-            arched: o.arched,
-            width: o.width,
-            height: o.height * k,
-            area: o.area * k,
-            plane,
-            material: region ? region.material : primary,
-          };
+          return { type: o.type, arched: o.arched, width: o.width, height: o.height * k, area: o.area * k, plane, material: region ? region.material : primary };
         })
       : [];
-    if (best && !best.face.leftIsCorner) notes.push("Openings may be incomplete");
+    const checked = checkOpenings(rawOpenings, { widthFt, heightFt: height, topFt: peak || height, groundWall: kind !== "upper" });
+    const openings = checked.filter((o) => !o.suspect);
+    const suspect = checked.filter((o) => o.suspect);
+    if (suspect.length) notes.push(`${suspect.length} opening${suspect.length === 1 ? "" : "s"} look wrong and weren't deducted (shown dashed)`);
+    if (best && (!best.face.leftIsCorner || !best.face.rightIsCorner)) notes.push("Openings may be incomplete");
+
+    // net (HOVER's "facade" area): gross minus the openings in each material
+    const byMaterial = { ...byGross };
+    for (const o of openings) if (byMaterial[o.material] != null) byMaterial[o.material] = Math.max(0, byMaterial[o.material] - o.area);
 
     return {
       id: w.id,
       label: w.label,
       side: w.side,
+      tier: w.tier || "ground",
+      stories: w.stories ?? null,
+      setbackFt: w.setbackM != null ? w.setbackM * FT_PER_M : null,
       widthFt,
+      height,
+      baseHeight,
       eaveHeight,
-      peakHeight,
+      peakHeight: peak,
       peakSource,
       grossArea,
+      byGross,
       byMaterial,
       primaryMaterial: primary,
       openings,
+      suspectOpenings: suspect,
       regions,
-      outline: peakHeight
-        ? [[0, 0], [widthFt, 0], [widthFt, eaveHeight], [widthFt / 2, peakHeight], [0, eaveHeight]]
-        : [[0, 0], [widthFt, 0], [widthFt, eaveHeight], [0, eaveHeight]],
+      outline: peak
+        ? [[0, 0], [widthFt, 0], [widthFt, height], [widthFt / 2, peak], [0, height]]
+        : [[0, 0], [widthFt, 0], [widthFt, height], [0, height]],
       measured: !!best,
+      counted,
       photos: cands.map((c) => ({ photoId: c.photoId, heightFt: c.heightFt, score: c.score })),
       bestPhotoId: best ? best.photoId : null,
-      bestImage: best ? { ...best.image, openings: best.openings.map((o) => o.image), regions: best.regions.map((r) => ({ material: r.material, image: r.image })) } : null,
+      bestImage: best
+        ? { ...best.image, openings: best.openings.map((o) => o.image), regions: best.regions.map((r) => ({ material: r.material, image: r.image })) }
+        : null,
       roofEdge: w.roofEdge,
       notes,
       index: i,
     };
   });
 
-  return { walls: wallReports, totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }), rejected };
+  return { walls: wallReports, totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }), heights: { h1, h2 }, rejected };
 }
 
 function computeTotals(model, walls, { rise, roofAreaFt2 }) {
   const group = (m) => (SIDING_MATERIALS.has(m) ? "siding" : "other");
   const t = {
-    facades: { siding: 0, other: 0 },
+    gross: { siding: 0, other: 0 },
+    facades: { siding: 0, other: 0 }, // net of openings, as HOVER reports it
     byMaterial: {},
     openings: { siding: { count: 0, area: 0, tops: 0, sills: 0, sides: 0 }, other: { count: 0, area: 0, tops: 0, sills: 0, sides: 0 } },
+    suspectOpenings: 0,
   };
   for (const w of walls) {
+    for (const [m, a] of Object.entries(w.byGross)) t.gross[group(m)] += a;
     for (const [m, a] of Object.entries(w.byMaterial)) {
       t.byMaterial[m] = (t.byMaterial[m] || 0) + a;
       t.facades[group(m)] += a;
@@ -406,28 +492,35 @@ function computeTotals(model, walls, { rise, roofAreaFt2 }) {
       g.sides += 2 * o.height;
       if (o.type !== "door" && o.type !== "garage_door") g.sills += o.width;
     }
+    t.suspectOpenings += w.suspectOpenings.length;
   }
-  const sidingNet = Math.max(0, t.facades.siding - t.openings.siding.area);
-  t.sidingNet = sidingNet;
-  t.otherNet = Math.max(0, t.facades.other - t.openings.other.area);
-  t.squares = [0, 10, 18].map((pct) => ({ pct, area: sidingNet * (1 + pct / 100), squares: (sidingNet * (1 + pct / 100)) / 100 }));
+  // kept under the old names too, for reports saved before this change
+  t.sidingNet = t.facades.siding;
+  t.otherNet = t.facades.other;
+  t.squares = [0, 10, 18].map((pct) => ({ pct, area: t.facades.siding * (1 + pct / 100), squares: (t.facades.siding * (1 + pct / 100)) / 100 }));
 
-  // corners: walk the wall outline; a left turn (outward bulge) is an
-  // outside corner, a right turn an inside one. Its length is the shorter
-  // of the two walls' heights where they meet.
-  const n = walls.length;
+  // corners: walk the ground walls in order; a left turn (outward bulge) is
+  // an outside corner, a right turn an inside one, as tall as the shorter of
+  // the two walls. Then the corners of upper walls above the lower roof.
+  const byId = Object.fromEntries(walls.map((w) => [w.id, w]));
+  const mById = Object.fromEntries(model.walls.map((w) => [w.id, w]));
+  const ring = model.groundRing || model.walls.map((w) => w.id);
   const corners = { inside: { count: 0, length: 0 }, outside: { count: 0, length: 0 } };
-  for (let i = 0; i < n; i++) {
-    const a = model.walls[i];
-    const b = model.walls[(i + 1) % n];
-    const e1 = [a.b[0] - a.a[0], a.b[1] - a.a[1]];
-    const e2 = [b.b[0] - b.a[0], b.b[1] - b.a[1]];
-    const turn = e1[0] * e2[1] - e1[1] * e2[0];
+  for (let i = 0; i < ring.length; i++) {
+    const a = mById[ring[i]];
+    const b = mById[ring[(i + 1) % ring.length]];
+    const turn = (a.b[0] - a.a[0]) * (b.b[1] - b.a[1]) - (a.b[1] - a.a[1]) * (b.b[0] - b.a[0]);
     if (Math.abs(turn) < 1e-6) continue;
-    const h = Math.min(walls[i].eaveHeight, walls[(i + 1) % n].eaveHeight);
-    const k = turn > 0 ? "outside" : "inside";
-    corners[k].count += 1;
-    corners[k].length += h;
+    const kk = turn > 0 ? "outside" : "inside";
+    corners[kk].count += 1;
+    corners[kk].length += Math.min(byId[a.id].eaveHeight, byId[b.id].eaveHeight);
+  }
+  for (const c of model.upperCorners || []) {
+    const ws = c.wallIds.map((id) => byId[id]).filter((w) => w && w.counted);
+    if (!ws.length) continue;
+    const kk = c.outside ? "outside" : "inside";
+    corners[kk].count += 1;
+    corners[kk].length += Math.min(...ws.map((w) => w.height));
   }
   t.corners = corners;
 
@@ -437,9 +530,10 @@ function computeTotals(model, walls, { rise, roofAreaFt2 }) {
   let eaves = 0;
   let rakes = 0;
   for (const w of walls) {
+    if (!w.counted) continue;
     if (w.peakHeight) {
       const run = w.widthFt / 2 + overhangFt;
-      rakes += 2 * Math.hypot(run, rise ? run * rise : w.peakHeight - w.eaveHeight);
+      rakes += 2 * Math.hypot(run, rise ? run * rise : w.peakHeight - w.height);
     } else eaves += w.widthFt + 2 * overhangFt;
   }
   t.roofline = { eaves, rakes, soffitArea: (eaves + rakes) * overhangFt, overhangIn: model.overhangIn };

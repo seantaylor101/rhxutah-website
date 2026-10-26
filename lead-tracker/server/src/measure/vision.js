@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 
 export const VISION_MODEL = "claude-opus-5-5";
 // bump when the prompt or schema changes, so cached markups get redone
-export const PROMPT_VERSION = "v1";
+export const PROMPT_VERSION = "v2";
 // Claude Opus 5.5 reads images up to 2576 px on the long edge at full
 // detail, with coordinates 1:1 to the pixels it was sent
 const MAX_EDGE = 2576;
@@ -107,22 +107,42 @@ function markupSchema(wallIds) {
 
 const SYSTEM = `You mark up photos of house exteriors so the walls can be measured. You never estimate sizes yourself; you only point at things, in pixel coordinates of the image you are given (origin at the top-left, x to the right, y down). Precision matters: every pixel of error in a corner becomes inches in the measurement, so place points exactly on the feature.
 
+Houses often have more than one level: a one-story garage or wing in front, with a second story rising above and behind its roof. You are given a list of the walls, including which are one story, which are two stories from the ground, and which are UPPER walls that start on top of a lower roof. Treat each as its own face.
+
 For every wall face you can see in the photo, from the list of walls you are given:
-- Match it to a wall ID. You are told which side of the house each wall is on, its width, and the order walls appear left to right when you stand outside facing that side. Use only walls you can actually see; walls hidden behind others or around a corner are skipped. A face you can't match goes in as "unknown".
-- corners: the four corners of the wall's rectangle, up to the eaves. baseLeft / baseRight are where the wall's cladding meets the foundation or the ground, at the wall's left and right ends as you face it. topLeft / topRight are where the wall meets the underside of the eave or soffit at those ends; for a gable end, that is where the sloped rake starts, at eave height. Use the wall's real outside corners, not the edge of the photo.
+- Match it to a wall ID. You are told which side of the house each wall is on, its width, its level, and the order walls appear left to right when you stand outside facing that side. Use only walls you can actually see; walls hidden behind others or around a corner are skipped. A face you can't match goes in as "unknown".
+- corners: the four corners of the wall's rectangle. baseLeft / baseRight: for a wall that stands on the ground, where its cladding meets the foundation or ground; for an UPPER wall, where it meets the lower roof in front of it (not the ground). topLeft / topRight: where the wall meets the underside of its eave or soffit; on a gable end, where the sloped rake starts, at eave height. Use the wall's real ends, not the edge of the photo.
 - leftIsCorner / rightIsCorner: true only if that end of the wall is actually visible as a corner of the building in the photo. If the wall runs out of the frame or behind something on that side, set it false and put that corner at the last visible point.
-- baseVisible: false when bushes, an AC unit, a fence, snow or anything else hides the bottom of the wall along most of its length. Then extend the base line where it would be: the base is level, so carry it from the stretches you can see (often at a corner or behind a gap in the bushes).
+- baseVisible: false when bushes, an AC unit, a fence, a car, snow or anything else hides the bottom of the wall along most of its length. Then extend the base line where it would be: the base is level, so carry it from the stretches you can see (often at a corner or behind a gap).
 - peakVisible / peak: on a gable end, the top point of the triangle of wall under the roof's peak. Set peakVisible false (peak at 0,0) if there is no gable or it's cut off.
 - material: what most of the face is clad in. siding = any lap, panel, board-and-batten, shake or metal siding (vinyl, fiber cement, wood, LP); stucco includes EIFS; stone includes manufactured stone veneer.
-- materialRegions: areas of the face clad in something other than the main material, each as a polygon (e.g. a brick wainscot along the bottom, a stone column, stucco above a brick first floor). Leave empty if the face is all one material.
-- openings: every window, door, garage door and other cut-out in that face, as 4 corners in the order top-left, top-right, bottom-right, bottom-left, on the outer edge of the trim or casing. For an arched window, use its bounding rectangle and set arched true. Include openings on this face only.
+- materialRegions: areas of the face clad in something other than the main material, each as a polygon (e.g. a brick wainscot along the bottom, a stone column, stucco around a bay). Leave empty if the face is all one material.
+- openings: every opening in that face, as 4 corners in the order top-left, top-right, bottom-right, bottom-left, on the outer edge of the trim or casing.
+  - garage_door: the large overhead door; it always sits at the base of a wall that stands on the ground. Never miss it.
+  - door: entry doors (with any sidelights and transom as one opening), patio, French and sliding doors. Their bottom is at or near the base, maybe a few steps up.
+  - window: every separately framed window unit, including small ones and a half-round window above another window (mark that one on its own, with arched true). For an arched window use its bounding rectangle.
+  - other: any other cut-out in the cladding, such as a pass-through.
+  Do not mark vents, light fixtures, address numbers, shutters, satellite dishes, downspouts or anything on the roof. Mark each opening on the one face it is in.
 
 usable: false if the photo doesn't show the house well enough to mark anything (blurry, wrong subject, mostly blocked). notes: one or two short sentences on anything that limits the markup.`;
 
+const ZOOM_SYSTEM = `${SYSTEM}
+
+This image is a zoomed-in crop of one wall from a larger photo, enlarged so you can place points more precisely. Mark only the wall you are told about, using pixel coordinates of this crop. Parts of the wall may run past the crop's edge only if they did in the original photo; otherwise its corners are inside the crop.`;
+
 // walls on the given sides, in the order they appear left → right when
-// standing outside facing that side, with how far each is set back
+// standing outside facing that side, with level and how far each is set back
 export function wallListText(model, sides) {
   const lines = [];
+  const levelText = (w) => {
+    if (w.tier === "upper") {
+      const back = w.setbackM != null ? ` about ${(w.setbackM * 3.28084).toFixed(0)} ft behind the wall below it` : "";
+      return `UPPER-story wall, set back${back}; it starts on top of the lower roof — mark its base where it meets that roof`;
+    }
+    if (w.stories === 2) return "two stories, from the ground up to the main roof's eave";
+    if (w.stories === 1) return "one story, from the ground up to the lower roof's eave";
+    return null;
+  };
   for (const side of sides) {
     const ws = model.walls.filter((w) => w.side === side);
     if (!ws.length) continue;
@@ -133,14 +153,19 @@ export function wallListText(model, sides) {
     const rightAz = n - 90;
     const right = [Math.sin((rightAz * Math.PI) / 180), Math.cos((rightAz * Math.PI) / 180)];
     const depth = (w) => w.mid[0] * out[0] + w.mid[1] * out[1];
-    const maxDepth = Math.max(...ws.map(depth));
-    const sorted = ws.slice().sort((a, b) => a.mid[0] * right[0] + a.mid[1] * right[1] - (b.mid[0] * right[0] + b.mid[1] * right[1]));
+    const ground = ws.filter((w) => w.tier !== "upper");
+    const maxDepth = Math.max(...(ground.length ? ground : ws).map(depth));
+    const order = (a, b) => a.mid[0] * right[0] + a.mid[1] * right[1] - (b.mid[0] * right[0] + b.mid[1] * right[1]);
     lines.push(`${side.toUpperCase()} side, left to right as you face it from outside:`);
-    for (const w of sorted) {
+    for (const w of [...ground.sort(order), ...ws.filter((x) => x.tier === "upper").sort(order)]) {
       const ft = w.lengthM * 3.28084;
-      const back = (maxDepth - depth(w)) * 3.28084;
       const bits = [`${ft.toFixed(1)} ft wide`];
-      if (back > 1.5) bits.push(`set back ${back.toFixed(0)} ft from the frontmost wall on this side`);
+      const lv = levelText(w);
+      if (lv) bits.push(lv);
+      if (w.tier !== "upper") {
+        const back = (maxDepth - depth(w)) * 3.28084;
+        if (back > 1.5) bits.push(`set back ${back.toFixed(0)} ft from the frontmost wall on this side`);
+      }
       if (w.roofEdge === "gable") bits.push("probably a gable end");
       if (w.roofEdge === "eave") bits.push("probably under an eave");
       lines.push(`  ${w.id}: ${bits.join(", ")}`);
@@ -192,9 +217,57 @@ function costOf(usage) {
   );
 }
 
+// Zoomed pass for one wall: crop that wall out of the stored photo (with a
+// margin), enlarge it, and have Claude re-mark just that wall. A wall that
+// fills a small part of a photo gets far more of the model's attention this
+// way. Returns the face in the *original* markup image's coordinates, or null.
+export async function zoomCrop(filePath, markupImage, face) {
+  const meta = await sharp(filePath).rotate().metadata();
+  const W = meta.autoOrient?.width || meta.width;
+  const H = meta.autoOrient?.height || meta.height;
+  const s = W / markupImage.width; // stored px per markup px
+  const pts = [face.corners.baseLeft, face.corners.baseRight, face.corners.topLeft, face.corners.topRight, ...(face.peakVisible ? [face.peak] : [])];
+  const xs = pts.map((p) => p.x * s);
+  const ys = pts.map((p) => p.y * s);
+  const mx = (Math.max(...xs) - Math.min(...xs)) * 0.1 + 20;
+  const my = (Math.max(...ys) - Math.min(...ys)) * 0.1 + 20;
+  const left = Math.max(0, Math.floor(Math.min(...xs) - mx));
+  const top = Math.max(0, Math.floor(Math.min(...ys) - my));
+  const right = Math.min(W, Math.ceil(Math.max(...xs) + mx));
+  const bottom = Math.min(H, Math.ceil(Math.max(...ys) + my));
+  const cw = right - left;
+  const ch = bottom - top;
+  if (cw < 40 || ch < 40) return null;
+  // worth it only when the wall is a modest part of the frame
+  if (cw * ch > 0.6 * W * H) return null;
+  const up = Math.min(2, MAX_EDGE / Math.max(cw, ch));
+  const { data, info } = await sharp(filePath)
+    .rotate()
+    .extract({ left, top, width: cw, height: ch })
+    .resize({ width: Math.round(cw * up), height: Math.round(ch * up) })
+    .jpeg({ quality: 90 })
+    .toBuffer({ resolveWithObject: true });
+  return {
+    image: { base64: data.toString("base64"), width: info.width, height: info.height },
+    // crop px → original markup px
+    back: (p) => ({ x: (p.x / up + left) / s, y: (p.y / up + top) / s }),
+  };
+}
+
+export function mapFaceBack(face, back) {
+  const pt = (p) => (p ? back(p) : p);
+  return {
+    ...face,
+    corners: Object.fromEntries(Object.entries(face.corners || {}).map(([k, v]) => [k, pt(v)])),
+    peak: face.peakVisible ? pt(face.peak) : face.peak,
+    materialRegions: (face.materialRegions || []).map((r) => ({ ...r, polygon: (r.polygon || []).map(pt) })),
+    openings: (face.openings || []).map((o) => ({ ...o, corners: (o.corners || []).map(pt) })),
+  };
+}
+
 // One photo → markup. Throws on API failure; returns { usable: false } on a
 // refusal or an unparseable answer so one bad photo doesn't sink a report.
-export async function markUpPhoto({ image, contextText, wallIds }) {
+export async function markUpPhoto({ image, contextText, wallIds, zoom = false }) {
   const response = await getClient().beta.messages.create({
     model: VISION_MODEL,
     max_tokens: 16000,
@@ -204,7 +277,7 @@ export async function markUpPhoto({ image, contextText, wallIds }) {
     // model Anthropic recommends instead of failing the photo
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-    system: SYSTEM,
+    system: zoom ? ZOOM_SYSTEM : SYSTEM,
     messages: [
       {
         role: "user",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { C, FONT_BODY, FONT_DISPLAY, btnPrimary, btnSecondary, btnDanger, sectionLabel, fmtFeetInches } from "./theme.js";
 import { useMeasureData } from "./useMeasureData.js";
 import { measureApi } from "./measureApi.js";
@@ -7,6 +7,8 @@ import { retryFailed, discardQueued, kickUploads, enqueuePhoto } from "./uploade
 import WallMap from "./WallMap.jsx";
 import CaptureScreen from "./CaptureScreen.jsx";
 import ReportView from "./ReportView.jsx";
+// three.js is big — only load it when someone opens the 3D view
+const House3D = lazy(() => import("./House3D.jsx"));
 import { GUIDED_SLOTS, slotByKey } from "../../../shared/houseGeometry.js";
 
 function useObjectUrl(blob) {
@@ -18,7 +20,7 @@ function useObjectUrl(blob) {
 function Thumb({ photo, size = 64, onClick }) {
   const blobUrl = useObjectUrl(photo.pending ? photo.blob : null);
   const src = photo.pending ? blobUrl : photo.url;
-  const badge = photo.failed ? "!" : photo.pending ? "⇡" : photo.assignMethod === "manual" ? "✓" : photo.needsReview ? "?" : null;
+  const badge = photo.failed ? "!" : photo.pending ? "⇡" : photo.lowRes ? "LOW" : photo.assignMethod === "manual" ? "✓" : photo.needsReview ? "?" : null;
   return (
     <button onClick={onClick} style={{ position: "relative", width: size, height: size, padding: 0, border: "none", borderRadius: 8, overflow: "hidden", background: C.surfaceMuted, cursor: "pointer", flex: "0 0 auto" }}>
       {src && <img src={src} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
@@ -36,7 +38,8 @@ function Thumb({ photo, size = 64, onClick }) {
             lineHeight: "18px",
             textAlign: "center",
             color: "#fff",
-            background: photo.failed ? C.rust : photo.pending ? "rgba(0,0,0,0.6)" : photo.needsReview && photo.assignMethod !== "manual" ? C.amber : C.accent,
+            padding: "0 4px",
+            background: photo.failed || photo.lowRes ? C.rust : photo.pending ? "rgba(0,0,0,0.6)" : photo.needsReview && photo.assignMethod !== "manual" ? C.amber : C.accent,
           }}
         >
           {badge}
@@ -152,6 +155,7 @@ function SlotCell({ slot, photos, onOpen, onEmpty }) {
           ✓ {short}
           {photos.length > 1 ? ` · ${photos.length}` : ""}
           {latest.pending ? " ⇡" : ""}
+          {latest.lowRes ? " · LOW" : ""}
         </span>
       )}
     </button>
@@ -174,6 +178,7 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const fileInputRef = useRef(null);
   const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
   const [adding, setAdding] = useState(0);
+  const [show3D, setShow3D] = useState(false);
   const [report, setReport] = useState(null); // full latest report (with result)
   const [showReport, setShowReport] = useState(false);
   const [startingReport, setStartingReport] = useState(false);
@@ -385,6 +390,18 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           </div>
         )}
         {(actionError || data.error) && <div style={{ ...note, background: "#FBEAE8", borderColor: "#F2C9C4", color: C.rust }}>{actionError || data.error}</div>}
+        {data.duplicates > 0 && (
+          <div style={{ ...note, background: "#EEF1EC", borderColor: C.border }}>
+            Skipped {data.duplicates} photo{data.duplicates === 1 ? "" : "s"} already on this house.
+          </div>
+        )}
+        {photos.some((p) => p.lowRes) && (
+          <div style={{ ...note, background: "#FFF6E0", borderColor: "#F0DCA8" }}>
+            <b>{photos.filter((p) => p.lowRes).length} low-resolution photo{photos.filter((p) => p.lowRes).length === 1 ? "" : "s"}</b> (marked LOW). These
+            look like resized copies, e.g. sent through a text message, and can't be measured precisely. Retake them with Shoot photos, or upload
+            the originals straight from your Photos app.
+          </div>
+        )}
 
         {/* 1. find the house */}
         {data.loading && !data.payload ? (
@@ -448,7 +465,17 @@ export default function MeasureScreen({ lead, editable, onClose }) {
               }}
               selectedWallId={selectedWallId}
               onSelectWall={setSelectedWallId}
+              onSuggestUpper={async () => (await measureApi.upperSuggestion(lead.id)).upperOutline}
             />
+            {googleConfigured && project.roof?.segments?.length > 0 && !project.roof.segments.some((sg) => sg.bbox) && (
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+                Google's roof data for this house was saved before plane heights were kept.{" "}
+                <button style={linkBtn} disabled={busy === "save"} onClick={() => run("save", () => measureApi.refreshRoof(lead.id)).catch(() => {})}>
+                  Refresh roof data
+                </button>{" "}
+                for a better upper-story starting point.
+              </div>
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 13 }}>Overhang</span>
@@ -464,6 +491,11 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                 {frontWall ? `Front: ${frontWall.id}` : "Set front of house"}
               </button>
               {model?.pitch12 != null && <span style={{ fontSize: 13, color: C.muted }}>Roof ≈ {model.pitch12}/12 (Google)</span>}
+              {model && (
+                <button style={{ ...btnSecondary, padding: "7px 10px" }} onClick={() => setShow3D(true)}>
+                  🧊 3D view
+                </button>
+              )}
             </div>
             {model && (
               <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
@@ -638,6 +670,8 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                     <span style={{ fontWeight: 700, minWidth: 34 }}>{w.id}</span>
                     <span style={{ flex: 1 }}>
                       {w.label}
+                      {w.stories === 2 && <span style={{ color: C.muted, fontSize: 12.5 }}> · two story</span>}
+                      {w.tier === "upper" && <span style={{ color: C.muted, fontSize: 12.5 }}> · above lower roof</span>}
                       {w.roofEdge && <span style={{ color: C.muted, fontSize: 12.5 }}> · {w.roofEdge === "gable" ? "gable end" : "eave side"}</span>}
                     </span>
                     <span style={{ fontWeight: 600 }}>{fmtFeetInches(w.lengthIn)}</span>
@@ -693,6 +727,12 @@ export default function MeasureScreen({ lead, editable, onClose }) {
             createReport();
           }}
         />
+      )}
+
+      {show3D && model && (
+        <Suspense fallback={<div style={{ position: "fixed", inset: 0, zIndex: 78, background: C.bg, padding: 24 }}>Loading 3D…</div>}>
+          <House3D model={model} report={report?.status === "done" ? report.result : null} pitch12={model.pitch12} onClose={() => setShow3D(false)} />
+        </Suspense>
       )}
 
       {slotMenu && (

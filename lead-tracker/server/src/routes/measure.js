@@ -5,7 +5,7 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import {
@@ -14,6 +14,7 @@ import {
   matchWall,
   wallRef,
   cleanOutline,
+  suggestUpperOutline,
   toLocal,
   toLatLng,
   centroidLatLng,
@@ -77,6 +78,25 @@ function photoRows(leadId) {
 const isGuided = (slot) => !!slotByKey(slot);
 const GUIDED_SLOT_ORDER = GUIDED_SLOTS.map((g) => g.key);
 
+const hashFile = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+
+// older rows from before duplicate checking: hash what's on disk once
+(function backfillHashes() {
+  const rows = db.prepare(`SELECT id, filename FROM measure_photos WHERE contentHash IS NULL`).all();
+  const set = db.prepare(`UPDATE measure_photos SET contentHash = ? WHERE id = ?`);
+  for (const r of rows) {
+    try {
+      set.run(hashFile(path.join(MEASURE_PHOTOS_DIR, r.filename)), r.id);
+    } catch {
+      // file missing — nothing to compare against
+    }
+  }
+})();
+
+// below this on the long side, a photo can't be measured precisely (a pixel
+// on a far wall is inches) — usually a resized copy, not the original
+const LOW_RES_PX = 1600;
+
 function photoToJson(p) {
   return {
     id: p.id,
@@ -84,6 +104,7 @@ function photoToJson(p) {
     url: `/api/measure/photos/${p.filename}`,
     width: p.width,
     height: p.height,
+    lowRes: !!(p.width && p.height && Math.max(p.width, p.height) < LOW_RES_PX),
     sensors: parseJson(p.sensors, {}),
     exif: parseJson(p.exif, {}),
     wallId: p.wallId,
@@ -290,6 +311,18 @@ router.put("/lead/:leadId/outline", requireAuth("viewer"), (req, res) => {
     next.source = next.source === "placeholder" || !next.source ? "manual" : `${next.source}+edited`;
     if (!next.satellite) next.satellite = { ...c, zoom: pickSatelliteZoom(body.roofOutline) };
   }
+  if ("upperOutline" in body) {
+    // the second story's roof edge, traced inside the main outline (null = one level)
+    if (body.upperOutline === null) next.upperOutline = null;
+    else {
+      if (!validLatLngRing(body.upperOutline)) return res.status(400).json({ error: "Upper outline needs 3–60 corners" });
+      const c = centroidLatLng(next.roofOutline || body.upperOutline);
+      if (body.upperOutline.some(([lat, lng]) => Math.hypot(...toLocal(c, lat, lng)) > 150)) {
+        return res.status(400).json({ error: "Upper outline is too far from the house" });
+      }
+      next.upperOutline = body.upperOutline;
+    }
+  }
   if ("overhangIn" in body) {
     const n = Number(body.overhangIn);
     if (!Number.isFinite(n) || n < 0 || n > 48) return res.status(400).json({ error: "Overhang must be 0–48 inches" });
@@ -306,6 +339,38 @@ router.put("/lead/:leadId/outline", requireAuth("viewer"), (req, res) => {
   saveProject(lead.id, prev?.address || lead.address, next);
   reassignAll(lead.id);
   res.json(payload(lead.id));
+});
+
+// re-reads Google's roof planes (pitch, heights, extents) without touching
+// the outline — e.g. for a house looked up before plane heights were kept
+router.post("/lead/:leadId/roof", requireAuth("viewer"), async (req, res, next) => {
+  const lead = leadOr404(req.params.leadId, res);
+  if (!lead) return;
+  if (!googleConfigured()) return res.status(503).json({ error: "Google Maps isn't set up yet (GOOGLE_MAPS_API_KEY)" });
+  const prev = loadProject(lead.id);
+  if (!prev?.roofOutline) return res.status(400).json({ error: "Look up the address first" });
+  try {
+    const c = centroidLatLng(prev.roofOutline);
+    const roof = await roofFromSolar(c.lat, c.lng);
+    if (!roof) return res.status(404).json({ error: "Google has no roof data for this house" });
+    const { address, updatedAt, ...data } = prev;
+    saveProject(lead.id, address, { ...data, roof });
+    res.json(payload(lead.id));
+  } catch (err) {
+    if (err.name === "TimeoutError") return res.status(504).json({ error: "Google took too long to answer — try again" });
+    next(err);
+  }
+});
+
+// a starting upper-story outline from the roof planes, to drag into place
+router.get("/lead/:leadId/upper-suggestion", requireAuth("viewer"), (req, res) => {
+  const project = loadProject(req.params.leadId);
+  if (!project) return res.status(404).json({ error: "Look up the address first" });
+  const roof = project.roof;
+  res.json({
+    upperOutline: suggestUpperOutline(project),
+    precise: !!roof?.segments?.some((s) => s.bbox),
+  });
 });
 
 // proxied so the API key stays server-side; the phone caches it like any
@@ -354,6 +419,12 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
       }
 
       const processed = await processUpload(file);
+      const contentHash = hashFile(path.join(MEASURE_PHOTOS_DIR, processed.filename));
+      const dup = db.prepare(`SELECT id FROM measure_photos WHERE leadId = ? AND contentHash = ?`).get(lead.id, contentHash);
+      if (dup) {
+        fs.unlink(path.join(MEASURE_PHOTOS_DIR, processed.filename), () => {});
+        return res.status(409).json({ error: "That photo is already on this house", duplicate: true });
+      }
       const sensors = sensorsWithExif(cleanSensors(parseJson(req.body?.sensors, {})), processed.exif);
       if (!sensors.imageWidth && processed.width) {
         sensors.imageWidth = processed.width;
@@ -365,8 +436,8 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
       const ref = lockedWallId && model ? wallRef(model, lockedWallId) : null;
 
       db.prepare(
-        `INSERT INTO measure_photos (id, leadId, clientId, filename, width, height, sensors, exif, wallId, assignMethod, wallRef, capturedAt, createdAt, slot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO measure_photos (id, leadId, clientId, filename, width, height, sensors, exif, wallId, assignMethod, wallRef, capturedAt, createdAt, slot, contentHash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         randomUUID(),
         lead.id,
@@ -382,6 +453,7 @@ router.post("/lead/:leadId/photos", requireAuth("viewer"), (req, res, next) => {
         sensors.capturedAt,
         new Date().toISOString(),
         slot,
+        contentHash,
       );
       reassignAll(lead.id);
       res.status(201).json(payload(lead.id));

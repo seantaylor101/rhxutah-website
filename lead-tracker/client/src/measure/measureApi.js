@@ -22,6 +22,8 @@ export const measureApi = {
   assignPhoto: (photoId, wallId) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ wallId }) }),
   setPhotoSlot: (photoId, slot) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ slot }) }),
   deletePhoto: (photoId) => request(`/photos/${photoId}`, { method: "DELETE" }),
+  upperSuggestion: (leadId) => request(`/lead/${leadId}/upper-suggestion`),
+  refreshRoof: (leadId) => request(`/lead/${leadId}/roof`, { method: "POST" }),
   startReport: (leadId) => request(`/lead/${leadId}/report`, { method: "POST" }),
   getReport: (leadId) => request(`/lead/${leadId}/report`),
   async exportZip(leadId) {
@@ -50,6 +52,7 @@ export const measureApi = {
     if (!res.ok) {
       const err = new Error((data && data.error) || `Upload failed (${res.status})`);
       err.status = res.status;
+      err.duplicate = !!(data && data.duplicate);
       throw err;
     }
     return data;

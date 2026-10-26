@@ -384,3 +384,10 @@ db.exec(`
 db.exec(`CREATE INDEX IF NOT EXISTS idx_measure_reports_leadId ON measure_reports (leadId, createdAt DESC)`);
 // a server restart kills any report mid-run; don't leave it spinning forever
 db.prepare(`UPDATE measure_reports SET status = 'error', error = 'Interrupted by a server restart. Run it again.' WHERE status = 'running'`).run();
+
+if (!db.prepare(`PRAGMA table_info(measure_photos)`).all().some((c) => c.name === "contentHash")) {
+  // sha-256 of the stored photo file, to turn away the same photo uploaded
+  // twice (re-encoding is deterministic, so the same original gives the
+  // same stored file). Filled in for older rows by routes/measure.js.
+  db.exec(`ALTER TABLE measure_photos ADD COLUMN contentHash TEXT`);
+}
