@@ -6,6 +6,7 @@ import { offlineStore } from "./offlineStore.js";
 import { retryFailed, discardQueued, kickUploads, enqueuePhoto } from "./uploader.js";
 import WallMap from "./WallMap.jsx";
 import CaptureScreen from "./CaptureScreen.jsx";
+import ReportView from "./ReportView.jsx";
 import { GUIDED_SLOTS, slotByKey } from "../../../shared/houseGeometry.js";
 
 function useObjectUrl(blob) {
@@ -173,6 +174,9 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const fileInputRef = useRef(null);
   const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
   const [adding, setAdding] = useState(0);
+  const [report, setReport] = useState(null); // full latest report (with result)
+  const [showReport, setShowReport] = useState(false);
+  const [startingReport, setStartingReport] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFile, setExportFile] = useState(null); // built zip, waiting for a tap to save/share
   const [captureSlot, setCaptureSlot] = useState(null); // open the camera on this shot
@@ -298,6 +302,47 @@ export default function MeasureScreen({ lead, editable, onClose }) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  // the latest report: fetched once, then polled every few seconds while
+  // one is running so the progress bar moves and the result appears
+  const summary = data.payload?.report || null;
+  const reportRunning = (report || summary)?.status === "running";
+  useEffect(() => {
+    if (!summary) return undefined;
+    let stop = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const r = await measureApi.getReport(lead.id);
+        if (stop) return;
+        setReport(r);
+        if (r && r.status === "running") timer = setTimeout(tick, 3000);
+      } catch {
+        if (!stop) timer = setTimeout(tick, 6000);
+      }
+    };
+    tick();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary?.id, summary?.status, lead.id]);
+
+  const createReport = async () => {
+    if (data.queuedCount > 0 && !window.confirm(`${data.queuedCount} photo(s) haven't uploaded yet and won't be in this report. Create it anyway?`)) return;
+    setStartingReport(true);
+    setActionError(null);
+    try {
+      const r = await measureApi.startReport(lead.id);
+      setReport(r);
+      await data.reload();
+    } catch (err) {
+      setActionError(!err.status ? "No signal. Create the report once you're back online." : err.message);
+    } finally {
+      setStartingReport(false);
+    }
   };
 
   const openCamera = (slot) => {
@@ -475,6 +520,63 @@ export default function MeasureScreen({ lead, editable, onClose }) {
         </div>
         <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickedFiles} />
 
+        {/* the report */}
+        <div style={card}>
+          <div style={{ ...sectionLabel, marginBottom: 6 }}>Measurement report</div>
+          {!data.payload?.anthropicConfigured ? (
+            <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
+              Reports need an Anthropic API key (<code>ANTHROPIC_API_KEY</code> in Render).
+            </div>
+          ) : reportRunning ? (
+            <div>
+              <div style={{ fontSize: 13.5, marginBottom: 6 }}>
+                Reading photos… {(report || summary).progress?.done ?? 0} of {(report || summary).progress?.total ?? "?"}
+              </div>
+              <div style={{ height: 8, borderRadius: 4, background: C.surfaceMuted, overflow: "hidden" }}>
+                <div
+                  style={{
+                    height: "100%",
+                    background: C.accent,
+                    width: `${Math.round((100 * ((report || summary).progress?.done || 0)) / Math.max(1, (report || summary).progress?.total || 1))}%`,
+                    transition: "width 0.4s",
+                  }}
+                />
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>Takes a minute or two. You can close this screen; it keeps going.</div>
+            </div>
+          ) : (
+            <>
+              {report?.status === "error" && <div style={{ fontSize: 13, color: C.rust, marginBottom: 8 }}>Last report failed: {report.error}</div>}
+              {report?.status === "done" && report.result && (
+                <div style={{ fontSize: 13, color: C.muted, marginBottom: 10 }}>
+                  Ready · {report.result.totals.measuredWalls} of {report.result.totals.totalWalls} walls measured · siding{" "}
+                  {Math.round(report.result.totals.sidingNet).toLocaleString()} ft² net · {new Date(report.finishedAt).toLocaleDateString()}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {report?.status === "done" && report.result && (
+                  <button style={btnPrimary} onClick={() => setShowReport(true)}>
+                    📄 View report
+                  </button>
+                )}
+                <button
+                  style={report?.status === "done" ? btnSecondary : btnPrimary}
+                  disabled={startingReport || data.offline || !model || !photos.some((p) => !p.pending)}
+                  onClick={createReport}
+                >
+                  {startingReport ? "Starting…" : report?.status === "done" ? "Run again" : "📐 Create report"}
+                </button>
+              </div>
+              {!model?.frontAz && model && <div style={{ fontSize: 12.5, color: C.amber, marginTop: 8 }}>Set the front of the house on the wall map first.</div>}
+              {doneCount < 4 && (
+                <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+                  Best results with all 8 walk-around shots; the 4 straight-on side shots matter most.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
         <div style={card}>
           <div style={{ ...sectionLabel, marginBottom: 6 }}>Export</div>
           <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
@@ -577,6 +679,19 @@ export default function MeasureScreen({ lead, editable, onClose }) {
           onDelete={() => removePhoto(openPhoto)}
           onRetry={() => retryFailed(openPhoto.clientId).then(() => data.refreshQueued())}
           onClose={() => setOpenPhotoKey(null)}
+        />
+      )}
+
+      {showReport && report?.result && (
+        <ReportView
+          report={report}
+          leadName={lead.name}
+          onClose={() => setShowReport(false)}
+          rerunning={startingReport || reportRunning}
+          onRerun={() => {
+            setShowReport(false);
+            createReport();
+          }}
         />
       )}
 

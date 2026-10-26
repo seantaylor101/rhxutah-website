@@ -349,3 +349,38 @@ if (!db.prepare(`PRAGMA table_info(measure_photos)`).all().some((c) => c.name ==
   // never sent to "Check these".
   db.exec(`ALTER TABLE measure_photos ADD COLUMN slot TEXT`);
 }
+
+// Claude's markup of each measuring photo, cached so re-running a report
+// only pays for photos (or wall maps) that changed. cacheKey covers the
+// prompt version and the wall list the photo was marked against.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS measure_photo_markups (
+    photoId TEXT NOT NULL,
+    cacheKey TEXT NOT NULL,
+    imageWidth INTEGER NOT NULL,
+    imageHeight INTEGER NOT NULL,
+    markup TEXT NOT NULL,
+    costUsd REAL NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    PRIMARY KEY (photoId, cacheKey)
+  );
+`);
+
+// generated measurement reports. status: running | done | error.
+// progress = JSON { done, total }; result = JSON (see measure/report.js)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS measure_reports (
+    id TEXT PRIMARY KEY,
+    leadId TEXT NOT NULL,
+    status TEXT NOT NULL,
+    progress TEXT NOT NULL DEFAULT '{}',
+    result TEXT,
+    error TEXT,
+    costUsd REAL NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    finishedAt TEXT
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_measure_reports_leadId ON measure_reports (leadId, createdAt DESC)`);
+// a server restart kills any report mid-run; don't leave it spinning forever
+db.prepare(`UPDATE measure_reports SET status = 'error', error = 'Interrupted by a server restart. Run it again.' WHERE status = 'running'`).run();

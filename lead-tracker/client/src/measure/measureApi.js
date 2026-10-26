@@ -22,6 +22,8 @@ export const measureApi = {
   assignPhoto: (photoId, wallId) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ wallId }) }),
   setPhotoSlot: (photoId, slot) => request(`/photos/${photoId}`, { method: "PATCH", body: JSON.stringify({ slot }) }),
   deletePhoto: (photoId) => request(`/photos/${photoId}`, { method: "DELETE" }),
+  startReport: (leadId) => request(`/lead/${leadId}/report`, { method: "POST" }),
+  getReport: (leadId) => request(`/lead/${leadId}/report`),
   async exportZip(leadId) {
     const res = await fetch(`${BASE}/lead/${leadId}/export.zip`, { credentials: "include" });
     if (!res.ok) {
