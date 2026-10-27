@@ -611,19 +611,26 @@ router.delete("/photos/:id", requireAuth("owner"), (req, res) => {
 // Create report: Claude marks up the photos, the geometry measures them.
 // Runs in the background; the phone polls GET .../report for progress.
 router.post("/lead/:leadId/report", requireAuth("viewer"), async (req, res) => {
-  const lead = leadOr404(req.params.leadId, res);
-  if (!lead) return;
-  if (!anthropicConfigured()) return res.status(503).json({ error: "Reports aren't set up yet (ANTHROPIC_API_KEY)" });
-  // a house set up before levels were automatic: find them now
-  if (!loadProject(lead.id)?.levels) await autoLevels(lead.id).catch(() => {});
-  const project = loadProject(lead.id);
-  const model = buildHouseModel(project);
-  if (!model) return res.status(400).json({ error: "Set up the wall map first" });
-  if (model.frontAz == null) return res.status(400).json({ error: "Set the front of the house on the wall map first" });
-  const rows = photoRows(lead.id);
-  if (!rows.length) return res.status(400).json({ error: "Take the walk-around photos first" });
-  startReport({ leadId: lead.id, project, model, photoRows: rows });
-  res.status(202).json(latestReport(lead.id));
+  try {
+    const lead = leadOr404(req.params.leadId, res);
+    if (!lead) return;
+    if (!anthropicConfigured()) return res.status(503).json({ error: "Reports aren't set up yet (ANTHROPIC_API_KEY)" });
+    // a house set up before levels were automatic: find them now
+    if (!loadProject(lead.id)?.levels) await autoLevels(lead.id).catch(() => {});
+    const project = loadProject(lead.id);
+    const model = buildHouseModel(project);
+    if (!model) return res.status(400).json({ error: "Set up the wall map first" });
+    if (model.frontAz == null) return res.status(400).json({ error: "Set the front of the house on the wall map first" });
+    const rows = photoRows(lead.id);
+    if (!rows.length) return res.status(400).json({ error: "Take the walk-around photos first" });
+    startReport({ leadId: lead.id, project, model, photoRows: rows });
+    res.status(202).json(latestReport(lead.id));
+  } catch (err) {
+    // always answer, so the phone isn't left on "Starting…" — and say what
+    // went wrong, so it can be fixed
+    console.error("report start failed", err);
+    res.status(500).json({ error: `Something went wrong starting the report (${err.message || "unknown error"})` });
+  }
 });
 
 router.get("/lead/:leadId/report", requireAuth("viewer"), (req, res) => {
