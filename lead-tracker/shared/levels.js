@@ -19,14 +19,16 @@
 // the house's local plane (x east, y north, meters) turned by theta, so a
 // square-cornered house lines up with the grid.
 
-import { cleanOutline, signedArea, pointInPolygon } from "./houseGeometry.js";
+import { signedArea, pointInPolygon } from "./houseGeometry.js";
 
 export const TWO_STORY_M = 4.6; // roof this far above the ground is a second story's
 const MIN_BUILDING_M = 1.8; // anything lower than this is a fence, car or bush
 const STEP_M = 1.1; // a drop this big over STEP_PX is an eave above a lower roof
 const STEP_PX = 3;
 const MIN_UPPER_M2 = 12;
-const EXPLAINED_EDGE = 0.55; // share of a second story's edge that must be eave or step
+const EXPLAINED_EDGE = 0.55;
+const ROOF_JOG_M = 0.9; // roof-edge jogs smaller than this are smoothed out
+const UPPER_JOG_M = 1.5; // the second story's edge is fuzzier (a height cut-off on a sloped roof) // share of a second story's edge that must be eave or step
 
 export function frameToLocal(grid, fx, fy) {
   const c = Math.cos(grid.theta);
@@ -226,12 +228,77 @@ function traceOuter(m, nx, ny) {
   return ring.length >= 4 ? ring : null;
 }
 
-function maskToRing(grid, m) {
+// drops repeated corners and corners on a straight line (including the
+// tip of a zero-width spike)
+function dropStraight(ring) {
+  let r = ring.slice();
+  let changed = true;
+  while (changed && r.length > 4) {
+    changed = false;
+    for (let i = 0; i < r.length; i++) {
+      const p = r[(i - 1 + r.length) % r.length];
+      const c = r[i];
+      const n = r[(i + 1) % r.length];
+      const same = c[0] === n[0] && c[1] === n[1];
+      const straight = (c[0] - p[0]) * (n[1] - c[1]) - (c[1] - p[1]) * (n[0] - c[0]) === 0;
+      if (same || straight) {
+        r.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return r;
+}
+
+// A traced outline is all right-angled steps along the grid (which runs
+// along the house's walls). Squares it up: every jog shorter than `minLen`
+// cells — a tree branch over the eave, the slope of a roof crossing the
+// height cut-off — is taken out by sliding the shorter of the two walls
+// beside it into line with the longer one.
+export function squareUp(ringIn, minLen) {
+  let r = dropStraight(ringIn.map((p) => p.slice()));
+  for (let guard = 0; guard < 500 && r.length > 4; guard++) {
+    let best = -1;
+    let bestLen = minLen;
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i];
+      const b = r[(i + 1) % r.length];
+      const l = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+      if (l < bestLen) {
+        bestLen = l;
+        best = i;
+      }
+    }
+    if (best < 0) break;
+    const N = r.length;
+    const ip = (best - 1 + N) % N;
+    const ia = best;
+    const ib = (best + 1) % N;
+    const inn = (best + 2) % N;
+    const [p, a, b, n] = [r[ip], r[ia], r[ib], r[inn]];
+    const k = a[1] === b[1] ? 0 : 1; // horizontal jog → line up x; vertical → y
+    const lenPrev = Math.abs(a[1 - k] - p[1 - k]);
+    const lenNext = Math.abs(n[1 - k] - b[1 - k]);
+    if (lenPrev >= lenNext) {
+      b[k] = a[k];
+      n[k] = a[k];
+    } else {
+      p[k] = b[k];
+      a[k] = b[k];
+    }
+    r = dropStraight(r);
+  }
+  return r;
+}
+
+function maskToRing(grid, m, minLenM) {
   const corners = traceOuter(m, grid.nx, grid.ny);
   if (!corners) return null;
-  const pts = corners.map(([u, v]) => frameToLocal(grid, grid.x0 + (u - 0.5) * grid.step, grid.y0 + (v - 0.5) * grid.step));
-  const ring = cleanOutline(pts);
-  return ring.length >= 3 && Math.abs(signedArea(ring)) > 4 ? ring : null;
+  const square = squareUp(corners, minLenM / grid.step);
+  let ring = square.map(([u, v]) => frameToLocal(grid, grid.x0 + (u - 0.5) * grid.step, grid.y0 + (v - 0.5) * grid.step));
+  if (signedArea(ring) < 0) ring = ring.reverse();
+  return ring.length >= 4 && Math.abs(signedArea(ring)) > 4 ? ring : null;
 }
 
 // area-weighted overlap of two rings, sampled on the grid
@@ -340,7 +407,7 @@ export function detectLevels(grid, ringLocal) {
 
   // a tighter outline from the rooftop itself, used only when it agrees
   // well with Google's (same house, just a better edge)
-  let roofRing = maskToRing(grid, house);
+  let roofRing = maskToRing(grid, house, ROOF_JOG_M);
   if (roofRing) {
     const o = overlap(grid, ringLocal, roofRing);
     if (o.iou < 0.72 || o.ratio < 0.7 || o.ratio > 1.2) roofRing = null;
@@ -416,7 +483,7 @@ export function detectLevels(grid, ringLocal) {
         nx,
         ny,
       );
-      upperRing = maskToRing(grid, closeMask(upper, nx, ny, 2));
+      upperRing = maskToRing(grid, closeMask(upper, nx, ny, 2), UPPER_JOG_M);
       if (!upperRing) levels = 1;
     }
     // ≥ 85%: the whole house is two stories — the upper outline is the roof

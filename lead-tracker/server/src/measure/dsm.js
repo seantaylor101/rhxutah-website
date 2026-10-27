@@ -49,8 +49,28 @@ export async function rasterSampler(arrayBuffer, { nearest = false } = {}) {
   const [data] = await image.readRasters();
   const width = image.getWidth();
   const height = image.getHeight();
-  const [ox, oy] = image.getOrigin();
-  const [rx, ry] = image.getResolution();
+  // pixel (col, row) corner → map X, Y as an affine transform
+  // [a, b, c, d, e, f]: X = a + b·col + c·row, Y = d + e·col + f·row.
+  // Google's files give a ModelTransformation matrix, read here directly:
+  // geotiff.js's getResolution() reports its north–south step as positive,
+  // which flips the map upside down.
+  const fd = image.fileDirectory || {};
+  const tag = (k) => fd[k] ?? (typeof fd.getValue === "function" ? fd.getValue(k) : undefined);
+  const mt = tag("ModelTransformation");
+  let A;
+  if (mt && mt.length >= 8) A = [mt[3], mt[0], mt[1], mt[7], mt[4], mt[5]];
+  else {
+    const [ox, oy] = image.getOrigin();
+    const [rx, ry] = image.getResolution(); // from tiepoint + pixel scale: north–south step negative
+    A = [ox, rx, 0, oy, 0, ry];
+  }
+  const det = A[1] * A[5] - A[2] * A[4];
+  if (!det) throw new Error("Height map has no usable position");
+  const toPixel = (X, Y) => {
+    const dx = X - A[0];
+    const dy = Y - A[3];
+    return [(A[5] * dx - A[2] * dy) / det, (-A[4] * dx + A[1] * dy) / det];
+  };
   const keys = image.getGeoKeys() || {};
   const epsg = keys.ProjectedCSTypeGeoKey || keys.GeographicTypeGeoKey || 4326;
   let project;
@@ -66,9 +86,10 @@ export async function rasterSampler(arrayBuffer, { nearest = false } = {}) {
   };
   const sample = (lat, lng) => {
     const [X, Y] = project(lat, lng);
-    // pixel centers sit half a pixel in from the origin corner
-    const c = (X - ox) / rx - 0.5;
-    const r = (Y - oy) / ry - 0.5;
+    const [pc, pr] = toPixel(X, Y);
+    // pixel centers sit half a pixel in from the corner
+    const c = pc - 0.5;
+    const r = pr - 0.5;
     if (nearest) return at(Math.round(c), Math.round(r));
     const c0 = Math.floor(c);
     const r0 = Math.floor(r);
@@ -98,14 +119,14 @@ export async function rasterSampler(arrayBuffer, { nearest = false } = {}) {
     epsg,
     width,
     height,
-    origin: [ox, oy],
-    resolution: [rx, ry],
+    transform: A,
     geoKeys: keys,
     noDataShare: Math.round((nodata / data.length) * 1000) / 1000,
     range: Number.isFinite(min) ? [min, max] : null,
     pixelOf: (lat, lng) => {
       const [X, Y] = project(lat, lng);
-      return { X, Y, col: (X - ox) / rx, row: (Y - oy) / ry };
+      const [col, row] = toPixel(X, Y);
+      return { X, Y, col, row };
     },
   };
   return sample;
