@@ -219,6 +219,9 @@ async function autoLevels(leadId, { reset = false } = {}) {
         tallestRoofFt: Math.round(r.maxRoofM * 3.28084 * 10) / 10,
         imageryDate: hm.imageryDate,
         imageryQuality: hm.imageryQuality,
+        eaves: r.eaves.map((e) => ({ a: ringToLatLng(origin, [e.a])[0], b: ringToLatLng(origin, [e.b])[0], heightM: e.heightM, stories: e.stories })),
+        // in the frame of `origin` (the outline's center when detected)
+        roofSurface: { ...r.roofSurface, origin },
       };
       const byHand = !reset && /manual|edited/.test(project.source || "");
       if (r.roofRing && !byHand) {

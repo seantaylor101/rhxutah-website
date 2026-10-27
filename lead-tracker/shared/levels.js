@@ -346,6 +346,162 @@ function distanceOutside(grid, inside) {
   return d;
 }
 
+// A roof plane doesn't stop at two-story height: the main roof can sweep
+// down to a one-story eave (a saltbox side, a roof carried over a wing), and
+// it always dips a little under the cut-off at its own eaves. Neither is a
+// "lower roof" with a second-story wall standing on it. A real lower roof
+// (garage, porch) meets the upper story at a step — the upper eave hangs
+// over it. So the upper roof is grown over every lower cell it carries on
+// into smoothly and downhill; what's left behind a step is a lower roof.
+// Returns the cells added.
+const SMOOTH_M = 0.45; // height change between neighboring cells that's still one roof surface
+const STEEPEST = 1.05; // m per m — steeper than a 12/12 roof is a wall, not a roof
+function absorbEaveFringe(grid, house, upper, rel) {
+  const { nx, ny, step } = grid;
+  const N = nx * ny;
+  // downhill direction of the roof at each cell (unit vector, or null on a
+  // flat spot / ridge / edge)
+  const slope = (k) => {
+    const i = k % nx;
+    const j = (k - i) / nx;
+    if (i < 2 || j < 2 || i >= nx - 2 || j >= ny - 2) return null;
+    const gx = (rel[k + 2] - rel[k - 2]) / (4 * step);
+    const gy = (rel[k + 2 * nx] - rel[k - 2 * nx]) / (4 * step);
+    const m = Math.hypot(gx, gy);
+    return Number.isFinite(m) && m > 0.08 ? [-gx / m, -gy / m] : null;
+  };
+  const taken = new Uint8Array(N);
+  const dirX = new Float32Array(N);
+  const dirY = new Float32Array(N);
+  const queue = [];
+  const neighbors = (k) => {
+    const i = k % nx;
+    return [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k >= nx ? k - nx : -1, k + nx < N ? k + nx : -1];
+  };
+  // one roof surface carrying on: no step, downhill, and sloping the same
+  // way as where the growth started (a garage roof that happens to meet the
+  // main roof at the same height slopes another way)
+  const carriesOn = (from, to, dir) => {
+    if (!Number.isFinite(rel[to]) || rel[to] > rel[from] + 0.1 || rel[from] - rel[to] >= SMOOTH_M) return false;
+    // the height map blurs a step over a cell or two, so also look two
+    // cells further on: steeper than any roof over that span is a step
+    const far = to + 2 * (to - from);
+    const sameLine = Math.abs(to - from) === 1 ? Math.floor(far / nx) === Math.floor(to / nx) : true;
+    if (far >= 0 && far < N && sameLine && Number.isFinite(rel[far]) && rel[from] - rel[far] > STEEPEST * 3 * step) return false;
+    // moving down the slope, not sideways along a contour
+    const mv = Math.abs(to - from) === 1 ? [to - from, 0] : [0, Math.sign(to - from)];
+    if (mv[0] * dir[0] + mv[1] * dir[1] < 0.5) return false;
+    const d = slope(to);
+    return !d || d[0] * dir[0] + d[1] * dir[1] > 0.8;
+  };
+  for (let k = 0; k < N; k++) {
+    if (!upper[k]) continue;
+    for (const q of neighbors(k)) {
+      if (q < 0 || !house[q] || upper[q] || taken[q]) continue;
+      // start only from solid upper roof: not a cell caught halfway up a
+      // blurred step, which would let the growth walk down the step
+      const behind = k - (q - k);
+      if (behind < 0 || behind >= N || !(Math.abs(rel[behind] - rel[k]) < SMOOTH_M)) continue;
+      const dir = slope(k); // the upper roof's own slope, carried on
+      if (dir && carriesOn(k, q, dir)) {
+        taken[q] = 1;
+        dirX[q] = dir[0];
+        dirY[q] = dir[1];
+        queue.push(q);
+      }
+    }
+  }
+  for (let qi = 0; qi < queue.length; qi++) {
+    const k = queue[qi];
+    const dir = [dirX[k], dirY[k]];
+    for (const q of neighbors(k)) {
+      if (q < 0 || !house[q] || upper[q] || taken[q]) continue;
+      if (carriesOn(k, q, dir)) {
+        taken[q] = 1;
+        dirX[q] = dir[0];
+        dirY[q] = dir[1];
+        queue.push(q);
+      }
+    }
+  }
+  for (const k of queue) upper[k] = 1;
+  return queue.length;
+}
+
+// Which stretches of each side of the outline sit under a two-story roof
+// edge: the roof just inside the edge belongs to the upper roof and is at
+// two-story height there. This, not the levels' outlines alone, says
+// whether the wall under it is one story or two — a main roof that sweeps
+// down to a one-story eave sits on a one-story wall, and a one-story gable
+// end of a lower roof rises high in the middle but is still one story.
+// → [{ a, b, heightM, stories }] runs along the ring's edges (local meters).
+const EAVE_DEPTHS_M = [0.5, 0.75, 1.0];
+const TWO_STORY_EAVE_M = 4.3;
+const MIN_RUN_M = 1.5;
+function eaveRuns(grid, ring, rel, upper) {
+  const { nx, ny, step } = grid;
+  const cell = ([x, y]) => {
+    const [fx, fy] = localToFrame(grid.theta, x, y);
+    const i = Math.round((fx - grid.x0) / step);
+    const j = Math.round((fy - grid.y0) / step);
+    return i < 0 || j < 0 || i >= nx || j >= ny ? -1 : j * nx + i;
+  };
+  const runs = [];
+  ring.forEach((a, idx) => {
+    const b = ring[(idx + 1) % ring.length];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L < 0.3) return;
+    const u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
+    const inward = [-u[1], u[0]]; // counter-clockwise ring
+    const samples = [];
+    for (let t = step / 2; t < L; t += step) {
+      let h = Infinity;
+      let up = 0;
+      for (const d of EAVE_DEPTHS_M) {
+        const k = cell([a[0] + u[0] * t + inward[0] * d, a[1] + u[1] * t + inward[1] * d]);
+        if (k < 0 || !(rel[k] > MIN_BUILDING_M)) continue; // off the roof
+        h = Math.min(h, rel[k]);
+        up += upper[k];
+      }
+      samples.push({ t, h: Number.isFinite(h) ? h : null, two: Number.isFinite(h) && up >= 2 && h >= TWO_STORY_EAVE_M });
+    }
+    // runs of one / two stories, short ones folded into their neighbors
+    let parts = [];
+    for (const smp of samples) {
+      const last = parts[parts.length - 1];
+      if (last && last.two === smp.two) last.items.push(smp);
+      else parts.push({ two: smp.two, items: [smp] });
+    }
+    let changed = true;
+    while (changed && parts.length > 1) {
+      changed = false;
+      let si = -1;
+      for (let i = 0; i < parts.length; i++)
+        if (parts[i].items.length * step < MIN_RUN_M && (si < 0 || parts[i].items.length < parts[si].items.length)) si = i;
+      if (si < 0) break;
+      const into = si === 0 ? 1 : si === parts.length - 1 ? si - 1 : parts[si - 1].items.length >= parts[si + 1].items.length ? si - 1 : si + 1;
+      const [lo, hi] = into < si ? [into, si] : [si, into];
+      parts.splice(lo, 2, { two: parts[into].two, items: [...parts[lo].items, ...parts[hi].items] });
+      for (let i = parts.length - 1; i > 0; i--)
+        if (parts[i].two === parts[i - 1].two) parts.splice(i - 1, 2, { two: parts[i].two, items: [...parts[i - 1].items, ...parts[i].items] });
+      changed = true;
+    }
+    for (const part of parts) {
+      const t0 = Math.max(0, part.items[0].t - step / 2);
+      const t1 = Math.min(L, part.items[part.items.length - 1].t + step / 2);
+      const hs = part.items.map((x) => x.h).filter((x) => x != null);
+      const h = quantile(hs, 0.5);
+      runs.push({
+        a: [a[0] + u[0] * t0, a[1] + u[1] * t0],
+        b: [a[0] + u[0] * t1, a[1] + u[1] * t1],
+        heightM: h == null ? null : Math.round(h * 100) / 100,
+        stories: hs.length ? (part.two ? 2 : 1) : null,
+      });
+    }
+  });
+  return runs;
+}
+
 // Main entry. `ringLocal` is the roof outline we have (local meters, from
 // Google's building outline). Returns:
 //   { ok, reason?, groundM, maxRoofM, levels: 1 | 2,
@@ -468,6 +624,7 @@ export function detectLevels(grid, ringLocal) {
       upper[k] = 1;
       upperCells++;
     }
+  if (upperCells) upperCells += absorbEaveFringe(grid, house, upper, rel);
   const upperShare = upperCells / houseCells;
   let upperRing = null;
   let levels = 1;
@@ -490,8 +647,44 @@ export function detectLevels(grid, ringLocal) {
     // outline itself (the caller fills that in)
   }
 
+  // the roof surface itself, every 50 cm, for the 3D view. The height map
+  // blurs the last half meter of an eave down toward the ground, so the rim
+  // takes the heights from just inside it, and a small median takes out
+  // speckle (vents, a satellite dish).
+  const core = erode(house, nx, ny, 2);
+  const clean = new Float32Array(N).fill(NaN);
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      if (!house[k]) continue;
+      const vals = [];
+      const r = core[k] ? 1 : 4;
+      for (let dj = -r; dj <= r; dj++)
+        for (let di = -r; di <= r; di++) {
+          const a = i + di;
+          const b = j + dj;
+          if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+          const q = b * nx + a;
+          if (core[q] && Number.isFinite(rel[q])) vals.push(rel[q]);
+        }
+      clean[k] = vals.length ? (core[k] ? quantile(vals, 0.5) : quantile(vals, 0.3)) : rel[k];
+    }
+  const SUB = 2;
+  const rnx = Math.ceil(nx / SUB);
+  const rny = Math.ceil(ny / SUB);
+  const rh = new Array(rnx * rny).fill(null);
+  for (let j = 0; j < rny; j++)
+    for (let i = 0; i < rnx; i++) {
+      const k = j * SUB * nx + i * SUB;
+      if (house[k] && Number.isFinite(clean[k])) rh[j * rnx + i] = Math.round(Math.max(0, clean[k]) * 100) / 100;
+    }
+  const roofSurface = { theta: grid.theta, x0: grid.x0, y0: grid.y0, step: step * SUB, nx: rnx, ny: rny, h: rh };
+
+  const finalRing = roofRing || (signedArea(ringLocal) < 0 ? ringLocal.slice().reverse() : ringLocal);
   return {
     ok: true,
+    eaves: eaveRuns(grid, finalRing, rel, upper),
+    roofSurface,
     groundM,
     maxRoofM: Math.round(maxRoofM * 100) / 100,
     houseAreaM2: Math.round(houseM2 * 10) / 10,

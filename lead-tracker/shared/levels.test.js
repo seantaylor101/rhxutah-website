@@ -73,9 +73,9 @@ test("a plain two-story house is two stories all the way around", () => {
   assert.equal(r.wholeHouseTwoStory, true);
 });
 
-test("a main roof that sweeps down over a one-story wing still finds the second story", () => {
+test("a main roof that sweeps down over a one-story wing is one roof, with a one-story wall under its low side", () => {
   // two-story block u −7..1 with its east roof plane carrying on over a
-  // one-story wing to u = 8; one-story garage across the front
+  // one-story wing to u = 8; one-story garage across the front (a step)
   const roofAt = (u, v) => {
     if (u < -7 || u > 8 || v < -10 || v > 6) return null;
     if (v < -4) return 3.0 + 0.2 * (v + 10);
@@ -86,8 +86,17 @@ test("a main roof that sweeps down over a one-story wing still finds the second 
   const r = detectLevels(fakeGrid(outline, roofAt), outline);
   assert.equal(r.levels, 2);
   assert.ok(inside(r.upperRing, -4, 0));
-  assert.ok(!inside(r.upperRing, 0, -7)); // garage
-  assert.ok(!inside(r.upperRing, 7, 0)); // far end of the wing
+  assert.ok(inside(r.upperRing, 7, 0)); // the wing is under the main roof: no wall stands on it
+  assert.ok(!inside(r.upperRing, 0, -7)); // the garage is a separate, lower roof
+  // eaves: west side at two-story height, east side (over the wing) low
+  const eaveFacing = (dir) =>
+    r.eaves.find((e) => {
+      const [ex, ey] = [e.b[0] - e.a[0], e.b[1] - e.a[1]];
+      const n = toHouse([ey, -ex]); // outward normal, house coordinates
+      return n[0] * dir[0] + n[1] * dir[1] > 0.9 * Math.hypot(...n) && Math.hypot(ex, ey) > 8;
+    });
+  assert.ok(eaveFacing([-1, 0]).heightM > 4.6, "west eave");
+  assert.ok(eaveFacing([1, 0]).heightM < 4.0, "east eave");
 });
 
 test("tightens an outline that came out too big", () => {

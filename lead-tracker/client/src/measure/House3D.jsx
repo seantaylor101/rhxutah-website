@@ -82,10 +82,84 @@ function flatRoof(ring, eaveFt) {
   return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0x6b6f75, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
 }
 
+// Google's roof surface (model.roofSurface, from the height map): the real
+// roof, every 50 cm, and how high it is over any point
+function surfaceOf(rs) {
+  const c = Math.cos(rs.theta);
+  const sn = Math.sin(rs.theta);
+  const at = (i, j) => (i < 0 || j < 0 || i >= rs.nx || j >= rs.ny ? null : rs.h[j * rs.nx + i]);
+  const point = (i, j) => {
+    const fx = rs.x0 + i * rs.step;
+    const fy = rs.y0 + j * rs.step;
+    return [fx * c - fy * sn, fx * sn + fy * c];
+  };
+  const heightAt = (x, y) => {
+    const fx = x * c + y * sn;
+    const fy = -x * sn + y * c;
+    return at(Math.round((fx - rs.x0) / rs.step), Math.round((fy - rs.y0) / rs.step));
+  };
+  return { at, point, heightAt };
+}
+
+function surfaceRoof(rs) {
+  const s = surfaceOf(rs);
+  const pts = [];
+  for (let j = 0; j < rs.ny - 1; j++)
+    for (let i = 0; i < rs.nx - 1; i++) {
+      const hs = [s.at(i, j), s.at(i + 1, j), s.at(i + 1, j + 1), s.at(i, j + 1)];
+      if (hs.some((h) => h == null)) continue;
+      const [a, b, c, d] = [
+        [i, j],
+        [i + 1, j],
+        [i + 1, j + 1],
+        [i, j + 1],
+      ].map(([u, v], k) => V(...s.point(u, v), hs[k] / FT));
+      pts.push(a, b, c, a, c, d);
+    }
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  g.computeVertexNormals();
+  return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0x6b6f75, side: THREE.DoubleSide }));
+}
+
+// a wall from its base up to wherever the roof above it is — eaves, gable
+// peaks and all — sampled along its length
+function wallToRoof(w, baseFt, fallbackTopFt, surface, color) {
+  const n = Math.max(2, Math.ceil(w.lengthM / 0.4) + 1);
+  const pts = [];
+  const tops = [];
+  for (let k = 0; k < n; k++) {
+    const t = k / (n - 1);
+    const p = [w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t];
+    const h = surface.heightAt(p[0], p[1]);
+    tops.push(h != null ? h / FT : null);
+    pts.push(p);
+  }
+  // running median over ~1.2 m, so a vent or a gap in the map doesn't make
+  // a spike; gaps take the report's / typical eave height
+  const smooth = tops.map((_, k) => {
+    const win = tops.slice(Math.max(0, k - 1), k + 2).filter((x) => x != null).sort((x, y) => x - y);
+    return win.length ? Math.max(baseFt + 1, win[Math.floor(win.length / 2)]) : fallbackTopFt;
+  });
+  tops.splice(0, tops.length, ...smooth);
+  const tri = [];
+  for (let k = 0; k < n - 1; k++) {
+    const [p, q] = [pts[k], pts[k + 1]];
+    const a = V(...p, baseFt);
+    const b = V(...q, baseFt);
+    const c = V(...q, tops[k + 1]);
+    const d = V(...p, tops[k]);
+    tri.push(a, b, c, a, c, d);
+  }
+  const g = new THREE.BufferGeometry().setFromPoints(tri);
+  g.computeVertexNormals();
+  return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide }));
+}
+
 function buildScene(model, report, pitch12) {
   const group = new THREE.Group();
   const rw = Object.fromEntries((report?.walls || []).map((w) => [w.id, w]));
   const rise = (pitch12 ?? 7) / 12;
+  const surface = model.roofSurface ? surfaceOf(model.roofSurface) : null;
   let topGround = 0;
   let topUpper = 0;
 
@@ -98,8 +172,9 @@ function buildScene(model, report, pitch12) {
     const kind = w.tier === "upper" ? "upper" : w.stories === 2 ? "two" : "one";
     const color = h.material ? MATERIAL_COLOR[h.material] ?? TIER_COLOR[kind] : TIER_COLOR[kind];
     const [a, b] = [w.a, w.b];
-    group.add(quad(V(...a, h.base), V(...b, h.base), V(...b, h.eave), V(...a, h.eave), color));
-    if (h.peak && h.peak > h.eave + 0.3) {
+    if (surface) group.add(wallToRoof(w, h.base, h.eave, surface, color));
+    else group.add(quad(V(...a, h.base), V(...b, h.base), V(...b, h.eave), V(...a, h.eave), color));
+    if (!surface && h.peak && h.peak > h.eave + 0.3) {
       const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       group.add(tri(V(...a, h.eave), V(...b, h.eave), V(...m, h.peak), color));
     }
@@ -122,13 +197,10 @@ function buildScene(model, report, pitch12) {
     }
   }
 
-  // roofs: hipped over a 4-cornered level, flat otherwise
-  const groundEave = topGround || (model.hasUpper ? 9 : topUpper || 9);
-  // (a house that's two stories all the way round has no lower roof)
-  if (model.roofLocal && !(model.hasUpper && !topGround)) group.add(model.roofLocal.length === 4 && !model.hasUpper ? hipRoof(model.roofLocal, groundEave, rise) : flatRoof(model.roofLocal, groundEave));
-  if (model.upperRoofLocal) {
-    const eave = topUpper || 18;
-    group.add(model.upperRoofLocal.length === 4 ? hipRoof(model.upperRoofLocal, eave, rise) : flatRoof(model.upperRoofLocal, eave));
+  if (surface) {
+    group.add(surfaceRoof(model.roofSurface));
+  } else {
+    addGuessedRoofs(group, model, topGround, topUpper, rise);
   }
 
   // ground
@@ -136,6 +208,17 @@ function buildScene(model, report, pitch12) {
   groundGeo.rotateX(-Math.PI / 2);
   group.add(new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ color: 0x9fbf8f })));
   return group;
+}
+
+// no height map: hipped over a 4-cornered level, flat otherwise
+function addGuessedRoofs(group, model, topGround, topUpper, rise) {
+  const groundEave = topGround || (model.hasUpper ? 9 : topUpper || 9);
+  // (a house that's two stories all the way round has no lower roof)
+  if (model.roofLocal && !(model.hasUpper && !topGround)) group.add(model.roofLocal.length === 4 && !model.hasUpper ? hipRoof(model.roofLocal, groundEave, rise) : flatRoof(model.roofLocal, groundEave));
+  if (model.upperRoofLocal) {
+    const eave = topUpper || 18;
+    group.add(model.upperRoofLocal.length === 4 ? hipRoof(model.upperRoofLocal, eave, rise) : flatRoof(model.upperRoofLocal, eave));
+  }
 }
 
 export default function House3D({ model, report, pitch12, onClose }) {
@@ -209,7 +292,8 @@ export default function House3D({ model, report, pitch12, onClose }) {
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18 }}>3D model</div>
           <div style={{ fontSize: 12, color: C.muted }}>
-            {report ? "Heights, gables, windows and doors from the latest report." : "Typical heights until a report is run."} Drag to turn, pinch to zoom.
+            {model.roofSurface ? "Roof from Google's height map" : "Roof shape estimated"}
+            {report ? "; windows and doors from the latest report." : "."} Drag to turn, pinch to zoom.
           </div>
         </div>
         <button style={btnSecondary} onClick={onClose}>
@@ -220,7 +304,7 @@ export default function House3D({ model, report, pitch12, onClose }) {
         {error && <div style={{ padding: 20, color: C.rust }}>{error}</div>}
       </div>
       <div style={{ padding: "8px 16px max(10px, env(safe-area-inset-bottom))", fontSize: 12, color: C.muted, background: C.surface, borderTop: `1px solid ${C.border}` }}>
-        Compare it to the house. If a level, wall or roof looks wrong, fix the outline on the wall map (or the upper story) and run the report again.
+        Compare it to the house. If a wall or the roof is off, adjust the outline on the wall map or tap Redo automatically.
       </div>
     </div>
   );
