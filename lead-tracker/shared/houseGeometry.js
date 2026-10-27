@@ -519,15 +519,90 @@ export function buildHouseModel(project) {
   };
   const rotate = (arr, k) => arr.slice(k).concat(arr.slice(0, k));
 
+  // which stretches of the outline sit under a two-story roof edge
+  // (levels.js eaveRuns): a wall under an eave at two-story height is two
+  // stories, under a low eave one — even where the main roof sweeps down
+  // to it. Ground walls are split where that changes.
+  const eaves = (project.levels && Array.isArray(project.levels.eaves) ? project.levels.eaves : [])
+    .filter((e) => e && (e.stories === 1 || e.stories === 2) && Array.isArray(e.a) && Array.isArray(e.b))
+    .map((e) => {
+      const a = toLocal(origin, e.a[0], e.a[1]);
+      const b = toLocal(origin, e.b[0], e.b[1]);
+      const u = norm(sub(b, a));
+      return { a, b, n: [u[1], -u[0]], stories: e.stories };
+    });
+  const splitByEaves = (piece) => {
+    if (!eaves.length) return [{ ...piece, eaveStories: null }];
+    const dir = norm(sub(piece.b, piece.a));
+    const n = [dir[1], -dir[0]];
+    const runs = [];
+    for (const e of eaves) {
+      if (dot(e.n, n) < 0.95) continue;
+      if (Math.abs(dot(sub(piece.mid, e.a), e.n)) > inset + 1.2) continue;
+      const ta = dot(sub(e.a, piece.a), dir) / piece.lengthM;
+      const tb = dot(sub(e.b, piece.a), dir) / piece.lengthM;
+      const lo = Math.max(0, Math.min(ta, tb));
+      const hi = Math.min(1, Math.max(ta, tb));
+      if (hi > lo) runs.push({ lo, hi, stories: e.stories });
+    }
+    if (!runs.length) return [{ ...piece, eaveStories: null }];
+    const cuts = [...new Set([0, 1, ...runs.flatMap((r) => [r.lo, r.hi])])].sort((x, y) => x - y);
+    let parts = [];
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const t = (cuts[i] + cuts[i + 1]) / 2;
+      const r = runs.find((x) => x.lo <= t && t <= x.hi);
+      parts.push({ t0: cuts[i], t1: cuts[i + 1], stories: r ? r.stories : null });
+    }
+    // no slivers: anything under 0.6 m joins its longer neighbor
+    const minT = 0.6 / piece.lengthM;
+    for (let guard = 0; guard < 20 && parts.length > 1; guard++) {
+      const i = parts.findIndex((p) => p.t1 - p.t0 < minT);
+      if (i < 0) break;
+      const j = i === 0 ? 1 : i === parts.length - 1 ? i - 1 : parts[i - 1].t1 - parts[i - 1].t0 >= parts[i + 1].t1 - parts[i + 1].t0 ? i - 1 : i + 1;
+      const [lo, hi] = [Math.min(i, j), Math.max(i, j)];
+      parts.splice(lo, 2, { t0: parts[lo].t0, t1: parts[hi].t1, stories: parts[j].stories });
+    }
+    const merged = [];
+    for (const p of parts) {
+      const last = merged[merged.length - 1];
+      if (last && last.stories === p.stories) last.t1 = p.t1;
+      else merged.push({ ...p });
+    }
+    return merged.map(({ t0, t1, stories }) => {
+      const a = lerp2(piece.a, piece.b, t0);
+      const b = lerp2(piece.a, piece.b, t1);
+      return { ...piece, a, b, lengthM: len(sub(b, a)), mid: mul(add(a, b), 0.5), eaveStories: stories };
+    });
+  };
   // the height map found one level (levels.js) — as opposed to not knowing
   const knownOneStory = !upperWallLocal && project.levels && project.levels.count === 1;
   const groundEdges = edgesOf(wallLocal);
   const upperEdges = upperWallLocal ? edgesOf(upperWallLocal) : [];
   const gStart = startIndex(groundEdges);
   const groundOrdered = rotate(groundEdges, gStart);
-  const groundPieces = groundOrdered.flatMap((g) =>
-    splitEdge(g, upperEdges).map((p) => ({ ...p, tier: "ground", stories: upperWallLocal ? (p.flush ? 2 : 1) : knownOneStory ? 1 : null })),
-  );
+  const groundPieces = groundOrdered.flatMap((g) => {
+    const pieces = splitEdge(g, upperEdges)
+      .flatMap(splitByEaves)
+      .map(({ eaveStories, ...p }) => ({
+        ...p,
+        tier: "ground",
+        stories: eaveStories ?? (upperWallLocal ? (p.flush ? 2 : 1) : knownOneStory ? 1 : null),
+      }));
+    // the upper outline and the eave heights can put the change from one
+    // story to two a foot or two apart: no sliver walls, and one wall per
+    // stretch of the same height
+    const out = [];
+    for (const p of pieces) {
+      const last = out[out.length - 1];
+      if (last && (last.stories === p.stories || p.lengthM < 0.9 || last.lengthM < 0.9)) {
+        const keep = last.lengthM >= p.lengthM ? last : p;
+        const a = last.a;
+        const b = p.b;
+        out[out.length - 1] = { ...keep, a, b, lengthM: len(sub(b, a)), mid: mul(add(a, b), 0.5) };
+      } else out.push(p);
+    }
+    return out;
+  });
   const uStart = upperEdges.length ? startIndex(upperEdges) : 0;
   const upperRing = rotate(upperEdges, uStart).map((u) => splitEdge(u, groundEdges));
   const upperPieces = upperRing.flat().filter((p) => !p.flush).map((p) => ({
@@ -572,9 +647,21 @@ export function buildHouseModel(project) {
     }
   }
 
+  // Google's roof surface (levels.js), moved into this model's frame — the
+  // 3D view draws the real roof from it
+  let roofSurface = null;
+  const rs = project.levels && project.levels.roofSurface;
+  if (rs && rs.origin && Array.isArray(rs.h) && rs.nx * rs.ny === rs.h.length) {
+    const off = toLocal(origin, rs.origin.lat, rs.origin.lng);
+    const c = Math.cos(rs.theta);
+    const sn = Math.sin(rs.theta);
+    roofSurface = { ...rs, x0: rs.x0 + off[0] * c + off[1] * sn, y0: rs.y0 - off[0] * sn + off[1] * c, origin: undefined };
+  }
+
   return {
     origin,
     roofLocal,
+    roofSurface,
     wallLocal: groundOrdered.map((w) => w.a),
     upperRoofLocal,
     upperWallLocal,

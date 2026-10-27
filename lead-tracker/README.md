@@ -135,7 +135,12 @@ can sort photos onto walls offline with the same math the server uses).
    reads Google's roof height map (Solar API `dataLayers`: DSM + roof mask, `server/src/measure/dsm.js`)
    and `shared/levels.js` finds the levels on its own: roof at two-story height whose edges are the
    house's outer eaves or a step down onto a lower roof is the second story (`upperOutline`, blue on
-   the wall map); a tall one-story ridge slopes smoothly into the rest of the roof and is ignored. The
+   the wall map); a tall one-story ridge slopes smoothly into the rest of the roof and is ignored.
+   The upper roof is then grown down its own slope, so a main roof that sweeps down to a one-story
+   eave stays one roof — only a real step (a garage or porch roof) leaves walls standing on a lower
+   roof. Each outside wall's story count comes from how high the roof edge above it is
+   (`levels.eaves`; walls are split where that changes). The 3D view draws the roof surface itself
+   (`levels.roofSurface`) with walls rising to meet it. The
    rooftop's own edge also replaces Google's building outline when they agree closely (fixes an
    outline that came out too big). Hand edits are never overwritten except by "Redo automatically".
    The photos check the result: a ground wall measured at 14 ft+ that the map called one story (or
