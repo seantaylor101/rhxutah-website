@@ -315,6 +315,8 @@ export function checkOpenings(openings, { widthFt, heightFt, topFt, groundWall }
 // typical heights when a wall has no photo of its own, by kind of wall
 const DEFAULT_H1 = 9; // one story, ground to eave
 const DEFAULT_H2 = 18; // two story, ground to eave
+const TWO_STORY_FT = 14; // a ground wall at least this tall is two stories
+const ONE_STORY_MAX_FT = 12;
 
 // Builds the report from the house model (walls from the satellite outline,
 // see houseGeometry.buildHouseModel) and every photo's vision analysis:
@@ -348,8 +350,23 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
 
   const rise = Number.isFinite(pitch12) ? pitch12 / 12 : null;
   const kindOf = (w) => (w.tier === "upper" ? "upper" : w.stories === 2 ? "two" : "one");
+  // the photos check the levels the height map found: a ground wall measured
+  // well over one story tall is two stories (or the other way round). The
+  // measured height is used either way; this keeps a wrong level from
+  // skewing the typical heights used for walls nobody photographed.
+  const levelFromPhotos = (w, hFt) => {
+    if (w.tier === "upper" || w.stories == null || hFt == null) return null;
+    if (w.stories === 1 && hFt >= TWO_STORY_FT) return 2;
+    if (w.stories === 2 && hFt <= ONE_STORY_MAX_FT) return 1;
+    return null;
+  };
   const measuredBy = { one: [], two: [], upper: [] };
-  for (const w of walls) if (candidates[w.id].length) measuredBy[kindOf(w)].push(weightedHeight(candidates[w.id].sort((x, y) => y.score - x.score)));
+  for (const w of walls) {
+    if (!candidates[w.id].length) continue;
+    const hFt = weightedHeight(candidates[w.id].sort((x, y) => y.score - x.score));
+    const seen = levelFromPhotos(w, hFt);
+    measuredBy[seen ? (seen === 2 ? "two" : "one") : kindOf(w)].push(hFt);
+  }
   const h1 = median(measuredBy.one) ?? (model.hasUpper ? DEFAULT_H1 : median(measuredBy.two) ?? DEFAULT_H1);
   const h2 = median(measuredBy.two) ?? (model.hasUpper ? DEFAULT_H2 : h1);
   // an upper wall's absolute base: the lower roof's eave plus the roof's rise
@@ -374,6 +391,9 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     if (!best && kind === "upper") notes.push("Upper wall not seen in any photo, so not counted. If there's siding here, add a photo of it.");
     if (best && !best.baseVisible) notes.push("Bottom of wall hidden; base extended from what was visible");
     if (best && best.lowRes) notes.push("Measured from a low-resolution photo");
+    const photoLevel = best ? levelFromPhotos(w, height) : null;
+    if (photoLevel === 2) notes.push(`Photos show this wall is two stories (${height.toFixed(1)} ft), not one — the photo height is used`);
+    if (photoLevel === 1) notes.push(`Photos show this wall is one story (${height.toFixed(1)} ft), not two — the photo height is used`);
     if (cands.length > 1) {
       const spread = Math.max(...cands.map((c) => c.heightFt)) - Math.min(...cands.map((c) => c.heightFt));
       if (spread > Math.max(1.5, height * 0.15)) notes.push(`Photos disagree on height by ${spread.toFixed(1)} ft`);
@@ -436,6 +456,7 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
       side: w.side,
       tier: w.tier || "ground",
       stories: w.stories ?? null,
+      photoStories: photoLevel,
       setbackFt: w.setbackM != null ? w.setbackM * FT_PER_M : null,
       widthFt,
       height,
@@ -466,7 +487,8 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     };
   });
 
-  return { walls: wallReports, totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }), heights: { h1, h2 }, rejected };
+  const levelMismatches = wallReports.filter((w) => w.photoStories).map((w) => ({ id: w.id, label: w.label, mapStories: w.stories, photoStories: w.photoStories }));
+  return { walls: wallReports, totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }), heights: { h1, h2 }, levelMismatches, rejected };
 }
 
 function computeTotals(model, walls, { rise, roofAreaFt2 }) {

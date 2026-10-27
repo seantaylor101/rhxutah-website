@@ -28,6 +28,8 @@ import {
   wallForSlot,
 } from "../../../shared/houseGeometry.js";
 import { googleConfigured, geocodeWithBuilding, roofFromSolar, fetchSatelliteImage } from "../measure/google.js";
+import { fetchHeightGrid } from "../measure/dsm.js";
+import { detectLevels } from "../../../shared/levels.js";
 import { createZipWriter } from "../measure/zip.js";
 import { startReport, latestReport } from "../measure/report.js";
 import { anthropicConfigured } from "../measure/vision.js";
@@ -165,6 +167,60 @@ function reassignAll(leadId) {
   })();
 }
 
+const ringToLatLng = (origin, ring) =>
+  ring.map(([x, y]) => {
+    const ll = toLatLng(origin, x, y);
+    return [ll.lat, ll.lng];
+  });
+
+// Finds the house's levels from Google's roof height map (shared/levels.js)
+// and saves them: the second story's outline (or none for a one-story
+// house), and a tighter building outline when the roof itself shows Google's
+// outline was off. Doesn't override what was set by hand — an outline that
+// was dragged keeps its corners, a hand-placed upper story stays put — unless
+// `reset` (the "redo automatically" button). When it can't tell, it saves
+// the reason so the app can say so.
+async function autoLevels(leadId, { reset = false } = {}) {
+  const project = loadProject(leadId);
+  if (!project?.roofOutline || !googleConfigured()) return;
+  const { address, updatedAt, ...next } = project;
+  const origin = centroidLatLng(project.roofOutline);
+  const ringLocal = project.roofOutline.map(([lat, lng]) => toLocal(origin, lat, lng));
+  let levels;
+  try {
+    const hm = await fetchHeightGrid(origin, ringLocal);
+    const r = hm ? detectLevels(hm.grid, ringLocal) : { ok: false, reason: "Google has no roof height map for this house" };
+    if (!r.ok) levels = { count: null, reason: r.reason };
+    else {
+      levels = {
+        count: r.levels,
+        wholeHouse: r.wholeHouseTwoStory,
+        upperShare: r.upperShare,
+        tallestRoofFt: Math.round(r.maxRoofM * 3.28084 * 10) / 10,
+        imageryDate: hm.imageryDate,
+        imageryQuality: hm.imageryQuality,
+      };
+      const byHand = !reset && /manual|edited/.test(project.source || "");
+      if (r.roofRing && !byHand) {
+        next.googleOutline = project.googleOutline || project.roofOutline;
+        next.roofOutline = ringToLatLng(origin, r.roofRing);
+        next.source = "height-map";
+        levels.outlineFromHeightMap = true;
+      }
+      if (reset || next.upperSource !== "manual") {
+        next.upperOutline = r.levels === 2 ? (r.wholeHouseTwoStory ? next.roofOutline : ringToLatLng(origin, r.upperRing)) : null;
+        next.upperSource = "auto";
+      }
+    }
+  } catch (err) {
+    console.error("height map failed", err);
+    levels = { count: null, reason: err.name === "TimeoutError" ? "Google's height map took too long to answer" : "Couldn't read Google's height map" };
+  }
+  next.levels = { ...levels, source: levels.count ? "height-map" : "none", detectedAt: new Date().toISOString() };
+  saveProject(leadId, address, next);
+  reassignAll(leadId);
+}
+
 function reportSummary(leadId) {
   const r = latestReport(leadId);
   if (!r) return null;
@@ -262,6 +318,7 @@ router.post("/lead/:leadId/lookup", requireAuth("viewer"), async (req, res, next
       lookedUpAt: new Date().toISOString(),
     });
     reassignAll(lead.id);
+    await autoLevels(lead.id);
     res.json(payload(lead.id));
   } catch (err) {
     if (err.expose) return res.status(400).json({ error: err.message });
@@ -322,6 +379,7 @@ router.put("/lead/:leadId/outline", requireAuth("viewer"), (req, res) => {
       }
       next.upperOutline = body.upperOutline;
     }
+    next.upperSource = "manual";
   }
   if ("overhangIn" in body) {
     const n = Number(body.overhangIn);
@@ -355,9 +413,25 @@ router.post("/lead/:leadId/roof", requireAuth("viewer"), async (req, res, next) 
     if (!roof) return res.status(404).json({ error: "Google has no roof data for this house" });
     const { address, updatedAt, ...data } = prev;
     saveProject(lead.id, address, { ...data, roof });
+    await autoLevels(lead.id);
     res.json(payload(lead.id));
   } catch (err) {
     if (err.name === "TimeoutError") return res.status(504).json({ error: "Google took too long to answer — try again" });
+    next(err);
+  }
+});
+
+// finds the levels again from the height map; reset: true also replaces
+// outline corners and an upper story that were placed by hand
+router.post("/lead/:leadId/levels", requireAuth("viewer"), async (req, res, next) => {
+  const lead = leadOr404(req.params.leadId, res);
+  if (!lead) return;
+  if (!googleConfigured()) return res.status(503).json({ error: "Google Maps isn't set up yet (GOOGLE_MAPS_API_KEY)" });
+  if (!loadProject(lead.id)?.roofOutline) return res.status(400).json({ error: "Look up the address first" });
+  try {
+    await autoLevels(lead.id, { reset: !!req.body?.reset });
+    res.json(payload(lead.id));
+  } catch (err) {
     next(err);
   }
 });
@@ -509,10 +583,12 @@ router.delete("/photos/:id", requireAuth("owner"), (req, res) => {
 
 // Create report: Claude marks up the photos, the geometry measures them.
 // Runs in the background; the phone polls GET .../report for progress.
-router.post("/lead/:leadId/report", requireAuth("viewer"), (req, res) => {
+router.post("/lead/:leadId/report", requireAuth("viewer"), async (req, res) => {
   const lead = leadOr404(req.params.leadId, res);
   if (!lead) return;
   if (!anthropicConfigured()) return res.status(503).json({ error: "Reports aren't set up yet (ANTHROPIC_API_KEY)" });
+  // a house set up before levels were automatic: find them now
+  if (!loadProject(lead.id)?.levels) await autoLevels(lead.id).catch(() => {});
   const project = loadProject(lead.id);
   const model = buildHouseModel(project);
   if (!model) return res.status(400).json({ error: "Set up the wall map first" });

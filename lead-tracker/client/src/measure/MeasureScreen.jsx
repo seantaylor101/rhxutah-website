@@ -467,14 +467,13 @@ export default function MeasureScreen({ lead, editable, onClose }) {
               onSelectWall={setSelectedWallId}
               onSuggestUpper={async () => (await measureApi.upperSuggestion(lead.id)).upperOutline}
             />
-            {googleConfigured && project.roof?.segments?.length > 0 && !project.roof.segments.some((sg) => sg.bbox) && (
-              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
-                Google's roof data for this house was saved before plane heights were kept.{" "}
-                <button style={linkBtn} disabled={busy === "save"} onClick={() => run("save", () => measureApi.refreshRoof(lead.id)).catch(() => {})}>
-                  Refresh roof data
-                </button>{" "}
-                for a better upper-story starting point.
-              </div>
+            {googleConfigured && (
+              <LevelsStatus
+                project={project}
+                busy={busy === "levels"}
+                disabled={!!busy || data.offline}
+                onDetect={(reset) => run("levels", () => measureApi.detectLevels(lead.id, reset)).catch(() => {})}
+              />
             )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -797,6 +796,48 @@ const cell = {
   fontFamily: FONT_BODY,
 };
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 };
+// what the app found about the house's levels on its own (server
+// autoLevels), and a way to redo it
+function LevelsStatus({ project, busy, disabled, onDetect }) {
+  const lv = project.levels;
+  const byHand = project.upperSource === "manual" || /edited|manual/.test(project.source || "");
+  const redo = (
+    <button
+      style={linkBtn}
+      disabled={disabled}
+      onClick={() => {
+        if (byHand && !window.confirm("Redo the outline and levels automatically? This replaces the corners you placed by hand.")) return;
+        onDetect(true);
+      }}
+    >
+      {busy ? "Checking…" : byHand ? "Redo automatically" : "Check again"}
+    </button>
+  );
+  let text;
+  if (busy) text = "Reading Google's roof height map…";
+  else if (!lv)
+    return (
+      <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+        Levels haven't been checked yet — they will be when you create the report, or{" "}
+        <button style={linkBtn} disabled={disabled} onClick={() => onDetect(false)}>
+          check now
+        </button>
+        .
+      </div>
+    );
+  else if (!lv.count) text = `Couldn't find the levels automatically (${lv.reason || "no height map"}). The report still works; the photos give the wall heights.`;
+  else if (lv.count === 1) text = "One story, from Google's roof height map.";
+  else if (lv.wholeHouse) text = "Two stories all the way around, from Google's roof height map.";
+  else text = "Two-story section (blue) and one-story parts found from Google's roof height map.";
+  return (
+    <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, lineHeight: 1.45 }}>
+      {text}
+      {lv?.outlineFromHeightMap && " Outline fitted to the roof."}
+      {project.upperSource === "manual" && " Upper story placed by hand."} {!busy && redo}
+    </div>
+  );
+}
+
 const note = { border: "1px solid", borderRadius: 8, padding: "9px 11px", fontSize: 13, marginBottom: 12, lineHeight: 1.45 };
 const input = {
   width: "100%",

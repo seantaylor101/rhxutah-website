@@ -254,3 +254,29 @@ test("benchmark scoring compares against the HOVER reference", async () => {
   assert.equal(rows.find((r) => r.metric === "Siding facades (net)").diffPct, 0);
   assert.equal(rows.find((r) => r.metric === "Siding, back").diffPct, 0);
 });
+
+test("photos overrule the height map's level: a 'one-story' wall measured at 18 ft is flagged two-story", () => {
+  const FT = 0.3048;
+  const O = { lat: 41.0312, lng: -111.9375 };
+  const box = [
+    [0, 0],
+    [W * FT, 0],
+    [W * FT, 30 * FT],
+    [0, 30 * FT],
+  ].map(([x, y]) => {
+    const ll = toLatLng(O, x, y);
+    return [ll.lat, ll.lng];
+  });
+  // the height map said one story
+  const model = buildHouseModel({ roofOutline: box, overhangIn: 0, frontAz: 180, levels: { count: 1 } });
+  const front = model.walls.find((w) => w.side === "front");
+  assert.equal(front.stories, 1);
+  const cam = camera({ pos: [20, 5, 60], lookAt: [20, 10, 0], f: 3000 });
+  const rep = buildFacadeReport(model, [{ photoId: "p1", slotKind: "side", imageWidth: cam.imageWidth, imageHeight: cam.imageHeight, focal35: (3000 * 34.6) / 4032, faces: [faceFrom(cam, { wallId: front.id })] }], { pitch12: 6 });
+  const wf = rep.walls.find((w) => w.id === front.id);
+  near(wf.height, H, 0.05, "photo height used");
+  assert.equal(wf.photoStories, 2);
+  assert.equal(rep.levelMismatches.length, 1);
+  // and the unphotographed walls borrow the two-story height, not 9 ft
+  near(rep.walls.find((w) => w.side === "back").height, H, 0.05, "borrowed height");
+});

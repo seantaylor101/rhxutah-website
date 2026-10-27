@@ -131,9 +131,16 @@ can sort photos onto walls offline with the same math the server uses).
    nothing is counted twice. Markups are cached per photo + wall list, so a re-run only pays for what
    changed. Needs `ANTHROPIC_API_KEY`; roughly $0.50–1.50 per house at list price.
 
-6. **Levels.** Satellite only sees the outer roof edge, so a second story is traced as its own
-   outline (`upperOutline`, blue on the wall map; a starting suggestion comes from Google's roof
-   planes — `suggestUpperOutline`). `buildHouseModel` splits walls: stretches where the upper story
+6. **Levels — automatic.** On lookup (and before a report, for houses set up earlier) the server
+   reads Google's roof height map (Solar API `dataLayers`: DSM + roof mask, `server/src/measure/dsm.js`)
+   and `shared/levels.js` finds the levels on its own: roof at two-story height whose edges are the
+   house's outer eaves or a step down onto a lower roof is the second story (`upperOutline`, blue on
+   the wall map); a tall one-story ridge slopes smoothly into the rest of the roof and is ignored. The
+   rooftop's own edge also replaces Google's building outline when they agree closely (fixes an
+   outline that came out too big). Hand edits are never overwritten except by "Redo automatically".
+   The photos check the result: a ground wall measured at 14 ft+ that the map called one story (or
+   under 12 ft called two) is flagged in the report and its photo height used. Drawing the upper
+   story by hand (`suggestUpperOutline` as a start) is only a fallback. `buildHouseModel` splits walls: stretches where the upper story
    sits flush on a ground wall become two-story walls from the ground; the rest of the upper outline
    becomes upper walls that start on top of the lower roof (with their set-back). Claude is told each
    wall's level; upper walls are measured from the roof up, and only counted if a photo shows them.
@@ -148,11 +155,12 @@ can sort photos onto walls offline with the same math the server uses).
    report against it. It's a yardstick for tuning — never an adjustment applied to measurements.
 
 Setup: one Google Maps Platform key in `GOOGLE_MAPS_API_KEY` with **Geocoding API**, **Solar
-API**, and **Maps Static API** enabled. Without it the satellite lookup is off, but photos can
+API**, and **Maps Static API** enabled. The height map is Google's "Solar API Data Layers" SKU — one
+call per lookup; 1,000 a month free, about $0.075 each after that (check Google's pricing page). Without it the satellite lookup is off, but photos can
 still be shot and get sorted once the map exists. Building outlines come from the Geocoding API's
 `extra_computations=BUILDING_AND_ENTRANCES` option (a preview feature at time of writing).
 
-Tests for the geometry: `node --test shared/houseGeometry.test.js shared/facadeGeometry.test.js`.
+Tests for the geometry: `node --test shared/*.test.js server/src/measure/*.test.js` (from `lead-tracker/`).
 
 ## Changing passcodes
 
@@ -196,6 +204,7 @@ immediate cutoff, also rotate `SESSION_SECRET`, which invalidates every existing
 | PATCH  | /api/measure/photos/:id | viewer | pin a photo to a wall, or `wallId: null` for automatic |
 | DELETE | /api/measure/photos/:id | owner | delete a measuring photo |
 | POST   | /api/measure/lead/:leadId/roof | viewer | re-read Google's roof planes (heights, extents) |
+| POST   | /api/measure/lead/:leadId/levels | viewer | find levels + outline from the height map again (`reset: true` replaces hand edits) |
 | GET    | /api/measure/lead/:leadId/upper-suggestion | viewer | starting upper-story outline from the roof planes |
 | POST   | /api/measure/lead/:leadId/report | viewer | start a measurement report (background) |
 | GET    | /api/measure/lead/:leadId/report | viewer | latest report: status, progress, result |

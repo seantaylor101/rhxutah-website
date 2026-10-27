@@ -519,12 +519,14 @@ export function buildHouseModel(project) {
   };
   const rotate = (arr, k) => arr.slice(k).concat(arr.slice(0, k));
 
+  // the height map found one level (levels.js) — as opposed to not knowing
+  const knownOneStory = !upperWallLocal && project.levels && project.levels.count === 1;
   const groundEdges = edgesOf(wallLocal);
   const upperEdges = upperWallLocal ? edgesOf(upperWallLocal) : [];
   const gStart = startIndex(groundEdges);
   const groundOrdered = rotate(groundEdges, gStart);
   const groundPieces = groundOrdered.flatMap((g) =>
-    splitEdge(g, upperEdges).map((p) => ({ ...p, tier: "ground", stories: upperWallLocal ? (p.flush ? 2 : 1) : null })),
+    splitEdge(g, upperEdges).map((p) => ({ ...p, tier: "ground", stories: upperWallLocal ? (p.flush ? 2 : 1) : knownOneStory ? 1 : null })),
   );
   const uStart = upperEdges.length ? startIndex(upperEdges) : 0;
   const upperRing = rotate(upperEdges, uStart).map((u) => splitEdge(u, groundEdges));
