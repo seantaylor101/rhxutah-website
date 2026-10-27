@@ -10,6 +10,8 @@ const MATERIAL_FILL = {
   other: "#E4E4F0",
 };
 const ft2 = (n) => (Number.isFinite(n) ? `${Math.round(n).toLocaleString()} ft²` : "—");
+// openings are ordered in inches, like a window schedule
+const inches = (ft) => (Number.isFinite(ft) ? `${Math.round(ft * 12 * 2) / 2}"` : "—");
 const sq = (n) => (Number.isFinite(n) ? (Math.round(n * 4) / 4).toFixed(2).replace(/\.00$/, "") : "—");
 
 function Table({ head, rows }) {
@@ -47,11 +49,18 @@ const hOf = (wall) => wall.height ?? wall.eaveHeight;
 function WallDrawing({ wall }) {
   const top = Math.max(hOf(wall), wall.peakHeight || 0);
   const pad = Math.max(2.5, wall.widthFt * 0.06);
-  const vb = [-pad, -top - pad, wall.widthFt + pad * 2, top + pad * 2.2];
+  const vb = [-pad, -top - pad, wall.widthFt + pad * 2, top + pad * 2.5];
   const s = vb[2] / 340; // ≈ one screen px
   const pts = (arr) => arr.map(([x, y]) => `${x},${-y}`).join(" ");
+  // edges of every opening across the wall, for the spacing dimensions
+  const chain = [
+    ...new Set(
+      [0, wall.widthFt, ...wall.openings.flatMap((o) => [Math.min(...o.plane.map((q) => q[0])), Math.max(...o.plane.map((q) => q[0]))])]
+        .map((x) => Math.round(Math.max(0, Math.min(wall.widthFt, x)) * 12) / 12),
+    ),
+  ].sort((a, b) => a - b);
   return (
-    <svg viewBox={vb.join(" ")} style={{ width: "100%", display: "block", background: "#fff" }}>
+    <svg viewBox={vb.join(" ")} style={{ width: "100%", maxHeight: 300, display: "block", background: "#fff" }}>
       <polygon points={pts(wall.outline)} fill={MATERIAL_FILL[wall.primaryMaterial] || "#eee"} stroke={C.ink} strokeWidth={1.4 * s} />
       {wall.regions.map((r, i) => (
         <polygon key={i} points={pts(r.plane)} fill={MATERIAL_FILL[r.material] || "#eee"} stroke="#9A8A80" strokeWidth={0.6 * s} />
@@ -59,17 +68,31 @@ function WallDrawing({ wall }) {
       {wall.openings.map((o, i) => {
         const cx = o.plane.reduce((t, p) => t + p[0], 0) / 4;
         const cy = o.plane.reduce((t, p) => t + p[1], 0) / 4;
-        // size the label to fit inside the opening: width over height
-        const fs = Math.min(10 * s, o.width / 4.2, o.height / 2.6);
+        // size the labels to fit inside the opening: number, then width × height
+        const fs = Math.min(10 * s, o.width / 4.2, o.height / 3.6);
+        const sill = o.type === "window" && o.bottom != null && o.bottom > 0.3 ? o.bottom : null;
         return (
           <g key={i}>
             <polygon points={pts(o.plane)} fill="#fff" stroke={C.ink} strokeWidth={1 * s} />
-            <text x={cx} y={-cy - fs * 0.2} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fill={C.ink}>
-              {fmtFtIn(o.width)}
+            {o.no != null && (
+              <text x={cx} y={-cy - fs * 1.2} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fontWeight={700} fill="#3B5BDB">
+                #{o.no}
+              </text>
+            )}
+            <text x={cx} y={-cy - fs * 0.1} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fill={C.ink}>
+              {inches(o.width)}
             </text>
-            <text x={cx} y={-cy + fs * 0.95} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fill={C.ink}>
-              × {fmtFtIn(o.height)}
+            <text x={cx} y={-cy + fs * 1.0} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fill={C.ink}>
+              × {inches(o.height)}
             </text>
+            {sill != null && (
+              <>
+                <line x1={cx} y1={-o.bottom} x2={cx} y2={0} stroke="#3B5BDB" strokeWidth={0.6 * s} strokeDasharray={`${2 * s} ${2 * s}`} />
+                <text x={cx + 3 * s} y={-o.bottom / 2} fontSize={Math.min(8.5 * s, fs)} fontFamily={FONT_BODY} fill="#3B5BDB">
+                  {fmtFtIn(sill)}
+                </text>
+              </>
+            )}
           </g>
         );
       })}
@@ -81,9 +104,26 @@ function WallDrawing({ wall }) {
           bottom edge = where it meets the lower roof
         </text>
       )}
-      {/* width along the bottom */}
-      <line x1={0} y1={pad * 0.55} x2={wall.widthFt} y2={pad * 0.55} stroke="#3B5BDB" strokeWidth={s} />
-      <text x={wall.widthFt / 2} y={pad * 0.55 + 12 * s} textAnchor="middle" fontSize={11 * s} fill="#3B5BDB" fontFamily={FONT_BODY} fontWeight={700}>
+      {/* spacing between openings, then the overall width, along the bottom */}
+      {chain.length > 2 && (
+        <g>
+          <line x1={0} y1={pad * 0.3} x2={wall.widthFt} y2={pad * 0.3} stroke="#7A8A99" strokeWidth={0.6 * s} />
+          {chain.map((x, i) => (
+            <line key={i} x1={x} y1={pad * 0.3 - 3 * s} x2={x} y2={pad * 0.3 + 3 * s} stroke="#7A8A99" strokeWidth={0.6 * s} />
+          ))}
+          {chain.slice(1).map((x, i) => {
+            const len = x - chain[i];
+            if (len < 1.2) return null;
+            return (
+              <text key={i} x={(x + chain[i]) / 2} y={pad * 0.3 - 2 * s} textAnchor="middle" fontSize={Math.min(7.5 * s, len / 3.2)} fill="#5A6A79" fontFamily={FONT_BODY}>
+                {fmtFtIn(len)}
+              </text>
+            );
+          })}
+        </g>
+      )}
+      <line x1={0} y1={pad * 0.7} x2={wall.widthFt} y2={pad * 0.7} stroke="#3B5BDB" strokeWidth={s} />
+      <text x={wall.widthFt / 2} y={pad * 0.7 + 12 * s} textAnchor="middle" fontSize={11 * s} fill="#3B5BDB" fontFamily={FONT_BODY} fontWeight={700}>
         {fmtFtIn(wall.widthFt)}
       </text>
       {/* eave height up the left */}
@@ -129,6 +169,20 @@ function PhotoMarks({ wall, photo }) {
         {m.openings.map((o, i) => (
           <polygon key={i} points={poly(o)} fill="rgba(79,195,247,0.2)" stroke="#4FC3F7" strokeWidth={2 * s} />
         ))}
+        {wall.openings
+          .filter((o) => o.image && o.no != null)
+          .map((o) => {
+            const cx = o.image.reduce((t, p) => t + p[0], 0) / o.image.length;
+            const cy = o.image.reduce((t, p) => t + p[1], 0) / o.image.length;
+            return (
+              <g key={o.no}>
+                <circle cx={cx} cy={cy} r={11 * s} fill="#3B5BDB" />
+                <text x={cx} y={cy + 4 * s} textAnchor="middle" fontSize={11 * s} fontWeight={700} fill="#fff" fontFamily={FONT_BODY}>
+                  {o.no}
+                </text>
+              </g>
+            );
+          })}
         {[m.bl, m.br, m.tr, m.tl].map((p, i) => (
           <circle key={i} cx={p[0]} cy={p[1]} r={5 * s} fill="#3DDC84" stroke="#000" strokeWidth={s} />
         ))}
@@ -172,6 +226,41 @@ function WallCard({ wall, photo }) {
           </span>
         ))}
       </div>
+      {wall.counted !== false && wall.grossArea > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <Table
+            head={["Material", "Gross", "Openings", "Net"]}
+            rows={[
+              ...Object.keys(wall.byGross || {})
+                .filter((m) => wall.byGross[m] > 0.5)
+                .map((m) => [MATERIAL_LABEL[m] || m, ft2(wall.byGross[m]), ft2((wall.openingsByMaterial || {})[m] || 0), ft2(wall.byMaterial[m] || 0)]),
+            ]}
+          />
+          {wall.openings.length > 0 && (
+            <Table
+              head={["#", "Opening", "W × H", "Sill"]}
+              rows={wall.openings.map((o) => [
+                o.no != null ? `#${o.no}` : "",
+                `${o.arched ? "Arched " : ""}${OPENING_NAME[o.type] || "opening"} · ${MATERIAL_LABEL[o.material] || o.material}`,
+                `${inches(o.width)} × ${inches(o.height)}`,
+                o.type === "window" && o.bottom != null ? fmtFtIn(o.bottom) : "—",
+              ])}
+            />
+          )}
+          {wall.trim && (
+            <div style={{ fontSize: 12.5, color: C.muted, marginTop: -6 }}>
+              {[
+                wall.trim.starter ? `Starter ${fmtFtIn(wall.trim.starter)}` : null,
+                wall.trim.frieze ? `Top of wall ${fmtFtIn(wall.trim.frieze)}` : null,
+                wall.trim.rakeEdges ? `Gable edges ${fmtFtIn(wall.trim.rakeEdges)}` : null,
+                wall.trim.roofToWall ? `Roof-to-wall ${fmtFtIn(wall.trim.roofToWall)}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
       {wall.notes.map((n, i) => (
         <div key={i} style={{ fontSize: 12.5, color: C.amber, marginTop: 6 }}>
           ⚠︎ {n}
@@ -247,16 +336,36 @@ export default function ReportView({ report, leadName, onClose, onRerun, rerunni
             head={["Siding waste totals", "Area", "Squares"]}
             rows={t.squares.map((x) => [x.pct ? `+${x.pct}%` : "Zero waste", ft2(x.area), sq(x.squares)])}
           />
-          <Table head={["By material", "Area"]} rows={Object.entries(t.byMaterial).map(([m, a]) => [MATERIAL_LABEL[m] || m, ft2(a)])} />
+          <Table head={["By material (net)", "Area"]} rows={Object.entries(t.byMaterial).map(([m, a]) => [MATERIAL_LABEL[m] || m, ft2(a)])} />
+          {t.bySide && (
+            <Table
+              head={["By side (net)", "Siding", "Other", "Openings"]}
+              rows={["front", "right", "back", "left", "other"]
+                .filter((k) => t.bySide[k])
+                .map((k) => [SIDE_NAME[k], ft2(t.bySide[k].siding), ft2(t.bySide[k].other), t.bySide[k].openings])}
+            />
+          )}
           <Table
-            head={["Openings", "Siding", "Other"]}
+            head={["Openings trim", "Siding", "Other"]}
             rows={[
               ["Quantity", o.siding.count, o.other.count],
               ["Tops length", fmtLen(o.siding.tops), fmtLen(o.other.tops)],
               ["Sills length", fmtLen(o.siding.sills), fmtLen(o.other.sills)],
               ["Sides length", fmtLen(o.siding.sides), fmtLen(o.other.sides)],
+              ...(o.siding.perimeter != null ? [Object.assign(["Total around openings", fmtLen(o.siding.perimeter), fmtLen(o.other.perimeter)], { bold: true })] : []),
             ]}
           />
+          {t.trim && (
+            <Table
+              head={["Wall trim & accessories", "Length"]}
+              rows={[
+                ["Starter strip (bottom of walls, less doors)", fmtLen(t.trim.starter)],
+                ["Top of wall under eaves (frieze)", fmtLen(t.trim.frieze)],
+                ["Gable edges on walls (rake trim)", fmtLen(t.trim.rakeEdges)],
+                ["Roof-to-wall (upper walls on a lower roof)", fmtLen(t.trim.roofToWall)],
+              ]}
+            />
+          )}
           <Table
             head={["Corners", "Qty", "Length"]}
             rows={[
@@ -284,6 +393,8 @@ export default function ReportView({ report, leadName, onClose, onRerun, rerunni
           )}
         </div>
 
+        <OpeningSchedule schedule={r.openingSchedule} />
+
         <div style={{ ...sectionLabel, margin: "6px 0 8px" }}>Walls</div>
         {r.walls.map((w) => (
           <WallCard key={w.id} wall={w} photo={w.bestPhotoId ? r.photos[w.bestPhotoId] : null} />
@@ -304,6 +415,36 @@ export default function ReportView({ report, leadName, onClose, onRerun, rerunni
           {rerunning ? "Running…" : "Run again (after adding or retaking photos)"}
         </button>
       </div>
+    </div>
+  );
+}
+
+const OPENING_NAME = { window: "window", door: "door", garage_door: "garage door" };
+const SIDE_NAME = { front: "Front", right: "Right", back: "Back", left: "Left", other: "Other" };
+
+function OpeningSchedule({ schedule }) {
+  if (!schedule || !schedule.items.length) return null;
+  return (
+    <div style={card}>
+      <div style={{ ...sectionLabel, marginBottom: 8 }}>Windows & doors ({schedule.items.length})</div>
+      <Table
+        head={["Size", "Qty", "UI", "Numbers"]}
+        rows={schedule.sizes.map((g) => [`${g.label} ${g.widthIn}" × ${g.heightIn}"`, g.count, `${g.unitedIn}"`, g.nos.map((n) => `#${n}`).join(" ")])}
+      />
+      <div style={{ fontSize: 12, color: C.muted, margin: "-8px 0 10px" }}>
+        Sizes are the visible opening (outside of trim) measured from the photos, to the nearest ½". UI = united inches (width + height). Same sizes within 1" are counted
+        together.
+      </div>
+      <Table
+        head={["#", "Wall", "Type", "W × H", "Sill"]}
+        rows={schedule.items.map((it) => [
+          `#${it.no}`,
+          `${it.wallId} ${it.wallLabel}`,
+          it.label,
+          `${it.widthIn}" × ${it.heightIn}"`,
+          it.sillIn != null ? fmtFtIn(it.sillIn / 12) : "—",
+        ])}
+      />
     </div>
   );
 }

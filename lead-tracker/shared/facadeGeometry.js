@@ -432,12 +432,41 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     }
     if (grossArea > 0) byGross[primary] = (byGross[primary] || 0) + Math.max(0, grossArea - regionTotal);
 
+    // other photos that show this whole wall (corner to corner, so their
+    // positions line up) add the openings the best one missed — a window
+    // behind a bush, or cut off by the frame
+    const extraOpenings = [];
+    if (best) {
+      const seen = best.openings.map((o) => o.plane.map(([x, y]) => [x, y * k]));
+      for (const c of cands.slice(1)) {
+        if (!c.face.leftIsCorner || !c.face.rightIsCorner || c.score < best.score * 0.4) continue;
+        const kc = height / c.heightFt;
+        for (const o of c.openings) {
+          const plane = o.plane.map(([x, y]) => [x, y * kc]);
+          const center = [o.center[0], o.center[1] * kc];
+          if (seen.some((q) => iou(q, plane) > 0.15 || pointInPoly(center, q))) continue;
+          seen.push(plane);
+          extraOpenings.push({ ...o, plane, center, height: o.height * kc, area: o.area * kc, fromPhotoId: c.photoId });
+        }
+      }
+    }
     const rawOpenings = best
-      ? best.openings.map((o) => {
-          const plane = scalePts(o.plane);
-          const center = [o.center[0], o.center[1] * k];
+      ? [...best.openings, ...extraOpenings].map((o) => {
+          const extra = o.fromPhotoId != null;
+          const plane = extra ? o.plane : scalePts(o.plane);
+          const center = extra ? o.center : [o.center[0], o.center[1] * k];
           const region = regions.find((r) => pointInPoly(center, r.plane));
-          return { type: o.type, arched: o.arched, width: o.width, height: o.height * k, area: o.area * k, plane, material: region ? region.material : primary };
+          return {
+            type: o.type,
+            arched: o.arched,
+            width: o.width,
+            height: extra ? o.height : o.height * k,
+            area: extra ? o.area : o.area * k,
+            plane,
+            material: region ? region.material : primary,
+            image: extra ? null : o.image,
+            fromPhotoId: extra ? o.fromPhotoId : undefined,
+          };
         })
       : [];
     const checked = checkOpenings(rawOpenings, { widthFt, heightFt: height, topFt: peak || height, groundWall: kind !== "upper" });
@@ -448,7 +477,29 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
 
     // net (HOVER's "facade" area): gross minus the openings in each material
     const byMaterial = { ...byGross };
-    for (const o of openings) if (byMaterial[o.material] != null) byMaterial[o.material] = Math.max(0, byMaterial[o.material] - o.area);
+    const openingsByMaterial = {};
+    for (const o of openings) {
+      if (byMaterial[o.material] != null) byMaterial[o.material] = Math.max(0, byMaterial[o.material] - o.area);
+      openingsByMaterial[o.material] = (openingsByMaterial[o.material] || 0) + o.area;
+    }
+    // where each opening sits on the wall: from the wall's left end, and its
+    // bottom (sill) above the wall's base
+    for (const o of openings) {
+      o.left = Math.max(0, Math.min(...o.plane.map((q) => q[0])));
+      o.bottom = Math.max(0, Math.min(...o.plane.map((q) => q[1])));
+    }
+    // trim along this wall's edges (feet): starter strip across the bottom
+    // (less doors that reach the ground), the top edge under the eave
+    // (frieze), the sloped gable edges, and for an upper wall the line where
+    // it meets the lower roof (roof-to-wall flashing)
+    const trim = { starter: 0, frieze: 0, rakeEdges: 0, roofToWall: 0 };
+    if (counted) {
+      const groundDoors = openings.filter((o) => (o.type === "door" || o.type === "garage_door") && o.bottom < 0.5).reduce((t, o) => t + o.width, 0);
+      if (kind === "upper") trim.roofToWall = widthFt;
+      else trim.starter = Math.max(0, widthFt - groundDoors);
+      if (peak) trim.rakeEdges = 2 * Math.hypot(widthFt / 2, peak - height);
+      else trim.frieze = widthFt;
+    }
 
     return {
       id: w.id,
@@ -467,6 +518,8 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
       grossArea,
       byGross,
       byMaterial,
+      openingsByMaterial,
+      trim,
       primaryMaterial: primary,
       openings,
       suspectOpenings: suspect,
@@ -487,8 +540,55 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     };
   });
 
+  // every opening numbered in wall order, as the schedule lists them
+  let no = 0;
+  for (const w of wallReports) for (const o of w.openings) o.no = ++no;
+
   const levelMismatches = wallReports.filter((w) => w.photoStories).map((w) => ({ id: w.id, label: w.label, mapStories: w.stories, photoStories: w.photoStories }));
-  return { walls: wallReports, totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }), heights: { h1, h2 }, levelMismatches, rejected };
+  return {
+    walls: wallReports,
+    totals: computeTotals(model, wallReports, { rise, roofAreaFt2 }),
+    openingSchedule: openingSchedule(wallReports),
+    heights: { h1, h2 },
+    levelMismatches,
+    rejected,
+  };
+}
+
+const OPENING_LABEL = { window: "Window", door: "Door", garage_door: "Garage door" };
+
+// HOVER-style openings list: each one with its size, and the same sizes
+// counted together (within an inch) for ordering
+function openingSchedule(walls) {
+  const inch = (ft) => Math.round(ft * 12 * 2) / 2;
+  const items = [];
+  for (const w of walls)
+    for (const o of w.openings)
+      items.push({
+        no: o.no,
+        wallId: w.id,
+        wallLabel: w.label,
+        side: w.side,
+        type: o.type,
+        label: (o.arched ? "Arched " : "") + (OPENING_LABEL[o.type] || "Opening").toLowerCase().replace(/^./, (c) => (o.arched ? c : c.toUpperCase())),
+        widthIn: inch(o.width),
+        heightIn: inch(o.height),
+        unitedIn: inch(o.width) + inch(o.height),
+        areaFt2: o.area,
+        sillIn: o.type === "window" ? inch(o.bottom || 0) : null,
+        material: o.material,
+        group: SIDING_MATERIALS.has(o.material) ? "siding" : "other",
+      });
+  const sizes = [];
+  for (const it of items) {
+    const same = sizes.find((g) => g.type === it.type && Math.abs(g.widthIn - it.widthIn) <= 1 && Math.abs(g.heightIn - it.heightIn) <= 1);
+    if (same) {
+      same.count += 1;
+      same.nos.push(it.no);
+    } else sizes.push({ type: it.type, label: it.label, widthIn: it.widthIn, heightIn: it.heightIn, unitedIn: it.unitedIn, count: 1, nos: [it.no] });
+  }
+  sizes.sort((a, b) => a.type.localeCompare(b.type) || b.count - a.count || b.unitedIn - a.unitedIn);
+  return { items, sizes };
 }
 
 function computeTotals(model, walls, { rise, roofAreaFt2 }) {
@@ -545,6 +645,20 @@ function computeTotals(model, walls, { rise, roofAreaFt2 }) {
     corners[kk].length += Math.min(...ws.map((w) => w.height));
   }
   t.corners = corners;
+
+  // trim & accessories, from each wall's edges and openings
+  t.trim = { starter: 0, frieze: 0, rakeEdges: 0, roofToWall: 0 };
+  for (const w of walls) for (const k of Object.keys(t.trim)) t.trim[k] += (w.trim && w.trim[k]) || 0;
+  for (const g of ["siding", "other"]) t.openings[g].perimeter = t.openings[g].tops + t.openings[g].sills + t.openings[g].sides;
+
+  // net facade area by side of the house, like HOVER's elevation totals
+  t.bySide = {};
+  for (const w of walls) {
+    const side = w.side || "other";
+    const row = (t.bySide[side] = t.bySide[side] || { siding: 0, other: 0, openings: 0 });
+    for (const [m, a] of Object.entries(w.byMaterial)) row[group(m)] += a;
+    row.openings += w.openings.length;
+  }
 
   // roofline, from the satellite's eave/gable read of each wall plus the
   // overhang — estimates, labeled as such in the report

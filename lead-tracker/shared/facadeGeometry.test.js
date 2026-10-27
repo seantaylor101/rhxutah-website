@@ -161,6 +161,18 @@ test("full report: heights, gable from pitch when unseen, openings, squares, cor
   assert.equal(wr.measured, false);
   near(wr.eaveHeight, H, 0.05, "borrowed height");
   near(wr.peakHeight, H + (30 / 2) * 0.5, 0.1, "gable from pitch");
+  // the openings schedule and trim
+  assert.equal(rep.openingSchedule.items.length, 1);
+  const win = rep.openingSchedule.items[0];
+  assert.equal(win.no, 1);
+  assert.equal(win.label, "Window");
+  assert.ok(Math.abs(win.widthIn - 48) <= 0.5 && Math.abs(win.heightIn - 60) <= 0.5, `${win.widthIn} x ${win.heightIn}`);
+  assert.ok(Math.abs(win.sillIn - 36) <= 0.5, `sill ${win.sillIn}`);
+  assert.equal(rep.openingSchedule.sizes[0].count, 1);
+  near(wf.trim.frieze, W, 0.01, "frieze along the front");
+  near(wr.trim.rakeEdges, 2 * Math.hypot(15, 7.5), 0.1, "gable edges on the right");
+  near(rep.totals.openings.siding.perimeter, 4 + 4 + 10, 0.1, "window trim");
+  assert.ok(rep.totals.bySide.front.siding > 0);
   assert.equal(rep.totals.corners.outside.count, 4);
   assert.equal(rep.totals.corners.inside.count, 0);
   assert.ok(rep.totals.squares[1].area > rep.totals.squares[0].area);
@@ -279,4 +291,33 @@ test("photos overrule the height map's level: a 'one-story' wall measured at 18 
   assert.equal(rep.levelMismatches.length, 1);
   // and the unphotographed walls borrow the two-story height, not 9 ft
   near(rep.walls.find((w) => w.side === "back").height, H, 0.05, "borrowed height");
+});
+
+test("a window missing from the best photo is picked up from another photo of the whole wall", () => {
+  const FT = 0.3048;
+  const O = { lat: 41.0312, lng: -111.9375 };
+  const box = [[0, 0], [W * FT, 0], [W * FT, 30 * FT], [0, 30 * FT]].map(([x, y]) => {
+    const ll = toLatLng(O, x, y);
+    return [ll.lat, ll.lng];
+  });
+  const model = buildHouseModel({ roofOutline: box, overhangIn: 0, frontAz: 180 });
+  const front = model.walls.find((w) => w.side === "front");
+  const straight = camera({ pos: [20, 5, 60], lookAt: [20, 10, 0], f: 3000 });
+  const angled = camera({ pos: [-10, 5, 50], lookAt: [20, 10, 0], f: 3000 });
+  const win = (cam, x0) => {
+    const p = (x, y) => cam.project([x, y, 0]);
+    return { type: "window", arched: false, corners: [p(x0, 8), p(x0 + 3, 8), p(x0 + 3, 3), p(x0, 3)] };
+  };
+  // the straight-on photo only got the left window (a bush hid the right one)
+  const f1 = faceFrom(straight, { wallId: front.id, materialRegions: [], openings: [win(straight, 6)] });
+  const f2 = faceFrom(angled, { wallId: front.id, materialRegions: [], openings: [win(angled, 6), win(angled, 30)] });
+  const a = (id, cam, face, slotKind) => ({ photoId: id, slotKind, imageWidth: cam.imageWidth, imageHeight: cam.imageHeight, focal35: (3000 * 34.6) / 4032, faces: [face] });
+  const rep = buildFacadeReport(model, [a("p1", straight, f1, "side"), a("p2", angled, f2, "corner")], { pitch12: 6 });
+  const wf = rep.walls.find((w) => w.id === front.id);
+  assert.equal(wf.openings.length, 2);
+  const right = wf.openings.find((o) => o.left > 20);
+  near(right.left, 30, 0.1, "second window position");
+  near(right.width, 3, 0.05, "second window width");
+  assert.equal(right.fromPhotoId, "p2");
+  assert.equal(rep.openingSchedule.items.length, 2);
 });
