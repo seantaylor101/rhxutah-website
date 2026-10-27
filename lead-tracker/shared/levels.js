@@ -298,7 +298,8 @@ export function detectLevels(grid, ringLocal) {
   let valid = 0;
   for (let k = 0; k < N; k++) if (inOutline[k] && Number.isFinite(h[k])) valid++;
   const inCount = inOutline.reduce((s, v) => s + v, 0);
-  if (!inCount || valid / inCount < 0.6) return { ok: false, reason: "Height map doesn't cover this house" };
+  if (!inCount) return { ok: false, reason: "Outline didn't land on the height map's grid" };
+  if (valid / inCount < 0.6) return { ok: false, reason: `Height map doesn't cover this house (${Math.round((100 * valid) / inCount)}% of it)` };
 
   // ground: the low ground in a ring 2–7 m around the house, off the roof
   const around = [];

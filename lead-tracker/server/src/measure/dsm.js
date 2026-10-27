@@ -64,7 +64,7 @@ export async function rasterSampler(arrayBuffer, { nearest = false } = {}) {
     const v = data[r * width + c];
     return v === NODATA || !Number.isFinite(v) ? NaN : v;
   };
-  return (lat, lng) => {
+  const sample = (lat, lng) => {
     const [X, Y] = project(lat, lng);
     // pixel centers sit half a pixel in from the origin corner
     const c = (X - ox) / rx - 0.5;
@@ -81,6 +81,34 @@ export async function rasterSampler(arrayBuffer, { nearest = false } = {}) {
     if ([v00, v10, v01, v11].some(Number.isNaN)) return at(Math.round(c), Math.round(r));
     return v00 * (1 - fc) * (1 - fr) + v10 * fc * (1 - fr) + v01 * (1 - fc) * fr + v11 * fc * fr;
   };
+  // what the file says about itself, for diagnosing a height map that
+  // doesn't line up with the house
+  let nodata = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (v === NODATA || !Number.isFinite(v)) nodata++;
+    else {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  sample.meta = {
+    epsg,
+    width,
+    height,
+    origin: [ox, oy],
+    resolution: [rx, ry],
+    geoKeys: keys,
+    noDataShare: Math.round((nodata / data.length) * 1000) / 1000,
+    range: Number.isFinite(min) ? [min, max] : null,
+    pixelOf: (lat, lng) => {
+      const [X, Y] = project(lat, lng);
+      return { X, Y, col: (X - ox) / rx, row: (Y - oy) / ry };
+    },
+  };
+  return sample;
 }
 
 // the house-aligned grid levels.js works on, from the two samplers
@@ -106,8 +134,10 @@ async function download(url, key) {
   return res.arrayBuffer();
 }
 
-// → { grid, imageryDate, imageryQuality } or null when Google has no height
-// map for this spot (rural, very new construction)
+// → { grid, imageryDate, imageryQuality, files, diag } or null when Google
+// has no height map for this spot (rural, very new construction). `files`
+// are the raw GeoTIFFs and `diag` how they lined up with the house, kept so
+// a house that doesn't work can be looked at afterwards.
 export async function fetchHeightGrid(origin, ringLocal) {
   const key = process.env.GOOGLE_MAPS_API_KEY;
   const reach = Math.max(...ringLocal.map(([x, y]) => Math.hypot(x, y)));
@@ -120,11 +150,32 @@ export async function fetchHeightGrid(origin, ringLocal) {
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.dsmUrl) return null;
   const [dsmBuf, maskBuf] = await Promise.all([download(data.dsmUrl, key), data.maskUrl ? download(data.maskUrl, key).catch(() => null) : null]);
-  const sampleHeight = await rasterSampler(dsmBuf);
+  const files = { dsm: Buffer.from(dsmBuf), mask: maskBuf ? Buffer.from(maskBuf) : null };
+  const diag = { radius, request: { lat: origin.lat, lng: origin.lng } };
+  let sampleHeight;
+  try {
+    sampleHeight = await rasterSampler(dsmBuf);
+  } catch (err) {
+    err.heightMap = { files, diag: { ...diag, error: err.message } };
+    throw err;
+  }
   const sampleMask = maskBuf ? await rasterSampler(maskBuf, { nearest: true }).catch(() => null) : null;
+  const grid = buildGrid(origin, ringLocal, sampleHeight, sampleMask);
+  const { pixelOf, ...dsmMeta } = sampleHeight.meta;
+  let gridNaN = 0;
+  for (const v of grid.h) if (Number.isNaN(v)) gridNaN++;
   return {
-    grid: buildGrid(origin, ringLocal, sampleHeight, sampleMask),
+    grid,
     imageryDate: data.imageryDate || null,
     imageryQuality: data.imageryQuality || null,
+    files,
+    diag: {
+      ...diag,
+      dsm: dsmMeta,
+      mask: sampleMask ? { ...sampleMask.meta, pixelOf: undefined } : null,
+      houseCenterInDsm: pixelOf(origin.lat, origin.lng),
+      heightAtCenter: sampleHeight(origin.lat, origin.lng),
+      grid: { nx: grid.nx, ny: grid.ny, step: grid.step, noDataShare: Math.round((gridNaN / grid.h.length) * 1000) / 1000 },
+    },
   };
 }
