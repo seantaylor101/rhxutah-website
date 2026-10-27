@@ -247,6 +247,17 @@ function buildScene(model, report, pitch12) {
     const same = r && Math.abs(r.widthFt - w.lengthM / FT) < 0.6 ? r : null;
     if (same && same.counted === false) continue;
     const h = wallHeights(w, same, model, pitch12);
+    // an upper wall stands on the lower roof in front of it: read where
+    // that roof is from the roof surface itself
+    if (surface && w.tier === "upper") {
+      const u = [(w.b[0] - w.a[0]) / w.lengthM, (w.b[1] - w.a[1]) / w.lengthM];
+      const n = [u[1], -u[0]];
+      const hs = [0.2, 0.4, 0.6, 0.8]
+        .map((t) => surface.heightAt(w.a[0] + (w.b[0] - w.a[0]) * t + n[0] * 0.7, w.a[1] + (w.b[1] - w.a[1]) * t + n[1] * 0.7))
+        .filter((x) => x != null)
+        .sort((x, y) => x - y);
+      if (hs.length) h.base = hs[Math.floor(hs.length / 2)] / FT;
+    }
     const color = (h.material && MATERIAL_COLOR[h.material]) || WALL_COLOR;
     const [a, b] = [w.a, w.b];
     let wallMesh;
