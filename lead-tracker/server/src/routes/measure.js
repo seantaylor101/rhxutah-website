@@ -167,6 +167,20 @@ function reassignAll(leadId) {
   })();
 }
 
+// the last raw height map per house, kept for the export so a house the
+// automatic levels got wrong can be looked into
+const heightMapFile = (leadId, kind) => path.join(MEASURE_PHOTOS_DIR, `heightmap-${leadId}-${kind}.tif`);
+function keepHeightMap(leadId, files) {
+  for (const kind of ["dsm", "mask"]) {
+    try {
+      if (files?.[kind]) fs.writeFileSync(heightMapFile(leadId, kind), files[kind]);
+      else fs.rmSync(heightMapFile(leadId, kind), { force: true });
+    } catch (err) {
+      console.error("couldn't keep height map", err.message);
+    }
+  }
+}
+
 const ringToLatLng = (origin, ring) =>
   ring.map(([x, y]) => {
     const ll = toLatLng(origin, x, y);
@@ -187,9 +201,15 @@ async function autoLevels(leadId, { reset = false } = {}) {
   const origin = centroidLatLng(project.roofOutline);
   const ringLocal = project.roofOutline.map(([lat, lng]) => toLocal(origin, lat, lng));
   let levels;
+  let diag = null;
   try {
     const hm = await fetchHeightGrid(origin, ringLocal);
+    if (hm) {
+      keepHeightMap(leadId, hm.files);
+      diag = hm.diag;
+    }
     const r = hm ? detectLevels(hm.grid, ringLocal) : { ok: false, reason: "Google has no roof height map for this house" };
+    if (r.ok && diag) diag.detect = r.stats;
     if (!r.ok) levels = { count: null, reason: r.reason };
     else {
       levels = {
@@ -214,9 +234,13 @@ async function autoLevels(leadId, { reset = false } = {}) {
     }
   } catch (err) {
     console.error("height map failed", err);
+    if (err.heightMap) {
+      keepHeightMap(leadId, err.heightMap.files);
+      diag = err.heightMap.diag;
+    } else diag = { error: err.message };
     levels = { count: null, reason: err.name === "TimeoutError" ? "Google's height map took too long to answer" : "Couldn't read Google's height map" };
   }
-  next.levels = { ...levels, source: levels.count ? "height-map" : "none", detectedAt: new Date().toISOString() };
+  next.levels = { ...levels, source: levels.count ? "height-map" : "none", detectedAt: new Date().toISOString(), diag };
   saveProject(leadId, address, next);
   reassignAll(leadId);
 }
@@ -648,6 +672,10 @@ router.get("/lead/:leadId/export.zip", requireAuth("viewer"), (req, res) => {
       // file missing on disk — the JSON still lists it
     }
   }
+  for (const kind of ["dsm", "mask"]) {
+    const f = heightMapFile(lead.id, kind);
+    if (fs.existsSync(f)) zip.add(`heightmap/${kind}.tif`, fs.readFileSync(f));
+  }
   zip.finish();
   res.end();
 });
@@ -669,6 +697,7 @@ export function deleteMeasureDataForLead(leadId) {
   db.prepare(`DELETE FROM measure_projects WHERE leadId = ?`).run(leadId);
   db.prepare(`DELETE FROM measure_reports WHERE leadId = ?`).run(leadId);
   for (const f of files) fs.unlink(path.join(MEASURE_PHOTOS_DIR, f.filename), () => {});
+  for (const kind of ["dsm", "mask"]) fs.unlink(heightMapFile(leadId, kind), () => {});
 }
 
 export default router;
