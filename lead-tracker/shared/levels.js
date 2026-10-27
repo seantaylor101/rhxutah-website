@@ -437,6 +437,22 @@ function absorbEaveFringe(grid, house, upper, rel) {
 // end of a lower roof rises high in the middle but is still one story.
 // → [{ a, b, heightM, stories }] runs along the ring's edges (local meters).
 const EAVE_DEPTHS_M = [0.5, 0.75, 1.0];
+// how straight a run of heights is: R² of a line through them (0 if flat)
+function linearFit(pts) {
+  const n = pts.length;
+  if (n < 3) return 0;
+  const mx = pts.reduce((t, p) => t + p[0], 0) / n;
+  const my = pts.reduce((t, p) => t + p[1], 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (const [x, y] of pts) {
+    sxy += (x - mx) * (y - my);
+    sxx += (x - mx) ** 2;
+    syy += (y - my) ** 2;
+  }
+  return sxx && syy ? (sxy * sxy) / (sxx * syy) : 0;
+}
 const TWO_STORY_EAVE_M = 4.3;
 const MIN_RUN_M = 1.5;
 function eaveRuns(grid, ring, rel, upper) {
@@ -487,6 +503,30 @@ function eaveRuns(grid, ring, rel, upper) {
         if (parts[i].two === parts[i - 1].two) parts.splice(i - 1, 2, { two: parts[i].two, items: [...parts[i - 1].items, ...parts[i].items] });
       changed = true;
     }
+    // a two-story run whose roof edge isn't level — a gable end rising from
+    // both corners to a peak, or a rake running down along a sloped roof —
+    // sits on a wall only as tall as its lower corner: a one-story wing's
+    // gable, or a main roof sloping down past it, can reach two-story
+    // height above a one-story wall
+    for (const part of parts) {
+      if (!part.two) continue;
+      const pts = part.items.filter((x) => x.h != null).map((x) => [x.t, x.h]);
+      const len = part.items.length * step;
+      if (pts.length < 8 || len < 3) continue;
+      const ends = [pts.slice(0, Math.max(2, Math.floor(pts.length * 0.15))), pts.slice(-Math.max(2, Math.floor(pts.length * 0.15)))].map((e) =>
+        quantile(
+          e.map((q) => q[1]),
+          0.5,
+        ),
+      );
+      const low = Math.min(...ends);
+      if (low >= TWO_STORY_EAVE_M || Math.max(...pts.map((q) => q[1])) - low < Math.max(1.0, len * 0.12)) continue;
+      const half = Math.floor(pts.length / 2);
+      const sloped = linearFit(pts) > 0.8 || (linearFit(pts.slice(0, half)) > 0.7 && linearFit(pts.slice(half)) > 0.7);
+      if (sloped) part.two = false;
+    }
+    for (let i = parts.length - 1; i > 0; i--)
+      if (parts[i].two === parts[i - 1].two) parts.splice(i - 1, 2, { two: parts[i].two, items: [...parts[i - 1].items, ...parts[i].items] });
     for (const part of parts) {
       const t0 = Math.max(0, part.items[0].t - step / 2);
       const t1 = Math.min(L, part.items[part.items.length - 1].t + step / 2);

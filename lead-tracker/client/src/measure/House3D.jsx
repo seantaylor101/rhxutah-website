@@ -3,9 +3,11 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { C, FONT_BODY, FONT_DISPLAY, btnSecondary } from "./theme.js";
 import { fmtFtIn, MATERIAL_LABEL } from "../../../shared/facadeGeometry.js";
+import { buildRoof, isGableWall } from "../../../shared/roofBuild.js";
 
 // A 3D model of the house drawn the way a measurement report draws one:
-// Google's roof planes, every wall from the wall map rising to meet them,
+// a roof built at the house's pitch over its outline and levels (hips,
+// with gable ends where the height map shows them), every wall rising to it,
 // the brick / stone / stucco areas and the windows and doors the report
 // found (tagged W-1, D-1, G-1), and optionally each wall's measurements.
 // Tap a wall to see its area. Drag to turn, pinch to zoom.
@@ -124,8 +126,8 @@ function flatRoof(ring, eaveFt) {
   return new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: ROOF_COLOR, side: THREE.DoubleSide }));
 }
 
-// Google's roof surface (model.roofSurface, from the height map): flat
-// planes every 50 cm, and how high the roof is over any point
+// Google's roof surface (model.roofSurface, from the height map): how high
+// the roof is over any point — used to spot gable-end walls
 function surfaceOf(rs) {
   const c = Math.cos(rs.theta);
   const sn = Math.sin(rs.theta);
@@ -145,24 +147,24 @@ function surfaceOf(rs) {
   return { at, facet, point, heightAt };
 }
 
-function surfaceRoof(rs) {
-  const s = surfaceOf(rs);
+function builtRoofMesh(m) {
   const pts = [];
-  for (let j = 0; j < rs.ny - 1; j++)
-    for (let i = 0; i < rs.nx - 1; i++) {
-      const hs = [s.at(i, j), s.at(i + 1, j), s.at(i + 1, j + 1), s.at(i, j + 1)];
+  for (let j = 0; j < m.ny - 1; j++)
+    for (let i = 0; i < m.nx - 1; i++) {
+      const hs = [m.h(i, j), m.h(i + 1, j), m.h(i + 1, j + 1), m.h(i, j + 1)];
       if (hs.some((h) => h == null)) continue;
       const [a, b, c, d] = [
         [i, j],
         [i + 1, j],
         [i + 1, j + 1],
         [i, j + 1],
-      ].map(([u, v], k) => V(...s.point(u, v), hs[k] / FT));
-      // split each square along the crease where two roof planes meet
-      // diagonally (a hip or valley), not across it — otherwise every hip
-      // comes out as a sawtooth
-      const crossAC = s.facet(i, j) !== s.facet(i + 1, j + 1) && s.facet(i + 1, j) === s.facet(i, j + 1);
-      if (crossAC) pts.push(a, b, d, b, c, d);
+      ].map(([u, v], k) => V(...m.point(u, v), hs[k] / FT));
+      // split along whichever diagonal passes through the roof's true height
+      // at the middle of the square — the one that follows a hip or valley
+      const mid = m.center(i, j);
+      const ac = (hs[0] + hs[2]) / 2;
+      const bd = (hs[1] + hs[3]) / 2;
+      if (mid != null && Math.abs(bd - mid) < Math.abs(ac - mid)) pts.push(a, b, d, b, c, d);
       else pts.push(a, b, c, a, c, d);
     }
   const mesh = meshOf(pts, ROOF_COLOR);
@@ -237,7 +239,16 @@ function buildScene(model, report, pitch12) {
   const tags = new THREE.Group();
   const rw = Object.fromEntries((report?.walls || []).map((w) => [w.id, w]));
   const rise = (pitch12 ?? 7) / 12;
-  const surface = model.roofSurface ? surfaceOf(model.roofSurface) : null;
+  // the roof is built from the outline, the levels and standard heights
+  // (shared/roofBuild.js); the height map only says which walls are gable
+  // ends. Heights: the report's one- and two-story heights when they're
+  // believable, else 9 and 18 ft.
+  const sane = (v, lo, hi, d) => (Number.isFinite(v) && v >= lo && v <= hi ? v : d);
+  const h1Ft = sane(report?.heights?.h1, 7.5, 12, 9);
+  const h2Ft = sane(report?.heights?.h2, 15, 23, 18);
+  const dsm = model.roofSurface ? surfaceOf(model.roofSurface) : null;
+  const built = buildRoof(model, { h1Ft, h2Ft, pitch12: pitch12 ?? 7, gable: (w) => isGableWall(w, dsm && dsm.heightAt) });
+  const surface = built ? { heightAt: built.heightAt } : null;
   let topGround = 0;
   let topUpper = 0;
 
@@ -247,16 +258,17 @@ function buildScene(model, report, pitch12) {
     const same = r && Math.abs(r.widthFt - w.lengthM / FT) < 0.6 ? r : null;
     if (same && same.counted === false) continue;
     const h = wallHeights(w, same, model, pitch12);
-    // an upper wall stands on the lower roof in front of it: read where
-    // that roof is from the roof surface itself
-    if (surface && w.tier === "upper") {
-      const u = [(w.b[0] - w.a[0]) / w.lengthM, (w.b[1] - w.a[1]) / w.lengthM];
-      const n = [u[1], -u[0]];
-      const hs = [0.2, 0.4, 0.6, 0.8]
-        .map((t) => surface.heightAt(w.a[0] + (w.b[0] - w.a[0]) * t + n[0] * 0.7, w.a[1] + (w.b[1] - w.a[1]) * t + n[1] * 0.7))
-        .filter((x) => x != null)
-        .sort((x, y) => x - y);
-      if (hs.length) h.base = hs[Math.floor(hs.length / 2)] / FT;
+    if (built) {
+      h.eave = w.tier === "upper" || w.stories === 2 ? h2Ft : h1Ft;
+      h.base = 0;
+      // an upper wall stands on the lower roof in front of it
+      if (w.tier === "upper") {
+        const hs = [0.2, 0.4, 0.6, 0.8]
+          .map((t) => built.lowerAt(w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t))
+          .filter((x) => x != null)
+          .sort((x, y) => x - y);
+        h.base = hs.length ? hs[Math.floor(hs.length / 2)] / FT : h1Ft;
+      }
     }
     const color = (h.material && MATERIAL_COLOR[h.material]) || WALL_COLOR;
     const [a, b] = [w.a, w.b];
@@ -323,7 +335,7 @@ function buildScene(model, report, pitch12) {
     dims.add(idl);
   }
 
-  if (surface) group.add(surfaceRoof(model.roofSurface));
+  if (built) group.add(builtRoofMesh(built.mesh));
   else addGuessedRoofs(group, model, topGround, topUpper, rise);
 
   const groundGeo = new THREE.CircleGeometry(40, 48);
@@ -538,7 +550,7 @@ export default function House3D({ model, report, pitch12, onClose }) {
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18 }}>3D model</div>
           <div style={{ fontSize: 12, color: C.muted }}>
-            {model.roofSurface ? "Roof from Google's height map" : "Roof shape estimated"}
+            Roof built from the outline and levels
             {report ? "; materials, windows and doors from the latest report." : "."} Tap a wall for its area.
           </div>
         </div>

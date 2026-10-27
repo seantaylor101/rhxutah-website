@@ -316,6 +316,10 @@ export function checkOpenings(openings, { widthFt, heightFt, topFt, groundWall }
 const DEFAULT_H1 = 9; // one story, ground to eave
 const DEFAULT_H2 = 18; // two story, ground to eave
 const TWO_STORY_FT = 14; // a ground wall at least this tall is two stories
+const GROUND_FT = [6.5, 24]; // heights a wall standing on the ground can have
+const UPPER_FT = [2, 13]; // an upper wall above a lower roof
+const ONE_STORY_FT = [7.5, 12];
+const TWO_STORY_RANGE_FT = [15, 23];
 const ONE_STORY_MAX_FT = 12;
 
 // Builds the report from the house model (walls from the satellite outline,
@@ -360,15 +364,24 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     if (w.stories === 2 && hFt <= ONE_STORY_MAX_FT) return 1;
     return null;
   };
+  // a photo height no house has (a 30 ft "one-story" wall from a shrunk or
+  // badly marked photo) isn't used — the wall gets the typical height
+  const plausible = (w, hFt) => (w.tier === "upper" ? hFt >= UPPER_FT[0] && hFt <= UPPER_FT[1] : hFt >= GROUND_FT[0] && hFt <= GROUND_FT[1]);
   const measuredBy = { one: [], two: [], upper: [] };
   for (const w of walls) {
     if (!candidates[w.id].length) continue;
     const hFt = weightedHeight(candidates[w.id].sort((x, y) => y.score - x.score));
+    if (!plausible(w, hFt)) continue;
     const seen = levelFromPhotos(w, hFt);
     measuredBy[seen ? (seen === 2 ? "two" : "one") : kindOf(w)].push(hFt);
   }
-  const h1 = median(measuredBy.one) ?? (model.hasUpper ? DEFAULT_H1 : median(measuredBy.two) ?? DEFAULT_H1);
-  const h2 = median(measuredBy.two) ?? (model.hasUpper ? DEFAULT_H2 : h1);
+  const within = (v, [lo, hi]) => (v != null && v >= lo && v <= hi ? v : null);
+  // one level: the walls' own photo heights, whatever story they are; two
+  // levels: each kind within what that kind of wall can be
+  const h1 = model.hasUpper
+    ? within(median(measuredBy.one), ONE_STORY_FT) ?? DEFAULT_H1
+    : within(median([...measuredBy.one, ...measuredBy.two]), GROUND_FT) ?? DEFAULT_H1;
+  const h2 = model.hasUpper ? within(median(measuredBy.two), TWO_STORY_RANGE_FT) ?? DEFAULT_H2 : h1;
   // an upper wall's absolute base: the lower roof's eave plus the roof's rise
   // over the set-back distance
   const upperBase = (w) => h1 + (w.setbackM != null ? w.setbackM * FT_PER_M * (rise ?? 7 / 12) : 0);
@@ -384,14 +397,17 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     // add siding that isn't there
     const counted = !!best || kind !== "upper";
     let height;
-    if (best) height = weightedHeight(cands);
+    const photoHeight = best ? weightedHeight(cands) : null;
+    if (best && plausible(w, photoHeight)) height = photoHeight;
     else if (kind === "upper") height = Math.max(0, h2 - upperBase(w));
     else height = kind === "two" ? h2 : h1;
+    if (best && !plausible(w, photoHeight))
+      notes.push(`The photo measured ${photoHeight.toFixed(1)} ft, which can't be right for this wall — used the typical ${height.toFixed(1)} ft instead`);
     if (!best && kind !== "upper") notes.push(`Not measured from a photo; height estimated from the other ${kind === "two" ? "two-story" : "one-story"} walls`);
     if (!best && kind === "upper") notes.push("Upper wall not seen in any photo, so not counted. If there's siding here, add a photo of it.");
     if (best && !best.baseVisible) notes.push("Bottom of wall hidden; base extended from what was visible");
     if (best && best.lowRes) notes.push("Measured from a low-resolution photo");
-    const photoLevel = best ? levelFromPhotos(w, height) : null;
+    const photoLevel = best && plausible(w, photoHeight) ? levelFromPhotos(w, height) : null;
     if (photoLevel === 2) notes.push(`Photos show this wall is two stories (${height.toFixed(1)} ft), not one — the photo height is used`);
     if (photoLevel === 1) notes.push(`Photos show this wall is one story (${height.toFixed(1)} ft), not two — the photo height is used`);
     if (cands.length > 1) {
