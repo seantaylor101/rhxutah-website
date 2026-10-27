@@ -124,3 +124,20 @@ test("squaring up: small jogs go, real ones stay", () => {
   assert.equal(out.length, 8);
   assert.equal(Math.abs(signedArea(out)), 40 * 30 + 10 * 8);
 });
+
+test("the roof is split into its planes: a garage roof and the two slopes of the main gable", () => {
+  const roofAt = (u, v) => {
+    if (Math.abs(u) > 7 || v < -8 || v > 8) return null;
+    if (v < -2) return 3.0 + 0.2 * (v + 8);
+    return 5.6 + 0.58 * (7 - Math.abs(u));
+  };
+  const outline = rect(-7, -8, 7, 8);
+  const r = detectLevels(fakeGrid(outline, roofAt), outline);
+  const big = r.roofSurface.facets.filter((f) => f.areaM2 > 20);
+  assert.equal(big.length, 3, JSON.stringify(r.roofSurface.facets));
+  // 0.58 m/m = 7/12; the house is turned 20° counter-clockwise, so its
+  // slopes face 70° and 250° instead of east and west
+  const main = big.filter((f) => Math.abs(f.pitch12 - 7) <= 0.5).map((f) => f.azimuthDeg).sort((a, b) => a - b);
+  assert.equal(main.length, 2);
+  assert.ok(Math.abs(main[0] - 70) <= 3 && Math.abs(main[1] - 250) <= 3, `azimuths ${main}`);
+});

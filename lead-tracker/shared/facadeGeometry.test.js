@@ -165,6 +165,7 @@ test("full report: heights, gable from pitch when unseen, openings, squares, cor
   assert.equal(rep.openingSchedule.items.length, 1);
   const win = rep.openingSchedule.items[0];
   assert.equal(win.no, 1);
+  assert.equal(win.tag, "W-1");
   assert.equal(win.label, "Window");
   assert.ok(Math.abs(win.widthIn - 48) <= 0.5 && Math.abs(win.heightIn - 60) <= 0.5, `${win.widthIn} x ${win.heightIn}`);
   assert.ok(Math.abs(win.sillIn - 36) <= 0.5, `sill ${win.sillIn}`);

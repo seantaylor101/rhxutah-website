@@ -76,7 +76,7 @@ function WallDrawing({ wall }) {
             <polygon points={pts(o.plane)} fill="#fff" stroke={C.ink} strokeWidth={1 * s} />
             {o.no != null && (
               <text x={cx} y={-cy - fs * 1.2} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fontWeight={700} fill="#3B5BDB">
-                #{o.no}
+                {o.tag || `#${o.no}`}
               </text>
             )}
             <text x={cx} y={-cy - fs * 0.1} textAnchor="middle" fontSize={fs} fontFamily={FONT_BODY} fill={C.ink}>
@@ -176,9 +176,9 @@ function PhotoMarks({ wall, photo }) {
             const cy = o.image.reduce((t, p) => t + p[1], 0) / o.image.length;
             return (
               <g key={o.no}>
-                <circle cx={cx} cy={cy} r={11 * s} fill="#3B5BDB" />
-                <text x={cx} y={cy + 4 * s} textAnchor="middle" fontSize={11 * s} fontWeight={700} fill="#fff" fontFamily={FONT_BODY}>
-                  {o.no}
+                <circle cx={cx} cy={cy} r={12 * s} fill="#3B5BDB" />
+                <text x={cx} y={cy + 4 * s} textAnchor="middle" fontSize={(o.tag ? 8 : 11) * s} fontWeight={700} fill="#fff" fontFamily={FONT_BODY}>
+                  {o.tag || o.no}
                 </text>
               </g>
             );
@@ -238,9 +238,9 @@ function WallCard({ wall, photo }) {
           />
           {wall.openings.length > 0 && (
             <Table
-              head={["#", "Opening", "W × H", "Sill"]}
+              head={["Tag", "Opening", "W × H", "Sill"]}
               rows={wall.openings.map((o) => [
-                o.no != null ? `#${o.no}` : "",
+                o.tag || (o.no != null ? `#${o.no}` : ""),
                 `${o.arched ? "Arched " : ""}${OPENING_NAME[o.type] || "opening"} · ${MATERIAL_LABEL[o.material] || o.material}`,
                 `${inches(o.width)} × ${inches(o.height)}`,
                 o.type === "window" && o.bottom != null ? fmtFtIn(o.bottom) : "—",
@@ -428,17 +428,17 @@ function OpeningSchedule({ schedule }) {
     <div style={card}>
       <div style={{ ...sectionLabel, marginBottom: 8 }}>Windows & doors ({schedule.items.length})</div>
       <Table
-        head={["Size", "Qty", "UI", "Numbers"]}
-        rows={schedule.sizes.map((g) => [`${g.label} ${g.widthIn}" × ${g.heightIn}"`, g.count, `${g.unitedIn}"`, g.nos.map((n) => `#${n}`).join(" ")])}
+        head={["Size", "Qty", "UI", "Tags"]}
+        rows={schedule.sizes.map((g) => [`${g.label} ${g.widthIn}" × ${g.heightIn}"`, g.count, `${g.unitedIn}"`, (g.tags || g.nos.map((n) => `#${n}`)).join(" ")])}
       />
       <div style={{ fontSize: 12, color: C.muted, margin: "-8px 0 10px" }}>
         Sizes are the visible opening (outside of trim) measured from the photos, to the nearest ½". UI = united inches (width + height). Same sizes within 1" are counted
         together.
       </div>
       <Table
-        head={["#", "Wall", "Type", "W × H", "Sill"]}
+        head={["Tag", "Wall", "Type", "W × H", "Sill"]}
         rows={schedule.items.map((it) => [
-          `#${it.no}`,
+          it.tag || `#${it.no}`,
           `${it.wallId} ${it.wallLabel}`,
           it.label,
           `${it.widthIn}" × ${it.heightIn}"`,

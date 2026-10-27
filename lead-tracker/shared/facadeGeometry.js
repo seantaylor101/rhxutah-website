@@ -540,9 +540,17 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
     };
   });
 
-  // every opening numbered in wall order, as the schedule lists them
+  // every opening numbered in wall order, as the schedule lists them, and
+  // tagged the way HOVER does: W-1… windows, D-1… doors, G-1… garage doors
   let no = 0;
-  for (const w of wallReports) for (const o of w.openings) o.no = ++no;
+  const perType = {};
+  for (const w of wallReports)
+    for (const o of w.openings) {
+      o.no = ++no;
+      const p = TAG_PREFIX[o.type] || "O";
+      perType[p] = (perType[p] || 0) + 1;
+      o.tag = `${p}-${perType[p]}`;
+    }
 
   const levelMismatches = wallReports.filter((w) => w.photoStories).map((w) => ({ id: w.id, label: w.label, mapStories: w.stories, photoStories: w.photoStories }));
   return {
@@ -555,6 +563,7 @@ export function buildFacadeReport(model, analyses, { pitch12 = null, roofAreaFt2
   };
 }
 
+const TAG_PREFIX = { window: "W", door: "D", garage_door: "G" };
 const OPENING_LABEL = { window: "Window", door: "Door", garage_door: "Garage door" };
 
 // HOVER-style openings list: each one with its size, and the same sizes
@@ -566,6 +575,7 @@ function openingSchedule(walls) {
     for (const o of w.openings)
       items.push({
         no: o.no,
+        tag: o.tag,
         wallId: w.id,
         wallLabel: w.label,
         side: w.side,
@@ -585,7 +595,8 @@ function openingSchedule(walls) {
     if (same) {
       same.count += 1;
       same.nos.push(it.no);
-    } else sizes.push({ type: it.type, label: it.label, widthIn: it.widthIn, heightIn: it.heightIn, unitedIn: it.unitedIn, count: 1, nos: [it.no] });
+      same.tags.push(it.tag);
+    } else sizes.push({ type: it.type, label: it.label, widthIn: it.widthIn, heightIn: it.heightIn, unitedIn: it.unitedIn, count: 1, nos: [it.no], tags: [it.tag] });
   }
   sizes.sort((a, b) => a.type.localeCompare(b.type) || b.count - a.count || b.unitedIn - a.unitedIn);
   return { items, sizes };
