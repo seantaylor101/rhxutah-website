@@ -322,3 +322,22 @@ test("a window missing from the best photo is picked up from another photo of th
   assert.equal(right.fromPhotoId, "p2");
   assert.equal(rep.openingSchedule.items.length, 2);
 });
+
+test("a photo height no wall can have is thrown out for the typical height", () => {
+  const FT = 0.3048;
+  const O = { lat: 41.0312, lng: -111.9375 };
+  const box = [[0, 0], [W * FT, 0], [W * FT, 30 * FT], [0, 30 * FT]].map(([x, y]) => {
+    const ll = toLatLng(O, x, y);
+    return [ll.lat, ll.lng];
+  });
+  const model = buildHouseModel({ roofOutline: box, overhangIn: 0, frontAz: 180, levels: { count: 1 } });
+  const front = model.walls.find((w) => w.side === "front");
+  const cam = camera({ pos: [20, 5, 90], lookAt: [20, 15, 0], f: 3000 });
+  const p = (x, y) => cam.project([x, y, 0]);
+  // marked 34 ft tall — a one-story wall can't be
+  const face = { wallId: front.id, leftIsCorner: true, rightIsCorner: true, baseVisible: true, corners: { baseLeft: p(0, 0), baseRight: p(W, 0), topLeft: p(0, 34), topRight: p(W, 34) }, peakVisible: false, peak: { x: 0, y: 0 }, material: "siding", materialRegions: [], openings: [] };
+  const rep = buildFacadeReport(model, [{ photoId: "p1", slotKind: "side", imageWidth: cam.imageWidth, imageHeight: cam.imageHeight, focal35: (3000 * 34.6) / 4032, faces: [face] }], { pitch12: 6 });
+  const wf = rep.walls.find((w) => w.id === front.id);
+  near(wf.height, 9, 1e-9, "typical one-story height");
+  assert.ok(wf.notes.some((n) => /can't be right/.test(n)));
+});

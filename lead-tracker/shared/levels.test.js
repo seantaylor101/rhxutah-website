@@ -158,3 +158,21 @@ test("a shallow garage roof in front still gets the second-story wall above it",
   assert.ok(r.upperRing && !inside(r.upperRing, -3, -7), "garage roof isn't upper roof");
   assert.ok(inside(r.upperRing, -3, -4));
 });
+
+test("a wall under a main roof sloping down past it: two stories where the eave is high, one where it comes down low", () => {
+  // two-story block u −7..−3 with its gable facing front; its east roof
+  // plane runs on down over a one-story wing to u = 8. The front wall's
+  // roof line rises to the peak and then runs all the way down.
+  const roofAt = (u, v) => {
+    if (u < -7 || u > 8 || Math.abs(v) > 6) return null;
+    return u < -3 ? 5.6 + 0.58 * (u + 7) : 7.9 - 0.42 * (u + 3);
+  };
+  const outline = rect(-7, -6, 8, 6);
+  const r = detectLevels(fakeGrid(outline, roofAt), outline);
+  const front = r.eaves
+    .map((e) => ({ ...e, ua: toHouse(e.a), ub: toHouse(e.b) }))
+    .filter((e) => Math.abs(e.ua[1] + 6) < 0.6 && Math.abs(e.ub[1] + 6) < 0.6);
+  const at = (u) => front.find((e) => Math.min(e.ua[0], e.ub[0]) <= u && Math.max(e.ua[0], e.ub[0]) >= u);
+  assert.equal(at(-5).stories, 2, "under the two-story gable");
+  assert.equal(at(6).stories, 1, "where the roof has come down to one story");
+});
