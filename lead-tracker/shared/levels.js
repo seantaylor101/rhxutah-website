@@ -560,7 +560,7 @@ function fitRoofPlanes(grid, house, z) {
     regions.push(reg);
   }
   // planes for regions big enough to be a real roof face
-  const minCells = 3 / (step * step);
+  const minCells = 4 / (step * step);
   const fit = (cells) => {
     let [sxx, sxy, syy, sx, sy, sn, sxz, syz, sz] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     for (const k of cells) {
@@ -645,6 +645,84 @@ function fitRoofPlanes(grid, house, z) {
       plane[root] = p;
     }
   }
+  // Square the planes up, the way the roof was built: each slope faces
+  // straight out from a wall (the grid runs along the walls), at the house's
+  // common pitch unless it's clearly different, then re-seated on the height
+  // map. Pieces of the same face that end up identical are joined.
+  {
+    const tilted = [];
+    plane.forEach((p, i) => {
+      if (p && Math.hypot(p.a, p.b) >= 0.08) tilted.push({ m: Math.hypot(p.a, p.b), w: regions[i].cells.length });
+    });
+    tilted.sort((x, y) => x.m - y.m);
+    const total = tilted.reduce((t, x) => t + x.w, 0);
+    let acc = 0;
+    let common = null;
+    for (const x of tilted) {
+      acc += x.w;
+      if (acc >= total / 2) {
+        common = Math.round(x.m * 24) / 24; // nearest ½ in 12
+        break;
+      }
+    }
+    const reseat = (p, cells) => {
+      let sum = 0;
+      let n = 0;
+      for (const k of cells) {
+        if (!Number.isFinite(z[k])) continue;
+        sum += z[k] - p.a * (k % nx) * step - p.b * Math.floor(k / nx) * step;
+        n++;
+      }
+      if (n) p.c = sum / n;
+    };
+    plane.forEach((p, i) => {
+      if (!p) return;
+      const m = Math.hypot(p.a, p.b);
+      if (m < 0.08) {
+        p.a = 0;
+        p.b = 0;
+      } else {
+        let ang = Math.atan2(p.b, p.a);
+        const sq = Math.round(ang / (Math.PI / 2)) * (Math.PI / 2);
+        if (Math.abs(ang - sq) < (25 * Math.PI) / 180) ang = sq;
+        const mm = common != null && Math.abs(m - common) <= 2 / 12 ? common : Math.round(m * 24) / 24;
+        p.a = Math.abs(Math.cos(ang)) < 1e-9 ? 0 : mm * Math.cos(ang);
+        p.b = Math.abs(Math.sin(ang)) < 1e-9 ? 0 : mm * Math.sin(ang);
+      }
+      reseat(p, regions[i].cells);
+    });
+    // join neighbors that are now the same plane
+    const parent = regions.map((_, i) => i);
+    const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+    for (let k = 0; k < N; k++) {
+      const a = label[k];
+      if (a < 0 || !plane[a]) continue;
+      for (const q of [k + 1, k + nx]) {
+        if (q >= N || (q === k + 1 && q % nx === 0)) continue;
+        const b = label[q];
+        if (b < 0 || b === a || !plane[b]) continue;
+        const [pa, pb] = [plane[a], plane[b]];
+        if (Math.abs(pa.a - pb.a) < 1e-6 && Math.abs(pa.b - pb.b) < 1e-6 && Math.abs(pa.c - pb.c) < 0.3) parent[find(a)] = find(b);
+      }
+    }
+    const groups = new Map();
+    plane.forEach((p, i) => {
+      if (!p) return;
+      const r = find(i);
+      if (!groups.has(r)) groups.set(r, []);
+      groups.get(r).push(i);
+    });
+    for (const [root, members] of groups) {
+      if (members.length < 2) continue;
+      const cells = members.flatMap((i) => regions[i].cells);
+      for (const i of members) {
+        for (const k of regions[i].cells) label[k] = root;
+        if (i !== root) plane[i] = null;
+      }
+      regions[root] = { ...regions[root], cells };
+      reseat(plane[root], cells);
+    }
+  }
   const at = (p, k) => p.a * (k % nx) * step + p.b * Math.floor(k / nx) * step + p.c;
   const facetOf = new Int32Array(N).fill(-1);
   for (let k = 0; k < N; k++) if (label[k] >= 0 && plane[label[k]]) facetOf[k] = label[k];
@@ -673,6 +751,25 @@ function fitRoofPlanes(grid, house, z) {
   // them along a ridge or hip, the higher along a valley — whichever the
   // height map is nearer to. (Taking each cell's own plane instead leaves a
   // sawtooth along every ridge, from the cell-sized steps in the boundary.)
+  // which way each pair of neighboring planes meets: a ridge or hip (the
+  // other plane, carried on into this one's side, rises above it) or a
+  // valley (it drops below) — voted from a few cells back from where they meet
+  const convexVotes = new Map();
+  for (let k = 0; k < N; k++) {
+    const f = facetOf[k];
+    if (f < 0) continue;
+    for (const q of [k + 1, k - 1, k + nx, k - nx]) {
+      if (q < 0 || q >= N || (Math.abs(q - k) === 1 && Math.floor(q / nx) !== Math.floor(k / nx))) continue;
+      const g = facetOf[q];
+      if (g < 0 || g === f) continue;
+      const back = k - 3 * (q - k);
+      if (back < 0 || back >= N || facetOf[back] !== f) continue;
+      const key = `${f},${g}`;
+      const v = convexVotes.get(key) || 0;
+      convexVotes.set(key, v + (at(plane[g], back) > at(plane[f], back) ? 1 : -1));
+    }
+  }
+  const convex = (f, g) => (convexVotes.get(`${f},${g}`) || 0) + (convexVotes.get(`${g},${f}`) || 0) >= 0;
   const heights = new Float32Array(N).fill(NaN);
   for (let k = 0; k < N; k++) {
     if (!house[k]) continue;
@@ -685,22 +782,22 @@ function fitRoofPlanes(grid, house, z) {
     const i = k % nx;
     const j = (k - i) / nx;
     const near = new Set([f]);
-    for (let dj = -2; dj <= 2; dj++)
-      for (let di = -2; di <= 2; di++) {
+    for (let dj = -4; dj <= 4; dj++)
+      for (let di = -4; di <= 4; di++) {
         const a = i + di;
         const b = j + dj;
         if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
         const g = facetOf[b * nx + a];
         if (g >= 0) near.add(g);
       }
+    // near another plane, the roof is where the two cross: the lower of
+    // them across a ridge or hip, the higher across a valley
     let v = own;
-    if (near.size > 1) {
-      const vals = [...near].map((g) => at(plane[g], k)).filter((x) => !Number.isFinite(z[k]) || Math.abs(x - z[k]) < 1);
-      if (vals.length > 1) {
-        const lo = Math.min(...vals);
-        const hi = Math.max(...vals);
-        v = !Number.isFinite(z[k]) ? own : Math.abs(lo - z[k]) <= Math.abs(hi - z[k]) ? lo : hi;
-      }
+    for (const g of near) {
+      if (g === f) continue;
+      const other = at(plane[g], k);
+      if (Number.isFinite(z[k]) && Math.abs(other - z[k]) > 1) continue; // a separate roof, not a crease
+      v = convex(f, g) ? Math.min(v, other) : Math.max(v, other);
     }
     // the plane, even where the height map pokes up through it: a vent,
     // chimney or branch would be a spike at this spacing
@@ -909,7 +1006,12 @@ export function detectLevels(grid, ringLocal, { debug = null } = {}) {
         }
       clean[k] = vals.length ? (core[k] ? quantile(vals, 0.5) : quantile(vals, 0.3)) : rel[k];
     }
-  const planes = fitRoofPlanes(grid, house, clean);
+  // the roof runs out to the squared-up outline, not the height map's
+  // ragged edge, so the eaves come out straight
+  const finalRing = roofRing || (signedArea(ringLocal) < 0 ? ringLocal.slice().reverse() : ringLocal);
+  const roofArea = new Uint8Array(N);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) roofArea[j * nx + i] = pointInPolygon(local(i, j), finalRing) ? 1 : 0;
+  const planes = fitRoofPlanes(grid, roofArea, clean);
   const SUB = 2;
   const rnx = Math.ceil(nx / SUB);
   const rny = Math.ceil(ny / SUB);
@@ -917,13 +1019,12 @@ export function detectLevels(grid, ringLocal, { debug = null } = {}) {
   for (let j = 0; j < rny; j++)
     for (let i = 0; i < rnx; i++) {
       const k = j * SUB * nx + i * SUB;
-      if (house[k] && Number.isFinite(planes.heights[k])) rh[j * rnx + i] = Math.round(Math.max(0, planes.heights[k]) * 100) / 100;
+      if (roofArea[k] && Number.isFinite(planes.heights[k])) rh[j * rnx + i] = Math.round(Math.max(0, planes.heights[k]) * 100) / 100;
     }
   const rf = new Array(rnx * rny).fill(-1);
   for (let j = 0; j < rny; j++) for (let i = 0; i < rnx; i++) rf[j * rnx + i] = planes.facetOf[j * SUB * nx + i * SUB];
   const roofSurface = { theta: grid.theta, x0: grid.x0, y0: grid.y0, step: step * SUB, nx: rnx, ny: rny, h: rh, facet: rf, facets: planes.facets };
 
-  const finalRing = roofRing || (signedArea(ringLocal) < 0 ? ringLocal.slice().reverse() : ringLocal);
   return {
     ok: true,
     eaves: eaveRuns(grid, finalRing, rel, upper),
