@@ -124,7 +124,8 @@ function buildScene(model, report, pitch12) {
 
   // roofs: hipped over a 4-cornered level, flat otherwise
   const groundEave = topGround || (model.hasUpper ? 9 : topUpper || 9);
-  if (model.roofLocal) group.add(model.roofLocal.length === 4 && !model.hasUpper ? hipRoof(model.roofLocal, groundEave, rise) : flatRoof(model.roofLocal, groundEave));
+  // (a house that's two stories all the way round has no lower roof)
+  if (model.roofLocal && !(model.hasUpper && !topGround)) group.add(model.roofLocal.length === 4 && !model.hasUpper ? hipRoof(model.roofLocal, groundEave, rise) : flatRoof(model.roofLocal, groundEave));
   if (model.upperRoofLocal) {
     const eave = topUpper || 18;
     group.add(model.upperRoofLocal.length === 4 ? hipRoof(model.upperRoofLocal, eave, rise) : flatRoof(model.upperRoofLocal, eave));

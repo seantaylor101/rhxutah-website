@@ -24,6 +24,7 @@ export const measureApi = {
   deletePhoto: (photoId) => request(`/photos/${photoId}`, { method: "DELETE" }),
   upperSuggestion: (leadId) => request(`/lead/${leadId}/upper-suggestion`),
   refreshRoof: (leadId) => request(`/lead/${leadId}/roof`, { method: "POST" }),
+  detectLevels: (leadId, reset = false) => request(`/lead/${leadId}/levels`, { method: "POST", body: JSON.stringify({ reset }) }),
   startReport: (leadId) => request(`/lead/${leadId}/report`, { method: "POST" }),
   getReport: (leadId) => request(`/lead/${leadId}/report`),
   async exportZip(leadId) {
