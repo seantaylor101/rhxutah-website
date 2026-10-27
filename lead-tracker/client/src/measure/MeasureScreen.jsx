@@ -175,6 +175,9 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const [selectedWallId, setSelectedWallId] = useState(null);
   const [openPhotoKey, setOpenPhotoKey] = useState(null);
   const [actionError, setActionError] = useState(null);
+  // shown under the Create report button, where it was tapped (the screen's
+  // error line is at the top, out of sight)
+  const [reportError, setReportError] = useState(null);
   const fileInputRef = useRef(null);
   const uploadWallRef = useRef(null); // wall the next picked photos are pinned to, if any
   const [adding, setAdding] = useState(0);
@@ -338,17 +341,30 @@ export default function MeasureScreen({ lead, editable, onClose }) {
   const createReport = async () => {
     if (data.queuedCount > 0 && !window.confirm(`${data.queuedCount} photo(s) haven't uploaded yet and won't be in this report. Create it anyway?`)) return;
     setStartingReport(true);
-    setActionError(null);
+    setReportError(null);
     try {
       const r = await measureApi.startReport(lead.id);
       setReport(r);
       await data.reload();
     } catch (err) {
-      setActionError(!err.status ? "No signal. Create the report once you're back online." : err.message);
+      setReportError(!err.status ? "No signal. Create the report once you're back online." : err.message);
     } finally {
       setStartingReport(false);
     }
   };
+
+  // why Create report can't run yet, said where the button is
+  const reportBlocked = data.offline
+    ? "You're offline. Create the report once you're back online."
+    : !model
+      ? "Look up the address first, so there's a wall map."
+      : model.frontAz == null
+        ? "Set the front of the house on the wall map first."
+        : !photos.some((p) => !p.pending)
+          ? photos.length
+            ? "Waiting for the photos to finish uploading."
+            : "Take or upload the walk-around photos first."
+          : null;
 
   const openCamera = (slot) => {
     setCaptureSlot(slot || null);
@@ -592,13 +608,14 @@ export default function MeasureScreen({ lead, editable, onClose }) {
                 )}
                 <button
                   style={report?.status === "done" ? btnSecondary : btnPrimary}
-                  disabled={startingReport || data.offline || !model || !photos.some((p) => !p.pending)}
+                  disabled={startingReport || !!reportBlocked}
                   onClick={createReport}
                 >
-                  {startingReport ? "Starting…" : report?.status === "done" ? "Run again" : "📐 Create report"}
+                  {startingReport ? "Starting… (finding the levels can take a few seconds)" : report?.status === "done" ? "Run again" : "📐 Create report"}
                 </button>
               </div>
-              {!model?.frontAz && model && <div style={{ fontSize: 12.5, color: C.amber, marginTop: 8 }}>Set the front of the house on the wall map first.</div>}
+              {reportBlocked && <div style={{ fontSize: 12.5, color: C.amber, marginTop: 8 }}>{reportBlocked}</div>}
+              {reportError && <div style={{ fontSize: 13, color: C.rust, marginTop: 8 }}>Couldn't start the report: {reportError}</div>}
               {doneCount < 4 && (
                 <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
                   Best results with all 8 walk-around shots; the 4 straight-on side shots matter most.
