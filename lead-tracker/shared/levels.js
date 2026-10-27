@@ -26,6 +26,7 @@ const MIN_BUILDING_M = 1.8; // anything lower than this is a fence, car or bush
 const STEP_M = 1.1; // a drop this big over STEP_PX is an eave above a lower roof
 const STEP_PX = 3;
 const MIN_UPPER_M2 = 12;
+const MIN_LOWER_M2 = 5; // a lower roof smaller than this is a bay or a porch cap, not a level
 const EXPLAINED_EDGE = 0.55;
 const ROOF_JOG_M = 0.9; // roof-edge jogs smaller than this are smoothed out
 const UPPER_JOG_M = 1.5; // the second story's edge is fuzzier (a height cut-off on a sloped roof) // share of a second story's edge that must be eave or step
@@ -733,7 +734,8 @@ function fitRoofPlanes(grid, house, z) {
 //     roofRing (local, roof edge, or null to keep the one we have),
 //     upperRing (local, the second story's roof edge, or null),
 //     upperShare (upper roof area ÷ whole roof), stats }
-export function detectLevels(grid, ringLocal) {
+// (debug: an object to fill with the masks, for looking at a house offline)
+export function detectLevels(grid, ringLocal, { debug = null } = {}) {
   const { nx, ny, step, h } = grid;
   const N = nx * ny;
   const cellM2 = step * step;
@@ -849,13 +851,25 @@ export function detectLevels(grid, ringLocal) {
       upper[k] = 1;
       upperCells++;
     }
+  if (debug) debug.before = upper.slice();
   if (upperCells) upperCells += absorbEaveFringe(grid, house, upper, rel);
+  if (debug) Object.assign(debug, { after: upper.slice(), rel, house });
   const upperShare = upperCells / houseCells;
+  // real lower roof left over — a garage or porch roof, not the thin rim of
+  // eave the height map blurs: what survives a 0.5 m opening
+  let lowerCells = 0;
+  {
+    const lower = new Uint8Array(N);
+    for (let k = 0; k < N; k++) lower[k] = house[k] && !upper[k] ? 1 : 0;
+    const solid = openMask(lower, nx, ny, 2);
+    for (let k = 0; k < N; k++) lowerCells += solid[k];
+  }
+  const wholeHouse = lowerCells * cellM2 < MIN_LOWER_M2;
   let upperRing = null;
   let levels = 1;
   if (upperCells) {
     levels = 2;
-    if (upperShare < 0.85) {
+    if (!wholeHouse) {
       // more than one separate second-story piece: the biggest, as the model
       // has one upper level
       const cc = components(upper, nx, ny);
@@ -868,8 +882,9 @@ export function detectLevels(grid, ringLocal) {
       upperRing = maskToRing(grid, closeMask(upper, nx, ny, 2), UPPER_JOG_M);
       if (!upperRing) levels = 1;
     }
-    // ≥ 85%: the whole house is two stories — the upper outline is the roof
-    // outline itself (the caller fills that in)
+    // otherwise the whole house is two stories — the upper outline is the
+    // roof outline itself (the caller fills that in). Even a small lower roof
+    // (a garage roof a few feet deep) is kept: the wall above it is real.
   }
 
   // the roof surface itself, every 50 cm, for the 3D view. The height map
@@ -917,7 +932,7 @@ export function detectLevels(grid, ringLocal) {
     maxRoofM: Math.round(maxRoofM * 100) / 100,
     houseAreaM2: Math.round(houseM2 * 10) / 10,
     levels,
-    wholeHouseTwoStory: levels === 2 && upperShare >= 0.85,
+    wholeHouseTwoStory: levels === 2 && wholeHouse,
     roofRing,
     upperRing,
     upperShare: Math.round(upperShare * 100) / 100,
