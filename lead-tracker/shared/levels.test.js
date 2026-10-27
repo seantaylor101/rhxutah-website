@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectLevels, gridSpec, frameToLocal } from "./levels.js";
+import { detectLevels, gridSpec, frameToLocal, squareUp } from "./levels.js";
 import { signedArea, pointInPolygon } from "./houseGeometry.js";
 
 const GROUND = 1402.3;
@@ -105,4 +105,13 @@ test("no height data → not ok, nothing changed", () => {
   g.h.fill(NaN);
   const r = detectLevels(g, outline);
   assert.equal(r.ok, false);
+});
+
+test("squaring up: small jogs go, real ones stay", () => {
+  // a 40 × 30 rectangle with a 1-cell tree notch on top and a real 10 × 8
+  // bump-out on the right (cells)
+  const ring = [[0, 0], [40, 0], [40, 10], [50, 10], [50, 18], [40, 18], [40, 30], [21, 30], [21, 29], [20, 29], [20, 30], [0, 30]];
+  const out = squareUp(ring, 3);
+  assert.equal(out.length, 8);
+  assert.equal(Math.abs(signedArea(out)), 40 * 30 + 10 * 8);
 });
