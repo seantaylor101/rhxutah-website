@@ -141,3 +141,20 @@ test("the roof is split into its planes: a garage roof and the two slopes of the
   assert.equal(main.length, 2);
   assert.ok(Math.abs(main[0] - 70) <= 3 && Math.abs(main[1] - 250) <= 3, `azimuths ${main}`);
 });
+
+test("a shallow garage roof in front still gets the second-story wall above it", () => {
+  // 14 × 16 m two-story house with a garage roof only 2 m deep across the
+  // front-left 8 m — under 15% of the roof, but the wall above it is real
+  const roofAt = (u, v) => {
+    if (Math.abs(u) > 7 || v < -8 || v > 8) return null;
+    if (v < -6 && u < 1) return 3.0 + 0.6 * (v + 8); // garage roof, up to 4.2
+    if (v < -6) return null;
+    return 5.6 + 0.58 * (7 - Math.abs(u));
+  };
+  const outline = [toWorld([-7, -8]), toWorld([1, -8]), toWorld([1, -6]), toWorld([7, -6]), toWorld([7, 8]), toWorld([-7, 8])];
+  const r = detectLevels(fakeGrid(outline, roofAt), outline);
+  assert.equal(r.levels, 2);
+  assert.equal(r.wholeHouseTwoStory, false);
+  assert.ok(r.upperRing && !inside(r.upperRing, -3, -7), "garage roof isn't upper roof");
+  assert.ok(inside(r.upperRing, -3, -4));
+});
