@@ -167,6 +167,38 @@ still be shot and get sorted once the map exists. Building outlines come from th
 
 Tests for the geometry: `node --test shared/*.test.js server/src/measure/*.test.js` (from `lead-tracker/`).
 
+## Employee time clock & payroll
+
+**Owner:** menu → **Employees & Payroll**.
+
+- **Add employee** — name, hourly rate, and his own passcode (6+ characters, stored only as a salted
+  hash). He signs in at the same app address with it and sees only his time clock — never leads, jobs,
+  rates, or pay. "Turn off login" cuts him off immediately; his history is kept.
+- **Pay week** — 7 days from the start day in Payroll settings (default Monday), midnight to midnight
+  Utah time. Hours add up automatically from his punches.
+- **Piece rate** — enter line items for the week. Pay = hourly wages (overtime at 1.5x after 40 hrs);
+  if piece rate beats hourly wages, the difference is a bonus. In an overtime week the bonus is also
+  folded into the regular rate (FLSA), shown as its own "overtime on the bonus" line.
+- **Submit payroll** — saves a frozen copy and opens the phone's mail app with the report filled in,
+  addressed to the payroll email from Payroll settings. Re-submitting after changes sends an update.
+- **Shifts** — tap any shift to edit times, delete it, or see its GPS trail (map needs
+  `GOOGLE_MAPS_API_KEY` with Maps Static API; "open in Maps" links work without it). Missed-punch
+  requests from the employee show under **Needs your OK** (approve / adjust / deny) and don't count
+  until approved.
+
+**Employee:** big Clock In / Clock Out button, this week's hours, past weeks, "Forgot to clock in?
+Started earlier?" (the earlier stretch goes to the owner for approval), "Forgot to clock out?"
+(applies right away — it can only lower hours), and "Add a shift I missed".
+
+**GPS:** taken at every punch, and every ~2 min (or 100 m moved) while he's clocked in *and the app is
+open on screen*. Web apps can't read location in the background or with the phone locked, and nothing
+is recorded off the clock — so there's no GPS for time he wasn't clocked in. For a missed-punch request
+the owner sees the closest fixes on record before and after it.
+
+Code: `server/src/{employees,payroll}.js`, `server/src/routes/{timeclock,payroll}.js`,
+`client/src/payroll/`. The daily JSON backups cover leads only; time-clock data lives in `leads.db`
+on the persistent disk.
+
 ## Changing passcodes
 
 Update `OWNER_PASSCODE` / `VIEWER_PASSCODE` in your environment and restart the app. Existing

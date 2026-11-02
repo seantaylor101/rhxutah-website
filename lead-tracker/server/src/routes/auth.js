@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "crypto";
 import { COOKIE_NAME, signSession } from "../auth.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { logAccess } from "../activityLog.js";
+import { findEmployeeByPasscode } from "../employees.js";
 
 const router = Router();
 const isProd = process.env.NODE_ENV === "production";
@@ -60,7 +61,13 @@ router.post("/login", (req, res) => {
   if (process.env.OWNER_PASSCODE && safeCompare(passcode, process.env.OWNER_PASSCODE)) role = "owner";
   else if (process.env.VIEWER_PASSCODE && safeCompare(passcode, process.env.VIEWER_PASSCODE)) role = "viewer";
 
-  if (!role) return res.status(401).json({ error: "Incorrect passcode" });
+  if (!role) {
+    // not one of the two shared passcodes — maybe it's an employee's own
+    const employee = findEmployeeByPasscode(passcode);
+    if (!employee) return res.status(401).json({ error: "Incorrect passcode" });
+    res.cookie(COOKIE_NAME, signSession("employee", { eid: employee.id }), cookieOptions);
+    return res.json({ role: "employee", employee: { id: employee.id, name: employee.name } });
+  }
 
   if (role === "viewer") logAccess("viewer");
 
@@ -73,7 +80,10 @@ router.post("/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/me", requireAuth("viewer"), (req, res) => {
+router.get("/me", requireAuth("any"), (req, res) => {
+  if (req.role === "employee") {
+    return res.json({ role: "employee", employee: { id: req.employee.id, name: req.employee.name } });
+  }
   // the client checks this once every time the app opens — the natural
   // point to log a project-manager "opened the app" event
   if (req.role === "viewer") logAccess("viewer");

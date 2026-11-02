@@ -7,15 +7,18 @@ if (!SECRET) {
 
 export const COOKIE_NAME = "rhx_session";
 
-export function signSession(role) {
-  return jwt.sign({ role }, SECRET, { expiresIn: "30d" });
+// owner / viewer are the two shared passcodes; employee is a per-person
+// login (see employees.js) and carries which employee it is as `eid`
+export function signSession(role, extra = {}) {
+  return jwt.sign({ role, ...extra }, SECRET, { expiresIn: "30d" });
 }
 
 export function verifySession(token) {
   try {
     const payload = jwt.verify(token, SECRET);
-    if (payload.role !== "owner" && payload.role !== "viewer") return null;
-    return payload;
+    if (payload.role === "owner" || payload.role === "viewer") return payload;
+    if (payload.role === "employee" && typeof payload.eid === "string" && payload.eid) return payload;
+    return null;
   } catch {
     return null;
   }

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useR
 import { api } from "./api.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
+import EmployeeApp from "./payroll/EmployeeApp.jsx";
+import PayrollScreen from "./payroll/PayrollScreen.jsx";
 
 // Self-contained icons (no external icon library) so nothing outside this file has to load.
 function Icon({ children, size = 16, color = "currentColor", strokeWidth = 2, ...rest }) {
@@ -1207,7 +1209,7 @@ class ErrorBoundary extends React.Component {
 // header hamburger menu — houses Settings (owner-only) and Account, so the
 // primary header actions (Home/History/notifications) can stay prominent
 // without crowding in two more icon buttons
-function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
+function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenPayroll, onOpenAccount, btnStyle = headerIconBtn, iconSize = 20, iconColor = COLORS.surface, label }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -1229,6 +1231,17 @@ function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, b
                 style={moreMenuItem}
               >
                 Contacts
+              </button>
+            )}
+            {editable && onOpenPayroll && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onOpenPayroll();
+                }}
+                style={moreMenuItem}
+              >
+                Employees & Payroll
               </button>
             )}
             {editable && (
@@ -1261,6 +1274,10 @@ function HeaderMenu({ editable, onOpenSettings, onOpenContacts, onOpenAccount, b
 function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [role, setRole] = useState(null); // null = not signed in on this device
+  // an employee login ({ id, name }) — kept apart from `role` on purpose so
+  // none of the board's role-gated loading ever runs for an employee
+  const [employeeMe, setEmployeeMe] = useState(null);
+  const [showPayroll, setShowPayroll] = useState(false);
   // per-device, not part of the shared settings — "google" | "apple", read
   // from localStorage once at mount and updated in state alongside it so an
   // address link re-renders with the new href the instant it changes
@@ -1379,7 +1396,8 @@ function App() {
     (async () => {
       try {
         const me = await api.me();
-        setRole(me.role);
+        if (me.role === "employee") setEmployeeMe(me.employee);
+        else setRole(me.role);
       } catch {
         setRole(null);
       } finally {
@@ -1747,6 +1765,10 @@ function App() {
 
   const handleLogin = async (passcode) => {
     const res = await api.login(passcode); // throws on a bad passcode
+    if (res.role === "employee") {
+      setEmployeeMe(res.employee);
+      return;
+    }
     setRole(res.role);
     setShowAccountModal(false);
   };
@@ -1758,6 +1780,8 @@ function App() {
       // clearing local state below still logs this device out either way
     }
     setRole(null);
+    setEmployeeMe(null);
+    setShowPayroll(false);
     leadsVersionRef.current++;
     setLeads(null);
     setShowAccountModal(false);
@@ -2245,6 +2269,10 @@ function App() {
     );
   }
 
+  if (employeeMe) {
+    return <EmployeeApp employee={employeeMe} onLogout={handleLogout} />;
+  }
+
   if (!role) {
     return <LoginScreen onLogin={handleLogin} />;
   }
@@ -2305,6 +2333,7 @@ function App() {
             editable={editable}
             onOpenSettings={() => setShowSettingsModal(true)}
             onOpenContacts={() => setView("contacts")}
+            onOpenPayroll={() => setShowPayroll(true)}
             onOpenAccount={() => setShowAccountModal(true)}
             btnStyle={headerCornerBtn}
             iconColor={COLORS.heroRed}
@@ -2849,6 +2878,8 @@ function App() {
           onClose={() => setShowLeadSearch(false)}
         />
       )}
+      {showPayroll && editable && <PayrollScreen onClose={() => setShowPayroll(false)} />}
+
       {showSettingsModal && (
         <SettingsModal
           settings={settings}

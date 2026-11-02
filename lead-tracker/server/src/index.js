@@ -17,6 +17,8 @@ import activityRoutes from "./routes/activity.js";
 import contactsRoutes from "./routes/contacts.js";
 import shareViewRoutes from "./routes/shareView.js";
 import measureRoutes from "./routes/measure.js";
+import timeclockRoutes from "./routes/timeclock.js";
+import payrollRoutes from "./routes/payroll.js";
 import { startReportReminderScheduler } from "./reportReminders.js";
 import { startBackupScheduler, recordActivity } from "./backupService.js";
 import { startGoalReminderScheduler } from "./goalReminders.js";
@@ -61,6 +63,8 @@ app.use("/api/activity", activityRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/share", shareViewRoutes);
 app.use("/api/measure", measureRoutes);
+app.use("/api/timeclock", timeclockRoutes);
+app.use("/api/payroll", payrollRoutes);
 app.use("/api/public", publicCors, publicRoutes);
 
 const clientDist = path.join(__dirname, "../../client/dist");
