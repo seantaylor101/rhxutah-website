@@ -151,4 +151,31 @@ export const api = {
   listActivityFeed: () => request("/activity/feed"),
   listContacts: () => request("/contacts"),
   deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),
+
+  // ── employee time clock (employee login) ──
+  clockStatus: () => request("/timeclock/status"),
+  clockIn: (body) => request("/timeclock/clock-in", { method: "POST", body: JSON.stringify(body) }),
+  clockOut: (body) => request("/timeclock/clock-out", { method: "POST", body: JSON.stringify(body) }),
+  sendGps: (points) => request("/timeclock/gps", { method: "POST", body: JSON.stringify({ points }) }),
+  requestMissedShift: (body) => request("/timeclock/requests", { method: "POST", body: JSON.stringify(body) }),
+  cancelMissedShift: (id) => request(`/timeclock/requests/${id}`, { method: "DELETE" }),
+  clockHistory: (before) => request(`/timeclock/history${before ? `?before=${before}` : ""}`),
+
+  // ── payroll (owner) ──
+  payrollSettings: () => request("/payroll/settings"),
+  savePayrollSettings: (patch) => request("/payroll/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  listEmployees: () => request("/payroll/employees"),
+  addEmployee: (body) => request("/payroll/employees", { method: "POST", body: JSON.stringify(body) }),
+  editEmployee: (id, patch) => request(`/payroll/employees/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  payrollReport: (id, periodStart) =>
+    request(`/payroll/employees/${id}/report${periodStart ? `?periodStart=${periodStart}` : ""}`),
+  payrollWeeks: (id) => request(`/payroll/employees/${id}/weeks`),
+  submitPayroll: (id, periodStart) =>
+    request(`/payroll/employees/${id}/submit`, { method: "POST", body: JSON.stringify({ periodStart }) }),
+  addPieceWork: (id, body) => request(`/payroll/employees/${id}/piece`, { method: "POST", body: JSON.stringify(body) }),
+  removePieceWork: (pieceId) => request(`/payroll/piece/${pieceId}`, { method: "DELETE" }),
+  addTimeEntry: (id, body) => request(`/payroll/employees/${id}/entries`, { method: "POST", body: JSON.stringify(body) }),
+  editTimeEntry: (entryId, patch) => request(`/payroll/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTimeEntry: (entryId) => request(`/payroll/entries/${entryId}`, { method: "DELETE" }),
+  timeEntryGps: (entryId) => request(`/payroll/entries/${entryId}/gps`),
 };

@@ -391,3 +391,81 @@ if (!db.prepare(`PRAGMA table_info(measure_photos)`).all().some((c) => c.name ==
   // same stored file). Filled in for older rows by routes/measure.js.
   db.exec(`ALTER TABLE measure_photos ADD COLUMN contentHash TEXT`);
 }
+
+// ── Employee time clock + payroll ──────────────────────────────────────
+// Employees sign in with their own passcode (stored only as a salted scrypt
+// hash) and see nothing but their own time clock. See employees.js,
+// payroll.js, routes/timeclock.js (employee side), routes/payroll.js (owner).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS employees (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    passcodeHash TEXT NOT NULL,
+    hourlyRate REAL NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    createdAt TEXT NOT NULL
+  );
+`);
+
+// one row per shift. clockOut NULL = still on the clock.
+// source: 'app' (tapped the button), 'manual' (owner added/edited it),
+//         'request' (employee said he forgot to clock in/out)
+// status: 'approved' counts toward pay; 'pending' is a missed-punch request
+//         waiting on the owner and is left out of payroll until approved
+db.exec(`
+  CREATE TABLE IF NOT EXISTS time_entries (
+    id TEXT PRIMARY KEY,
+    employeeId TEXT NOT NULL,
+    clockIn TEXT NOT NULL,
+    clockOut TEXT,
+    source TEXT NOT NULL DEFAULT 'app',
+    status TEXT NOT NULL DEFAULT 'approved',
+    note TEXT NOT NULL DEFAULT '',
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_time_entries_emp ON time_entries (employeeId, clockIn)`);
+
+// GPS fixes from the employee's phone while on the clock. kind: 'in' / 'out'
+// (taken at the tap) or 'track' (while the app is open during a shift)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS gps_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employeeId TEXT NOT NULL,
+    timeEntryId TEXT,
+    ts TEXT NOT NULL,
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    accuracy REAL,
+    kind TEXT NOT NULL DEFAULT 'track'
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_points_entry ON gps_points (timeEntryId, ts)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_points_emp ON gps_points (employeeId, ts)`);
+
+// the owner's piece-rate line items for one employee's pay week
+db.exec(`
+  CREATE TABLE IF NOT EXISTS piece_work (
+    id TEXT PRIMARY KEY,
+    employeeId TEXT NOT NULL,
+    periodStart TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    amount REAL NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_piece_work_period ON piece_work (employeeId, periodStart)`);
+
+// a frozen copy of the report as it was when "Submit payroll" was tapped
+db.exec(`
+  CREATE TABLE IF NOT EXISTS payroll_submissions (
+    id TEXT PRIMARY KEY,
+    employeeId TEXT NOT NULL,
+    periodStart TEXT NOT NULL,
+    report TEXT NOT NULL,
+    sentTo TEXT NOT NULL DEFAULT '',
+    submittedAt TEXT NOT NULL
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_payroll_submissions_period ON payroll_submissions (employeeId, periodStart)`);
