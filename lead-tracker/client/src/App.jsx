@@ -5142,6 +5142,8 @@ function AppointmentsView({ leads, onOpenLead }) {
                   key={key}
                   style={{
                     minHeight: 74,
+                    minWidth: 0,
+                    overflow: "hidden",
                     borderRight: `1px solid ${COLORS.border}`,
                     padding: "4px 3px",
                     boxSizing: "border-box",
