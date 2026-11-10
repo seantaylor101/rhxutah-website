@@ -5550,8 +5550,10 @@ function SettingsModal({ settings, onSave, onClose, onOpenBackups }) {
             </div>
             <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: COLORS.muted, marginBottom: 10 }}>
               Subscribe once from your iPhone or Mac (Settings/Calendar → Add Account → Other → Add Subscribed
-              Calendar) and every appointment set in the app will show up automatically, kept in sync in the
-              background.
+              Calendar) and every appointment set in the app shows up automatically with the customer's name and
+              address (tap the address for directions). Changing or clearing an appointment updates it there too —
+              Apple Calendar picks up changes on its next refresh (on a Mac, set Auto-refresh to every 5 or 15
+              minutes in the calendar's Get Info).
             </div>
             <a
               href={webcalUrl}
