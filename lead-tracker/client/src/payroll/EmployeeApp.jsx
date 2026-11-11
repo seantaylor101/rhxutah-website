@@ -362,7 +362,7 @@ function GpsStatus({ gps }) {
   );
 }
 
-export function DayBars({ days }) {
+export function DayBars({ days, showOvertime }) {
   const max = Math.max(10, ...days.map((d) => d.hours));
   return (
     <div style={{ display: "flex", gap: 6, marginTop: 14, alignItems: "flex-end" }}>
@@ -373,6 +373,9 @@ export function DayBars({ days }) {
             <div style={{ width: "100%", height: `${(d.hours / max) * 100}%`, background: C.accent, borderRadius: 5 }} />
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{d.label.split(" ")[0]}</div>
+          {showOvertime && d.overtime > 0 && (
+            <div style={{ fontSize: 10.5, color: C.rust, fontWeight: 700 }}>+{d.overtime.toFixed(1)} OT</div>
+          )}
         </div>
       ))}
     </div>

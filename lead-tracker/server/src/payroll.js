@@ -118,6 +118,10 @@ export function money(n) {
   return `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Time and a half for anything over 8 hours in a day, and — required by
+// federal law regardless — for straight-time hours past 40 in the week.
+// An hour already paid as daily overtime isn't counted again toward the 40.
+export const DAILY_OVERTIME_AFTER_HOURS = 8;
 export const OVERTIME_AFTER_HOURS = 40;
 
 export function entryHours(entry, now = new Date()) {
@@ -135,10 +139,14 @@ export function entryHours(entry, now = new Date()) {
 // FLSA, so it has to be folded into the regular rate for any week over 40
 // hours. That works out to an extra ½ × (bonus ÷ total hours) for each
 // overtime hour, shown as its own line so the payroll person can see it.
-export function computePay({ totalHours, hourlyRate, pieceTotal }) {
-  const total = hrs(totalHours);
-  const regularHours = hrs(Math.min(total, OVERTIME_AFTER_HOURS));
-  const overtimeHours = hrs(Math.max(0, total - OVERTIME_AFTER_HOURS));
+// dayHours: hours worked on each day of the pay week
+export function computePay({ dayHours, hourlyRate, pieceTotal }) {
+  const total = hrs(dayHours.reduce((s, h) => s + h, 0));
+  const dailyOvertimeHours = hrs(dayHours.reduce((s, h) => s + Math.max(0, h - DAILY_OVERTIME_AFTER_HOURS), 0));
+  const straightTime = total - dailyOvertimeHours;
+  const weeklyOvertimeHours = hrs(Math.max(0, straightTime - OVERTIME_AFTER_HOURS));
+  const overtimeHours = hrs(dailyOvertimeHours + weeklyOvertimeHours);
+  const regularHours = hrs(total - overtimeHours);
   const rate = Number(hourlyRate) || 0;
   const regularPay = cents(regularHours * rate);
   const overtimePay = cents(overtimeHours * rate * 1.5);
@@ -151,6 +159,8 @@ export function computePay({ totalHours, hourlyRate, pieceTotal }) {
     totalHours: total,
     regularHours,
     overtimeHours,
+    dailyOvertimeHours,
+    weeklyOvertimeHours,
     hourlyRate: rate,
     regularPay,
     overtimePay,
@@ -199,7 +209,13 @@ export function hoursForPeriod(employeeId, periodStart, now = new Date()) {
   for (let i = 0; i < 7; i++) {
     const date = addDays(periodStart, i);
     const dayEntries = approved.filter((e) => e.localDate === date);
-    days.push({ date, label: shortDate(date), hours: hrs(dayEntries.reduce((s, e) => s + entryHours(e, now), 0)) });
+    const dayTotal = dayEntries.reduce((s, e) => s + entryHours(e, now), 0);
+    days.push({
+      date,
+      label: shortDate(date),
+      hours: hrs(dayTotal),
+      overtime: hrs(Math.max(0, dayTotal - DAILY_OVERTIME_AFTER_HOURS)),
+    });
   }
   const totalHours = hrs(approved.reduce((s, e) => s + entryHours(e, now), 0));
   return {
@@ -220,7 +236,7 @@ export function buildReport(employee, periodStart, now = new Date()) {
     .prepare(`SELECT * FROM piece_work WHERE employeeId = ? AND periodStart = ? ORDER BY createdAt`)
     .all(employee.id, periodStart);
   const pay = computePay({
-    totalHours: hours.totalHours,
+    dayHours: hours.days.map((d) => d.hours),
     hourlyRate: employee.hourlyRate,
     pieceTotal: piece.reduce((s, p) => s + p.amount, 0),
   });
@@ -265,14 +281,20 @@ export function buildPayrollEmail(report, { to = "" } = {}) {
   lines.push(`Pay week: ${report.label}`);
   lines.push("");
   lines.push("HOURS");
-  for (const d of report.days) lines.push(`  ${d.label.padEnd(10)} ${d.hours.toFixed(2)}`);
+  for (const d of report.days) {
+    lines.push(`  ${d.label.padEnd(10)} ${d.hours.toFixed(2)}` + (d.overtime > 0 ? `  (${d.overtime.toFixed(2)} OT over 8 hrs)` : ""));
+  }
   lines.push(`  Total: ${p.totalHours.toFixed(2)} hrs` + (p.overtimeHours > 0 ? ` (${p.regularHours.toFixed(2)} regular + ${p.overtimeHours.toFixed(2)} overtime)` : ""));
   lines.push("");
   lines.push("HOURLY");
   lines.push(`  Rate: ${money(p.hourlyRate)}/hr`);
   lines.push(`  Regular: ${p.regularHours.toFixed(2)} hrs × ${money(p.hourlyRate)} = ${money(p.regularPay)}`);
   if (p.overtimeHours > 0) {
-    lines.push(`  Overtime: ${p.overtimeHours.toFixed(2)} hrs × ${money(p.hourlyRate * 1.5)} = ${money(p.overtimePay)}`);
+    lines.push(`  Overtime (time and a half): ${p.overtimeHours.toFixed(2)} hrs × ${money(p.hourlyRate * 1.5)} = ${money(p.overtimePay)}`);
+    const why = [];
+    if (p.dailyOvertimeHours > 0) why.push(`${p.dailyOvertimeHours.toFixed(2)} hrs over 8 in a day`);
+    if (p.weeklyOvertimeHours > 0) why.push(`${p.weeklyOvertimeHours.toFixed(2)} hrs over 40 in the week`);
+    lines.push(`    (${why.join(" + ")})`);
   }
   lines.push(`  Hourly wages: ${money(p.hourlyPay)}`);
   lines.push("");
