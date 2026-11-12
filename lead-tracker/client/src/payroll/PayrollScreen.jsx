@@ -257,18 +257,10 @@ function EmployeePayroll({ employee, settings, onEmployeeChanged, onOpenSettings
         </div>
         {p.overtimeHours > 0 && (
           <div style={{ fontSize: 13, color: C.muted, textAlign: "right" }}>
-            {fmtHours(p.regularHours)} regular + <strong style={{ color: C.rust }}>{fmtHours(p.overtimeHours)} overtime at 1.5×</strong>
-            <div style={{ fontSize: 12 }}>
-              {[
-                p.dailyOvertimeHours > 0 && `${fmtHours(p.dailyOvertimeHours)} over 8 hrs in a day`,
-                p.weeklyOvertimeHours > 0 && `${fmtHours(p.weeklyOvertimeHours)} over 40 hrs in the week`,
-              ]
-                .filter(Boolean)
-                .join(" + ")}
-            </div>
+            {fmtHours(p.regularHours)} regular + <strong style={{ color: C.rust }}>{fmtHours(p.overtimeHours)} overtime</strong>
           </div>
         )}
-        <DayBars days={report.days} showOvertime />
+        <DayBars days={report.days} />
         <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}` }}>
           {report.entries.filter((e) => e.status === "approved").map((e) => (
             <button
@@ -305,11 +297,7 @@ function EmployeePayroll({ employee, settings, onEmployeeChanged, onOpenSettings
       {/* pay */}
       <div style={card}>
         <div style={sectionLabel}>Pay for this week</div>
-        <PayRow label={`Regular (${fmtHours(p.regularHours)} hrs × ${fmtMoney(p.hourlyRate)})`} value={fmtMoney(p.regularPay)} />
-        {p.overtimeHours > 0 && (
-          <PayRow label={`Overtime (${fmtHours(p.overtimeHours)} hrs × ${fmtMoney(p.hourlyRate * 1.5)})`} value={fmtMoney(p.overtimePay)} />
-        )}
-        <PayRow label="Hourly wages" value={fmtMoney(p.hourlyPay)} strong />
+        <PayRow label={`Hourly wages (${fmtHours(p.totalHours)} hrs × ${fmtMoney(p.hourlyRate)}${p.overtimeHours > 0 ? ", OT at 1.5×" : ""})`} value={fmtMoney(p.hourlyPay)} />
         <PayRow label="Piece rate earned" value={fmtMoney(p.pieceTotal)} />
         <PayRow
           label={p.bonus > 0 ? "Bonus (piece rate over hourly)" : "Bonus — piece rate didn't beat hourly"}
