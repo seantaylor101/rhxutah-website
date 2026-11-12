@@ -23,6 +23,7 @@ import {
   periodLabel,
 } from "../payroll.js";
 import { googleConfigured } from "../measure/google.js";
+import { buildStops, withAddresses, stopLabel } from "../stops.js";
 
 // Owner only — the employee's own screen never sees rates, piece rate or pay.
 const router = Router();
@@ -315,7 +316,7 @@ function entryPoints(entryId) {
   return db.prepare(`SELECT ts, lat, lng, accuracy, kind FROM gps_points WHERE timeEntryId = ? ORDER BY ts`).all(entryId);
 }
 
-router.get("/entries/:id/gps", (req, res) => {
+router.get("/entries/:id/gps", async (req, res, next) => {
   const entry = entryOr404(req.params.id, res);
   if (!entry) return;
   // for a missed-punch request there's nothing recorded inside it (he
@@ -329,7 +330,13 @@ router.get("/entries/:id/gps", (req, res) => {
         .prepare(`SELECT ts, lat, lng, accuracy, kind FROM gps_points WHERE employeeId = ? AND ts >= ? ORDER BY ts LIMIT 1`)
         .get(entry.employeeId, entry.clockOut)
     : null;
-  res.json({ points: entryPoints(entry.id), nearestBefore: before || null, nearestAfter: after || null, mapsEnabled: googleConfigured() });
+  const points = entryPoints(entry.id);
+  try {
+    const stops = await withAddresses(buildStops(points, entry));
+    res.json({ points, stops, nearestBefore: before || null, nearestAfter: after || null, mapsEnabled: googleConfigured() });
+  } catch (err) {
+    next(err);
+  }
 });
 
 const MAX_MAP_POINTS = 90;
@@ -345,11 +352,17 @@ router.get("/entries/:id/map.png", async (req, res, next) => {
   const fmt = (p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
   const params = [`size=600x360`, `scale=2`, `maptype=hybrid`];
   if (sampled.length > 1) params.push(`path=color:0xEC4139cc|weight:4|${sampled.map(fmt).join("|")}`);
-  const first = pts.find((p) => p.kind === "in") || pts[0];
-  const last = pts.findLast((p) => p.kind === "out") || (pts.length > 1 ? pts[pts.length - 1] : null);
-  params.push(`markers=color:green|label:I|${fmt(first)}`);
-  if (last && last !== first) params.push(`markers=color:red|label:O|${fmt(last)}`);
-  if (sampled.length === 1) params.push(`zoom=16`);
+  // one numbered pin per stop, matching the list under the map: green where
+  // he clocked in, red where he clocked out, blue for where he is now on an
+  // open shift, orange for everything between; drive-bys get a small dot
+  const stops = buildStops(pts, entry);
+  for (const st of stops) {
+    const color = st.atClockOut ? "red" : st.atClockIn || st.n === 1 ? "green" : st.ongoing ? "blue" : "orange";
+    const label = stopLabel(st.n);
+    const style = st.passingThrough ? `size:tiny|color:${color}` : `color:${color}${label ? `|label:${label}` : ""}`;
+    params.push(`markers=${style}|${fmt(st)}`);
+  }
+  if (stops.length === 1) params.push(`zoom=16`);
   const url = `https://maps.googleapis.com/maps/api/staticmap?${params.join("&")}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(15000) });

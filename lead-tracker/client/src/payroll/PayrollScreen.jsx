@@ -536,13 +536,14 @@ function ShiftSheet({ employee, entry, mapsEnabled, onClose, onChanged }) {
               />
             )}
             {gps && pts.length > 0 && (
-              <div style={{ fontSize: 13, color: C.ink, marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-                {inPt && <GpsLine label="Clock-in" p={inPt} />}
-                {outPt && <GpsLine label="Clock-out" p={outPt} />}
-                <div style={{ color: C.muted }}>
+              <div style={{ marginTop: 10 }}>
+                <StopList stops={gps.stops || []} />
+                <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>
                   {pts.length} location fix{pts.length === 1 ? "" : "es"} during this shift
                   {!inPt && " · no location at clock-in"}
                   {entry.clockOut && !outPt && " · no location at clock-out"}
+                  {(gps.stops || []).some((st) => st.gapMinutes) &&
+                    ". Gaps happen when the time clock isn't open on his screen — his phone only reports location while it is."}
                 </div>
               </div>
             )}
@@ -607,6 +608,81 @@ function defaultStart() {
   d.setHours(8, 0, 0, 0);
   if (d > new Date()) d.setDate(d.getDate() - 1);
   return d.toISOString();
+}
+
+function fmtMinutes(m) {
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return h ? `${h}h ${String(mm).padStart(2, "0")}m` : `${mm}m`;
+}
+
+// numbered to match the pins on the map
+function StopList({ stops }) {
+  if (!stops.length) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {stops.map((st) => {
+        const color = st.atClockOut ? "#D64541" : st.atClockIn || st.n === 1 ? "#3E9B4F" : st.ongoing ? "#3B7DD8" : "#E08A1E";
+        if (st.passingThrough) {
+          return (
+            <div key={st.from} style={{ fontSize: 12.5, color: C.muted, padding: "6px 0 6px 34px", borderBottom: `1px solid ${C.border}` }}>
+              {fmtTime(st.from)} · passed through ·{" "}
+              <a href={mapsLink(st)} target="_blank" rel="noreferrer" style={{ color: C.accent }}>
+                map
+              </a>
+            </div>
+          );
+        }
+        return (
+          <div key={st.from} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                background: color,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              {st.n <= 9 ? st.n : st.n <= 35 ? String.fromCharCode(64 + st.n - 9) : "•"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>
+                  {fmtTime(st.from)} – {st.ongoing ? "now" : fmtTime(st.until)}
+                </span>
+                <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: C.ink, whiteSpace: "nowrap" }}>
+                  {fmtMinutes(st.minutes)}
+                </span>
+              </div>
+              <div style={{ fontSize: 13, color: C.ink, marginTop: 2 }}>
+                {st.address || `${st.lat.toFixed(5)}, ${st.lng.toFixed(5)}`}{" "}
+                <a href={mapsLink(st)} target="_blank" rel="noreferrer" style={{ color: C.accent, fontWeight: 600, whiteSpace: "nowrap" }}>
+                  open in Maps
+                </a>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                {[st.atClockIn && "clocked in here", st.atClockOut && "clocked out here", `${st.fixes} fix${st.fixes === 1 ? "" : "es"}`]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+              {st.gapMinutes > 0 && (
+                <div style={{ fontSize: 12, color: C.amber, marginTop: 2 }}>
+                  No GPS from {fmtTime(st.gapFrom)} to {st.ongoing && st.gapTo === st.until ? "now" : fmtTime(st.gapTo)} ({fmtMinutes(st.gapMinutes)})
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function GpsLine({ label: text, p, withDay }) {
