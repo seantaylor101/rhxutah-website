@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { TRADE_QUESTIONS, AUTOMATED_TRADES, questionsFor, missingTradeAnswers } from "../../shared/tradeQuestions.js";
+import { TRADE_QUESTIONS, AUTOMATED_TRADES, questionsFor, missingTradeAnswers, upgradesFor } from "../../shared/tradeQuestions.js";
 import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
@@ -8698,7 +8698,6 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState("");
   const estimates = (lead.jobtread && lead.jobtread.estimates) || [];
-  const isGc = basics.customerType === "gc";
 
   const missingAll = trades.flatMap((t) => missingTradeAnswers(t, answers[t], basics));
   const ready = trades.length > 0 && missingAll.length === 0;
@@ -8752,7 +8751,7 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: COLORS.ink, marginTop: 6 }}>
             {TRADE_QUESTIONS[trade].label}
           </div>
-          {questionsFor(trade, basics).map((q) => {
+          {questionsFor(trade, basics, answers).map((q) => {
             const value = answers[trade] ? answers[trade][q.key] : undefined;
             const missing = q.required && (value === undefined || value === "");
             return (
@@ -8805,7 +8804,13 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
       {trades.length > 0 && (
         <>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
-            {isGc ? "GC bid: no upgrade options are added." : "Upgrade options (guards, drains, lighting) are added as optional choices."}
+            {(() => {
+              const o = upgradesFor(basics, answers);
+              const names = [o.guards && "gutter guards", o.drains && "in-ground drains", o.lighting && "permanent lighting"].filter(Boolean);
+              return names.length
+                ? `Optional upgrades on this bid: ${names.join(", ")}.`
+                : "No upgrade options fit this job.";
+            })()}
           </div>
           <button
             onClick={build}
