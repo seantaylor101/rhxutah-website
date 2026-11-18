@@ -3,6 +3,9 @@
 // JobTread job, which the catalog assembly's quantity formulas read — so the
 // numbers can still be adjusted in JobTread afterwards and everything reprices.
 //
+// Blank answers count as zero (or the default noted in the label); only
+// what's truly needed to price the job is required.
+//
 // Only gutters is automated so far; other trades are added as their JobTread
 // assemblies are built.
 
@@ -13,31 +16,31 @@ export const TRADE_QUESTIONS = {
       { key: "gutterLF", label: "Gutter footage (LF)", type: "number", required: true, param: "Gutter LF" },
       {
         key: "size",
-        label: "Gutter size",
+        label: "Gutter size (blank = 5\")",
         type: "single",
-        required: true,
+        required: false,
         options: [
           { key: "5", label: '5" (2x3 downspouts)' },
           { key: "6", label: '6" (3x4 downspouts)' },
         ],
       },
-      { key: "oneStory", label: "1-story downspouts", type: "number", required: true, param: "One Story Downspouts" },
-      { key: "twoStory", label: "2-story downspouts", type: "number", required: true, param: "Two Story Downspouts" },
+      { key: "oneStory", label: "1-story downspouts", type: "number", required: false, param: "One Story Downspouts" },
+      { key: "twoStory", label: "2-story downspouts", type: "number", required: false, param: "Two Story Downspouts" },
       { key: "threeStory", label: "3-story downspouts", type: "number", required: false, param: "Three Story Downspouts" },
       { key: "offsets", label: "Downspout offsets (brick, etc.)", type: "number", required: false, param: "Downspout Offsets" },
-      { key: "miters", label: "Miters (corners)", type: "number", required: true, param: "Miters" },
+      { key: "miters", label: "Miters (corners)", type: "number", required: false, param: "Miters" },
       {
         key: "tearOffLF",
-        label: "Old gutter to tear off (LF, 0 if none)",
+        label: "Old gutter to tear off (LF)",
         type: "number",
-        required: true,
+        required: false,
         param: "Gutter Tear-off LF",
       },
       {
         key: "trees",
-        label: "Trees near the gutters?",
+        label: "Trees near the gutters? (blank = no)",
         type: "single",
-        required: true,
+        required: false,
         options: [
           { key: "yes", label: "Yes" },
           { key: "no", label: "No" },

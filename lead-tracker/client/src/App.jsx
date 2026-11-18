@@ -8787,7 +8787,7 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
                     onChange={(e) => setDrafts((d) => ({ ...d, [`${trade}.${q.key}`]: e.target.value }))}
                     onBlur={() => saveNumber(trade, q.key)}
                     onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                    placeholder={q.required ? "" : "0"}
+                    placeholder={q.required ? "" : "Leave blank if none"}
                     style={modalInput}
                   />
                 )}
