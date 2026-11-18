@@ -152,6 +152,12 @@ if (!existingColumns.has("jobtread")) {
   db.exec(`ALTER TABLE leads ADD COLUMN jobtread TEXT DEFAULT ''`);
 }
 
+if (!existingColumns.has("tradeAnswers")) {
+  // JSON answers to the trade questionnaire (shared/tradeQuestions.js),
+  // e.g. { gutters: { gutterLF, size, oneStory, ... } } — owner-only
+  db.exec(`ALTER TABLE leads ADD COLUMN tradeAnswers TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,

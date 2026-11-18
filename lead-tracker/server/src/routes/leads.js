@@ -13,6 +13,8 @@ import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
 import { cleanReportTags, parseReportTags } from "../jobReportTags.js";
 import { cleanEstimateBasics, parseEstimateBasics, missingEstimateBasics } from "../../../shared/estimateBasics.js";
 import { syncLeadToJobTread, jobtreadConfigured, jobUrl } from "../jobtread.js";
+import { cleanTradeAnswers, missingTradeAnswers, AUTOMATED_TRADES } from "../../../shared/tradeQuestions.js";
+import { draftEstimate } from "../estimateDraft.js";
 import {
   parsePayees,
   validatePayeeInput,
@@ -96,7 +98,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), jobtread: parseJobtreadLink(row.jobtread), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), jobtread: parseJobtreadLink(row.jobtread), tradeAnswers: parseTradeAnswers(row.tradeAnswers), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -177,6 +179,7 @@ function forRole(role, lead) {
     // customer type, budget and the rest are for estimating, not the crew
     delete lead.estimateBasics;
     delete lead.jobtread;
+    delete lead.tradeAnswers;
   }
   return lead;
 }
@@ -624,6 +627,73 @@ router.post("/:id/start-estimate", requireAuth("owner"), async (req, res) => {
     res.status(502).json({ error: `Couldn't reach JobTread: ${err.message}` });
   } finally {
     startingEstimate.delete(row.id);
+  }
+});
+
+function parseTradeAnswers(raw) {
+  if (!raw) return cleanTradeAnswers({});
+  try {
+    return cleanTradeAnswers(JSON.parse(raw));
+  } catch {
+    return cleanTradeAnswers({});
+  }
+}
+
+// trade questionnaire answers — owner-only; merged per trade
+router.patch("/:id/trade-answers", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const patch = req.body && typeof req.body === "object" ? req.body : {};
+  const current = parseTradeAnswers(row.tradeAnswers);
+  const merged = {};
+  for (const trade of Object.keys(current)) merged[trade] = { ...current[trade], ...(patch[trade] || {}) };
+  // a cleared number arrives as "" — drop it rather than keep the old value
+  for (const trade of Object.keys(merged)) {
+    for (const [k, v] of Object.entries(patch[trade] || {})) if (v === "" || v === null) delete merged[trade][k];
+  }
+  const next = cleanTradeAnswers(merged);
+  db.prepare(`UPDATE leads SET tradeAnswers = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+// Build draft estimate — owner-only. Drafts a Proposal on the lead's JobTread
+// job from the catalog assemblies and the questionnaire answers. The draft is
+// NEVER sent from here; Sean reviews and sends it in JobTread.
+const draftingEstimate = new Set();
+router.post("/:id/draft-estimate", requireAuth("owner"), async (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  if (!jobtreadConfigured()) return res.status(503).json({ error: "JobTread isn't connected yet." });
+
+  let link = null;
+  try {
+    link = row.jobtread ? JSON.parse(row.jobtread) : null;
+  } catch {
+    link = null;
+  }
+  if (!link?.jobId) return res.status(400).json({ error: "Tap Start Estimate first." });
+
+  const basics = parseEstimateBasics(row.estimateBasics);
+  const answers = parseTradeAnswers(row.tradeAnswers);
+  const trades = (basics.trades || []).filter((t) => AUTOMATED_TRADES.includes(t));
+  if (!trades.length) return res.status(400).json({ error: "None of the work on this lead is automated yet." });
+  for (const t of trades) {
+    const missing = missingTradeAnswers(t, answers[t], basics);
+    if (missing.length) return res.status(400).json({ error: `Still need: ${missing.map((m) => m.label).join(", ")}` });
+  }
+  if (draftingEstimate.has(row.id)) return res.status(409).json({ error: "Already building this estimate — one moment." });
+
+  draftingEstimate.add(row.id);
+  try {
+    const draft = await draftEstimate({ lead: row, basics, answers, link });
+    link.estimates = [...(Array.isArray(link.estimates) ? link.estimates : []), draft];
+    db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(link), row.id);
+    res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+  } catch (err) {
+    console.error("draft-estimate failed", err);
+    res.status(502).json({ error: `Couldn't build the estimate: ${err.message}` });
+  } finally {
+    draftingEstimate.delete(row.id);
   }
 });
 
