@@ -192,8 +192,9 @@ export function buildGutterLines(assembly, answers, basics) {
     params,
     selectGroup: (g) => {
       // the 12x12 is the customer's choice on the proposal; standard is picked
-      if (/^standard drain/i.test(g.name)) return true;
-      if (/^higher-capacity drain/i.test(g.name)) return false;
+      // (matched by basin size, so renaming the options in JobTread is safe)
+      if (/9x9/i.test(g.name)) return true;
+      if (/12x12/i.test(g.name)) return false;
       if (g.name.startsWith('5"')) return !six;
       if (g.name.startsWith('6"') && !/guard/i.test(g.name)) return six;
       return undefined;
