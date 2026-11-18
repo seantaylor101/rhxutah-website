@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
+import { TRADE_QUESTIONS, AUTOMATED_TRADES, questionsFor, missingTradeAnswers } from "../../shared/tradeQuestions.js";
 import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
@@ -1957,6 +1958,36 @@ function App() {
     return updated;
   };
 
+  // trade questionnaire answers (owner-only) — optimistic like the basics
+  const saveTradeAnswers = async (id, patch) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) => {
+        if (l.id !== id) return l;
+        const cur = l.tradeAnswers || {};
+        const next = { ...cur };
+        for (const [t, v] of Object.entries(patch)) next[t] = { ...(cur[t] || {}), ...v };
+        return { ...l, tradeAnswers: next };
+      })
+    );
+    try {
+      const updated = await api.updateTradeAnswers(id, patch);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
+  // drafts the JobTread estimate; throws so the profile shows the message
+  const draftLeadEstimate = async (id) => {
+    const updated = await api.draftEstimate(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    return updated;
+  };
+
   // throws on failure so the profile can show the server's message inline
   // (e.g. "File is too large") instead of the generic banner
   const uploadLeadMedia = async (id, files, onProgress) => {
@@ -2940,6 +2971,8 @@ function App() {
           onSaveJobDetails={saveJobDetails}
           onSaveEstimateBasics={saveEstimateBasics}
           onStartEstimate={startEstimate}
+          onSaveTradeAnswers={saveTradeAnswers}
+          onDraftEstimate={draftLeadEstimate}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
           onUpdateMediaMeasure={updateMediaMeasure}
@@ -8574,7 +8607,7 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
             Open in JobTread
           </a>
           <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 4 }}>
-            Next up: the trade questions and the drafted estimate — nothing is ever sent without your OK.
+            Answer the trade questions below to draft the estimate — nothing is ever sent without your OK.
           </div>
         </div>
       ) : (
@@ -8648,6 +8681,157 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
           </div>
         </div>
       )}
+    </ProfileSection>
+  );
+}
+
+// Trade questionnaire, shown once the lead is in JobTread: only the
+// questions for the work picked in the basics (shared/tradeQuestions.js),
+// then "Build draft estimate", which drafts a Proposal on the JobTread job.
+// Drafts are never sent from here.
+function TradeQuestionsSection({ lead, onSave, onDraft }) {
+  const basics = lead.estimateBasics || {};
+  const answers = lead.tradeAnswers || {};
+  const trades = (basics.trades || []).filter((t) => AUTOMATED_TRADES.includes(t));
+  const notAutomated = (basics.trades || []).filter((t) => !AUTOMATED_TRADES.includes(t));
+  const [drafts, setDrafts] = useState({}); // "trade.key" -> text being typed
+  const [building, setBuilding] = useState(false);
+  const [buildError, setBuildError] = useState("");
+  const estimates = (lead.jobtread && lead.jobtread.estimates) || [];
+  const isGc = basics.customerType === "gc";
+
+  const missingAll = trades.flatMap((t) => missingTradeAnswers(t, answers[t], basics));
+  const ready = trades.length > 0 && missingAll.length === 0;
+
+  const saveNumber = (trade, key) => {
+    const id = `${trade}.${key}`;
+    if (!(id in drafts)) return;
+    const raw = String(drafts[id]).trim();
+    const current = answers[trade] && answers[trade][key];
+    if (raw === "" ? current !== undefined : Number(raw) !== current) onSave(lead.id, { [trade]: { [key]: raw === "" ? "" : Number(raw) } });
+    setDrafts((d) => {
+      const { [id]: _drop, ...rest } = d;
+      return rest;
+    });
+  };
+
+  const build = async () => {
+    if (!ready || building) return;
+    setBuilding(true);
+    setBuildError("");
+    try {
+      await onDraft(lead.id);
+    } catch (err) {
+      setBuildError(err.message || "Couldn't build the estimate — try again.");
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  const chip = (selected) => ({
+    padding: "7px 11px",
+    borderRadius: 999,
+    border: `1px solid ${selected ? COLORS.accent : COLORS.border}`,
+    background: selected ? COLORS.accent : COLORS.surface,
+    color: selected ? "#fff" : COLORS.ink,
+    fontFamily: FONT_BODY,
+    fontSize: 13.5,
+    fontWeight: 600,
+    cursor: "pointer",
+  });
+
+  return (
+    <ProfileSection title="Estimate questions">
+      {trades.length === 0 && (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.muted }}>
+          None of the work on this lead is automated yet — build this estimate in JobTread for now.
+        </div>
+      )}
+      {trades.map((trade) => (
+        <div key={trade}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: COLORS.ink, marginTop: 6 }}>
+            {TRADE_QUESTIONS[trade].label}
+          </div>
+          {questionsFor(trade, basics).map((q) => {
+            const value = answers[trade] ? answers[trade][q.key] : undefined;
+            const missing = q.required && (value === undefined || value === "");
+            return (
+              <div key={q.key}>
+                <div style={{ ...modalLabel, marginTop: 12 }}>
+                  {q.label}
+                  {q.required && (
+                    <span style={{ color: missing ? COLORS.rust : COLORS.muted, marginLeft: 4 }}>
+                      {missing ? "• required" : "✓"}
+                    </span>
+                  )}
+                </div>
+                {q.type === "single" ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {q.options.map((o) => (
+                      <button
+                        key={o.key}
+                        type="button"
+                        onClick={() => onSave(lead.id, { [trade]: { [q.key]: o.key } })}
+                        style={chip(value === o.key)}
+                        aria-pressed={value === o.key}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    value={`${trade}.${q.key}` in drafts ? drafts[`${trade}.${q.key}`] : value === undefined ? "" : String(value)}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [`${trade}.${q.key}`]: e.target.value }))}
+                    onBlur={() => saveNumber(trade, q.key)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    placeholder={q.required ? "" : "0"}
+                    style={modalInput}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {notAutomated.length > 0 && trades.length > 0 && (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
+          Not automated yet: add the rest of the work in JobTread after the draft is built.
+        </div>
+      )}
+      {trades.length > 0 && (
+        <>
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
+            {isGc ? "GC bid: no upgrade options are added." : "Upgrade options (guards, drains, lighting) are added as optional choices."}
+          </div>
+          <button
+            onClick={build}
+            disabled={!ready || building}
+            style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: ready && !building ? 1 : 0.5 }}
+          >
+            {building
+              ? "Building the draft…"
+              : !ready
+                ? "Build draft estimate (answer the required questions)"
+                : estimates.length
+                  ? "Build another draft"
+                  : "Build draft estimate"}
+          </button>
+        </>
+      )}
+      {buildError && <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.rust, marginTop: 6 }}>{buildError}</div>}
+      {estimates.map((e) => (
+        <div key={e.documentId} style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 10 }}>
+          Draft {e.fullName} · ${Number(e.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ·{" "}
+          <a href={lead.jobtread.jobUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, fontWeight: 600 }}>
+            Review in JobTread
+          </a>
+          <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>Not sent — review it and send it from JobTread when it looks right.</div>
+        </div>
+      ))}
     </ProfileSection>
   );
 }
@@ -8811,6 +8995,8 @@ function LeadProfileModal({
   onSaveJobDetails,
   onSaveEstimateBasics,
   onStartEstimate,
+  onSaveTradeAnswers,
+  onDraftEstimate,
   onUploadMedia,
   onDeleteMedia,
   onUpdateMediaMeasure,
@@ -9121,6 +9307,9 @@ function LeadProfileModal({
             onEditField={onEditField}
             onStartEstimate={onStartEstimate}
           />
+        )}
+        {editable && lead.jobtread && onSaveTradeAnswers && (
+          <TradeQuestionsSection lead={lead} onSave={onSaveTradeAnswers} onDraft={onDraftEstimate} />
         )}
 
         {/* instructions */}
