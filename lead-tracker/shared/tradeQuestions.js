@@ -46,13 +46,46 @@ export const TRADE_QUESTIONS = {
           { key: "no", label: "No" },
         ],
       },
-      // quantities for the upgrade options — only asked when that upgrade is offered
+      {
+        key: "roofDrainDownspouts",
+        label: "Downspouts that drain onto a roof (no drain needed)",
+        type: "number",
+        required: false,
+      },
+      // the upgrade options — only asked when that upgrade is offered
       {
         key: "drains",
-        label: "In-ground drains (for the upgrade option; blank = one per downspout)",
+        label: "In-ground drains (blank = one per downspout that reaches the ground; 0 = don't offer)",
         type: "number",
         required: false,
         param: "In-Ground Drains",
+        upgrade: "drains",
+      },
+      {
+        key: "drainSize",
+        label: "Drain size to show as picked (blank = standard)",
+        type: "single",
+        required: false,
+        upgrade: "drains",
+        options: [
+          { key: "standard", label: "Standard 9x9 ($500)" },
+          { key: "high", label: "Higher capacity 12x12 ($630)" },
+        ],
+      },
+      {
+        key: "drainsPast8",
+        label: "Drains running past 8 ft (only if you know)",
+        type: "number",
+        required: false,
+        param: "Drain Extra Pipe Sections",
+        upgrade: "drains",
+      },
+      {
+        key: "drainExtraLF",
+        label: "Total extra feet past 8 ft (only if you know)",
+        type: "number",
+        required: false,
+        param: "Drain Extra LF",
         upgrade: "drains",
       },
       {
@@ -69,10 +102,18 @@ export const TRADE_QUESTIONS = {
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
 
+// drains to offer: what was entered, or one per downspout that reaches the
+// ground (downspouts draining onto a roof don't get one)
+export function defaultDrainCount(g = {}) {
+  if (g.drains !== undefined && g.drains !== "") return Number(g.drains) || 0;
+  const downspouts = Number(g.oneStory || 0) + Number(g.twoStory || 0) + Number(g.threeStory || 0);
+  return Math.max(0, downspouts - Number(g.roofDrainDownspouts || 0));
+}
+
 // Upgrades are offered only where they fit the work being done — on GC bids
 // too — never as random add-ons:
 //   gutter guards: gutter jobs with trees near the gutters
-//   in-ground drains: gutter jobs
+//   in-ground drains: gutter jobs with downspouts that reach the ground
 //   permanent lighting: retail remodels that include siding (never a
 //     gutters-only job or a GC bid)
 export function upgradesFor(basics, answers = {}) {
@@ -81,7 +122,7 @@ export function upgradesFor(basics, answers = {}) {
   const gutters = trades.has("gutters");
   return {
     guards: gutters && answers?.gutters?.trees === "yes",
-    drains: gutters,
+    drains: gutters && defaultDrainCount(answers?.gutters) > 0,
     lighting: gutters && retail && trades.has("siding"),
   };
 }
