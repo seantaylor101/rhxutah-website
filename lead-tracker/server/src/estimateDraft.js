@@ -7,6 +7,7 @@
 // new drafts.
 
 import { pave } from "./jobtread.js";
+import { proposalMessage } from "./proposalMessage.js";
 import { TRADE_QUESTIONS, upgradesFor, defaultDrainCount } from "../../shared/tradeQuestions.js";
 
 export const ASSEMBLIES = {
@@ -323,6 +324,8 @@ export async function draftEstimate({ lead, basics, answers, link }) {
         showChildCosts: tpl.showChildCosts ?? true,
         showCostItemFiles: tpl.showCostItemFiles ?? true,
         showQuantity: false,
+        // pre-filled email for JobTread's Send screen, in Sean's words
+        emailMessage: proposalMessage({ lead, basics, offered: upgradesFor(basics, answers) }),
         lineItems: lines,
       },
       createdDocument: { id: {}, fullName: {}, status: {}, price: {} },
