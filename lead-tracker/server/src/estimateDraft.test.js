@@ -127,6 +127,7 @@ test("draftEstimate: sets job parameters and creates a draft Proposal (never sen
   assert.equal(doc.jobLocationName, "1841 E Hubbard Ave");
   assert.equal(doc.toPhoneNumber, "+18015551234");
   assert.equal(doc.toEmailAddress, null);
+  assert.match(doc.emailMessage, /^Hey Erick,\n\nHere is the estimate for the new gutters and downspouts/);
   const params = calls.find((c) => c.updateJob).updateJob.$.parameters;
   assert.ok(params.some((p) => p.name === "Gutter LF" && p.value === 150));
   assert.ok(!calls.some((c) => Object.keys(c).some((k) => /send/i.test(k))), "nothing sends");
