@@ -140,6 +140,12 @@ if (!existingColumns.has("jobDetails")) {
   db.exec(`ALTER TABLE leads ADD COLUMN jobDetails TEXT DEFAULT ''`);
 }
 
+if (!existingColumns.has("estimateBasics")) {
+  // JSON-encoded owner-only answers to the basic estimating questions
+  // (customer type, work needed, stories, ...) — see shared/estimateBasics.js
+  db.exec(`ALTER TABLE leads ADD COLUMN estimateBasics TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,

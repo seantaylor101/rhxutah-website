@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
+import { ESTIMATE_BASICS_QUESTIONS, ESTIMATE_BASICS_REQUIRED_COUNT, emptyEstimateBasics, missingEstimateBasics } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
 import EmployeeApp from "./payroll/EmployeeApp.jsx";
@@ -1929,6 +1930,24 @@ function App() {
     }
   };
 
+  // estimate basics (owner-only) — merged optimistically like job details
+  const saveEstimateBasics = async (id, patch) => {
+    leadsVersionRef.current++;
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, estimateBasics: { ...(l.estimateBasics || emptyEstimateBasics()), ...patch } } : l
+      )
+    );
+    try {
+      const updated = await api.updateEstimateBasics(id, patch);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+    } catch {
+      setError("Couldn't save that change — try again.");
+      loadLeads();
+    }
+  };
+
   // throws on failure so the profile can show the server's message inline
   // (e.g. "File is too large") instead of the generic banner
   const uploadLeadMedia = async (id, files, onProgress) => {
@@ -2910,6 +2929,7 @@ function App() {
           onEditField={editField}
           onEditStartDate={editStartDate}
           onSaveJobDetails={saveJobDetails}
+          onSaveEstimateBasics={saveEstimateBasics}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
           onUpdateMediaMeasure={updateMediaMeasure}
@@ -8440,6 +8460,147 @@ function CheckRow({ checked, onToggle, disabled, children }) {
   );
 }
 
+// The basic estimating questions (shared/estimateBasics.js), answered on the
+// lead itself so the estimating questionnaire can skip straight to the
+// trade-specific questions. Taps save right away; text saves on blur.
+// Owner-only — the PM's view never receives these answers.
+function EstimateBasicsSection({ lead, onSave, onEditField }) {
+  const basics = { ...emptyEstimateBasics(), ...(lead.estimateBasics || {}) };
+  const missing = missingEstimateBasics(basics, lead.address);
+  const done = ESTIMATE_BASICS_REQUIRED_COUNT - missing.length;
+  const complete = missing.length === 0;
+  const [open, setOpen] = useState(!complete);
+  const [textDrafts, setTextDrafts] = useState({});
+  const [addressDraft, setAddressDraft] = useState(lead.address || "");
+
+  useEffect(() => {
+    setAddressDraft(lead.address || "");
+  }, [lead.address]);
+
+  const toggleMulti = (key, option) => {
+    const current = basics[key] || [];
+    const next = current.includes(option) ? current.filter((v) => v !== option) : [...current, option];
+    onSave(lead.id, { [key]: next });
+  };
+
+  const pickSingle = (key, option) => onSave(lead.id, { [key]: basics[key] === option ? "" : option });
+
+  const saveText = (key) => {
+    if (!(key in textDrafts)) return;
+    const value = textDrafts[key].trim();
+    if (value !== (basics[key] || "")) onSave(lead.id, { [key]: value });
+    setTextDrafts((d) => {
+      const { [key]: _drop, ...rest } = d;
+      return rest;
+    });
+  };
+
+  const saveAddress = () => {
+    const value = addressDraft.trim();
+    if (value !== (lead.address || "")) onEditField(lead.id, "address", value);
+  };
+
+  const chip = (selected) => ({
+    padding: "7px 11px",
+    borderRadius: 999,
+    border: `1px solid ${selected ? COLORS.accent : COLORS.border}`,
+    background: selected ? COLORS.accent : COLORS.surface,
+    color: selected ? "#fff" : COLORS.ink,
+    fontFamily: FONT_BODY,
+    fontSize: 13.5,
+    fontWeight: 600,
+    cursor: "pointer",
+  });
+
+  const isMissing = (key) => missing.some((m) => m.key === key);
+  const questionLabel = (label, required, key) => (
+    <div style={{ ...modalLabel, marginTop: 14 }}>
+      {label}
+      {required && (
+        <span style={{ color: isMissing(key) ? COLORS.rust : COLORS.muted, marginLeft: 4 }}>
+          {isMissing(key) ? "• required" : "✓"}
+        </span>
+      )}
+    </div>
+  );
+
+  return (
+    <ProfileSection
+      title="Estimate basics"
+      right={
+        <button onClick={() => setOpen((o) => !o)} style={profileLinkBtn}>
+          {open ? "Hide" : complete ? "Edit" : "Answer"}
+        </button>
+      }
+    >
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: complete ? COLORS.accent : COLORS.rust }}>
+        {complete
+          ? "All basics answered — ready to estimate."
+          : `${done} of ${ESTIMATE_BASICS_REQUIRED_COUNT} answered · still need: ${missing.map((m) => m.label).join(", ")}`}
+      </div>
+      {open && (
+        <div>
+          {questionLabel("Address", true, "address")}
+          <input
+            value={addressDraft}
+            onChange={(e) => setAddressDraft(e.target.value)}
+            onBlur={saveAddress}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            placeholder="Street, city"
+            style={modalInput}
+          />
+          {ESTIMATE_BASICS_QUESTIONS.map((q) => (
+            <div key={q.key}>
+              {questionLabel(q.label, q.required, q.key)}
+              {q.type === "text" ? (
+                q.multiline ? (
+                  <textarea
+                    value={q.key in textDrafts ? textDrafts[q.key] : basics[q.key] || ""}
+                    onChange={(e) => setTextDrafts((d) => ({ ...d, [q.key]: e.target.value }))}
+                    onBlur={() => saveText(q.key)}
+                    placeholder={q.placeholder}
+                    style={modalTextarea}
+                  />
+                ) : (
+                  <input
+                    value={q.key in textDrafts ? textDrafts[q.key] : basics[q.key] || ""}
+                    onChange={(e) => setTextDrafts((d) => ({ ...d, [q.key]: e.target.value }))}
+                    onBlur={() => saveText(q.key)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    placeholder={q.placeholder}
+                    style={modalInput}
+                  />
+                )
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {q.options.map((o) => {
+                    const selected =
+                      q.type === "multi" ? (basics[q.key] || []).includes(o.key) : basics[q.key] === o.key;
+                    return (
+                      <button
+                        key={o.key}
+                        type="button"
+                        onClick={() => (q.type === "multi" ? toggleMulti(q.key, o.key) : pickSingle(q.key, o.key))}
+                        style={chip(selected)}
+                        aria-pressed={selected}
+                      >
+                        {o.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 10 }}>
+            Only you see these — they're kept off the PM's view and crew share links.
+          </div>
+        </div>
+      )}
+    </ProfileSection>
+  );
+}
+
 function ProfileSection({ title, children, right }) {
   return (
     <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${COLORS.border}` }}>
@@ -8597,6 +8758,7 @@ function LeadProfileModal({
   onEditField,
   onEditStartDate,
   onSaveJobDetails,
+  onSaveEstimateBasics,
   onUploadMedia,
   onDeleteMedia,
   onUpdateMediaMeasure,
@@ -8898,6 +9060,11 @@ function LeadProfileModal({
         <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: COLORS.muted, marginTop: 6 }}>
           The PM gets a push at 8pm the night before a job starts, and at 7am with today's starts and jobs in progress.
         </div>
+
+        {/* owner-only: the basics every estimate needs */}
+        {editable && onSaveEstimateBasics && (
+          <EstimateBasicsSection lead={lead} onSave={onSaveEstimateBasics} onEditField={onEditField} />
+        )}
 
         {/* instructions */}
         <ProfileSection title="Job notes">
