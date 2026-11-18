@@ -24,17 +24,18 @@ test("phone normalizes to E.164", () => {
   assert.equal(toE164("555"), "");
 });
 
-test("job names always carry an identifier", () => {
-  // homeowner is the lead → street + work
-  assert.equal(jobNameFor(lead, basics), "123 Main St Gutters, Siding");
+test("job names always carry an identifier and fit in 30 characters", () => {
   assert.equal(jobNameFor({ ...lead, job: "Gutters" }, basics), "123 Main St Gutters");
-  // referral partner (Erick) → homeowner + work
+  assert.equal(jobNameFor(lead, basics), "123 Main St Gutters, Siding");
   const erick = { ...lead, name: "Erick Funn", job: "Gutters" };
   assert.equal(jobNameFor(erick, { ...basics, homeownerName: "Beckie Price" }), "Beckie Price Gutters");
-  // Job field already names the homeowner → used as-is
   assert.equal(jobNameFor({ ...erick, job: "Beckie Price gutters" }, { ...basics, homeownerName: "Beckie Price" }), "Beckie Price gutters");
-  // no homeowner given → street keeps Erick's jobs apart
   assert.equal(jobNameFor({ ...erick, address: "254 S 700 W, Layton" }, basics), "254 S 700 W Gutters");
+  // too long with every trade → first trade only
+  assert.equal(
+    jobNameFor({ ...erick, job: "", address: "1841 E Hubbard Ave, SLC" }, { trades: ["gutters", "soffitFascia", "lighting"] }),
+    "1841 E Hubbard Ave Gutters"
+  );
 });
 
 test("referral partner: new address gets its own location under the same customer", async () => {
@@ -101,11 +102,17 @@ test("already linked: creates nothing", async () => {
 });
 
 test("a long Job field never becomes the job name", () => {
-  const long = "Replace all gutters on the front and back, add two downspouts on the garage side, ".repeat(5);
+  const long = "Replace all gutters on the front and back, add two downspouts on the garage side";
   const erick = { ...lead, name: "Erick Funn", job: long, address: "1841 E Hubbard Ave, SLC" };
-  const name = jobNameFor(erick, { ...basics, trades: ["gutters"] });
-  assert.equal(name, "1841 E Hubbard Ave Gutters");
-  assert.ok(basicsSummary({ trades: ["gutters"] }, erick).includes("Job notes: Replace all gutters"));
-  const huge = jobNameFor({ ...lead, job: "" }, { homeownerName: "X".repeat(400), trades: ["gutters"] });
-  assert.ok(huge.length <= 120);
+  const b = { ...basics, trades: ["gutters"] };
+  assert.equal(jobNameFor(erick, b), "1841 E Hubbard Ave Gutters");
+  assert.ok(basicsSummary(b, erick).includes("Job notes: Replace all gutters"));
+  // short Job field used in the name → not repeated in the description
+  assert.ok(!basicsSummary(b, { ...erick, job: "Gutters" }).includes("Job notes"));
+  const names = [
+    jobNameFor({ ...lead, job: "" }, { homeownerName: "X".repeat(400), trades: ["gutters"] }),
+    jobNameFor({ ...lead, address: "12345 South Very Long Mountain View Parkway, Draper" }, { trades: ["siding", "gutters"] }),
+    jobNameFor({ ...lead, job: long, address: "" }, { trades: [] }),
+  ];
+  for (const n of names) assert.ok(n.length > 0 && n.length <= 30, n);
 });

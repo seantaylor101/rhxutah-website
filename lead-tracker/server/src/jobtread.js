@@ -22,10 +22,10 @@ const LEAD_SOURCE_MAP = {
   website: "Website",
 };
 
-// JobTread rejects names over 300 characters
-function capName(name) {
+// JobTread rejects over-long names (jobs: 30 characters)
+function capName(name, max = 120) {
   const n = String(name || "").trim();
-  return n.length > 120 ? n.slice(0, 120).trimEnd() : n;
+  return n.length > max ? n.slice(0, max).trimEnd() : n;
 }
 
 export function jobtreadConfigured() {
@@ -127,38 +127,53 @@ export async function findCustomerAccount(orgId, { phone, email }) {
 // Every job gets an identifier up front, so a referral partner's account
 // (e.g. Erick Funn, who sends a lot of jobs) never fills up with look-alike
 // "Gutters" jobs: "<homeowner or street> <work>", like "Beckie Price Gutters"
-// or "123 Main St Gutters". A short Job field ("Gutters, Lehi") is used as
-// the work; a long one is a scope description, so the trades picked are used
-// instead and the Job field text goes in the job's description.
-const MAX_JOB_FIELD_IN_NAME = 60;
-const MAX_JOB_NAME = 120; // JobTread's limit is 300
+// or "123 Main St Gutters". JobTread caps job names at 30 characters, so the
+// longest version that fits is used; whatever doesn't fit (a long Job field)
+// goes in the job's description instead.
+const MAX_JOB_NAME = 30;
 
-export function jobFieldIsShort(lead) {
-  const jobField = String(lead.job || "").trim();
-  return !!jobField && jobField.length <= MAX_JOB_FIELD_IN_NAME && !/\n/.test(jobField);
+function tradeLabelsOf(basics) {
+  const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
+  return (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label).filter(Boolean);
+}
+
+function fit(name) {
+  return name.length > MAX_JOB_NAME ? name.slice(0, MAX_JOB_NAME).trimEnd() : name;
 }
 
 export function jobNameFor(lead, basics) {
-  const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
-  const tradeLabels = (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label).filter(Boolean);
-  const work = (jobFieldIsShort(lead) ? String(lead.job).trim() : tradeLabels.join(", ")) || "Exterior work";
-
+  const jobField = String(lead.job || "").trim().replace(/\s+/g, " ");
+  const tradeLabels = tradeLabelsOf(basics);
   const homeowner = String(basics.homeownerName || "").trim();
   const leadIsHomeowner = !homeowner || homeowner.toLowerCase() === String(lead.name || "").trim().toLowerCase();
   // the lead is the homeowner: their name is already on the customer, so
   // the street is what tells their jobs apart
   const identifier = leadIsHomeowner ? streetOf(lead.address) : homeowner;
-  let name = work;
-  if (identifier && !work.toLowerCase().includes(identifier.toLowerCase())) name = `${identifier} ${work}`;
-  return name.length > MAX_JOB_NAME ? `${name.slice(0, MAX_JOB_NAME - 1).trimEnd()}…` : name;
+
+  const withId = (work) =>
+    !identifier ? work : work.toLowerCase().includes(identifier.toLowerCase()) ? work : `${identifier} ${work}`;
+  const candidates = [
+    jobField && withId(jobField),
+    tradeLabels.length && withId(tradeLabels.join(", ")),
+    tradeLabels.length && withId(tradeLabels[0]),
+    identifier,
+    jobField,
+    "Exterior work",
+  ].filter(Boolean);
+  return candidates.find((c) => c.length <= MAX_JOB_NAME) || fit(candidates[0]);
+}
+
+// the Job field text, when it didn't make it into the job name whole
+export function jobFieldLeftOut(lead, basics) {
+  const jobField = String(lead.job || "").trim();
+  return jobField && !jobNameFor(lead, basics).toLowerCase().includes(jobField.replace(/\s+/g, " ").toLowerCase());
 }
 
 // plain-text summary of the basics, put on the JobTread job's description so
 // the estimate (and anyone opening the job) has them
 export function basicsSummary(basics, lead = {}) {
   const lines = [];
-  const jobField = String(lead.job || "").trim();
-  if (jobField && !jobFieldIsShort(lead)) lines.push(`Job notes: ${jobField}`);
+  if (jobFieldLeftOut(lead, basics)) lines.push(`Job notes: ${String(lead.job).trim()}`);
   for (const q of ESTIMATE_BASICS_QUESTIONS) {
     const v = basics[q.key];
     if (q.type === "multi") {
@@ -217,7 +232,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
   if (!link.locationId) {
     const created = await pave({
       createLocation: {
-        $: { accountId: link.accountId, name: capName(streetOf(lead.address) || lead.address), address: lead.address },
+        $: { accountId: link.accountId, name: capName(streetOf(lead.address) || lead.address, 30), address: lead.address },
         createdLocation: { id: {} },
       },
     });
