@@ -7,7 +7,7 @@
 // new drafts.
 
 import { pave } from "./jobtread.js";
-import { TRADE_QUESTIONS, offersUpgrades } from "../../shared/tradeQuestions.js";
+import { TRADE_QUESTIONS, upgradesFor } from "../../shared/tradeQuestions.js";
 
 export const ASSEMBLIES = {
   gutters: { id: "22PiKu7hJgmr", name: "Seamless Gutter System" },
@@ -167,19 +167,20 @@ export function gutterParams(answers, basics) {
     params[q.param] = Number(answers[q.key] ?? 0);
   }
   // upgrade options still need sensible quantities when they're shown
-  if (offersUpgrades(basics)) {
-    if (!answers.lightingLF) params["Lighting LF"] = params["Gutter LF"];
-    if (!answers.drains) {
-      params["In-Ground Drains"] =
-        params["One Story Downspouts"] + params["Two Story Downspouts"] + params["Three Story Downspouts"];
-    }
+  const offered = upgradesFor(basics, { gutters: answers });
+  if (offered.lighting && !answers.lightingLF) params["Lighting LF"] = params["Gutter LF"];
+  if (offered.drains && !answers.drains) {
+    params["In-Ground Drains"] =
+      params["One Story Downspouts"] + params["Two Story Downspouts"] + params["Three Story Downspouts"];
   }
   return params;
 }
 
 export function buildGutterLines(assembly, answers, basics) {
   const six = answers.size === "6";
-  const upgrades = offersUpgrades(basics);
+  const isGc = (basics?.customerType || "") === "gc";
+  const offered = upgradesFor(basics, { gutters: answers });
+  const anyUpgrade = offered.guards || offered.drains || offered.lighting;
   const params = gutterParams(answers, basics);
   const lines = assemblyToLineItems(assembly, {
     params,
@@ -188,13 +189,16 @@ export function buildGutterLines(assembly, answers, basics) {
       if (g.name.startsWith('6"') && !/guard/i.test(g.name)) return six;
       return undefined;
     },
-    // GC bids: no upsells; and only the guards that fit the gutter size
+    // only upgrades that fit the job (shared/tradeQuestions.js upgradesFor);
+    // GC bids show just the gutter size being bid
     dropGroup: (g) =>
-      (!upgrades && /optional upgrades/i.test(g.name)) ||
-      // GC bids show only the size being bid, not the alternative
-      (!upgrades && g.name.startsWith(six ? '5"' : '6"')) ||
+      (/optional upgrades/i.test(g.name) && !anyUpgrade) ||
+      (/gutter guards/i.test(g.name) && !offered.guards) ||
       (/guards for 6"/i.test(g.name) && !six) ||
-      (/guards for 5"/i.test(g.name) && six),
+      (/guards for 5"/i.test(g.name) && six) ||
+      (/in-ground/i.test(g.name) && !offered.drains) ||
+      (/lighting/i.test(g.name) && !offered.lighting) ||
+      (isGc && g.name.startsWith(six ? '5"' : '6"')),
   });
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {

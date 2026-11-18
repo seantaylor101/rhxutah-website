@@ -6,7 +6,7 @@ import { missingTradeAnswers, cleanTradeAnswers, questionsFor } from "../../shar
 
 process.env.JOBTREAD_GRANT_KEY = "test-key";
 const assembly = JSON.parse(fs.readFileSync(new URL("./__fixtures__/gutterAssembly.json", import.meta.url)));
-const ans = { gutterLF: 150, size: "5", oneStory: 4, twoStory: 2, threeStory: 0, offsets: 0, miters: 4, tearOffLF: 150 };
+const ans = { gutterLF: 150, size: "5", oneStory: 4, twoStory: 2, threeStory: 0, offsets: 0, miters: 4, tearOffLF: 150, trees: "yes" };
 
 const flat = (lines, out = []) => {
   for (const l of lines) {
@@ -23,30 +23,44 @@ test("formulas evaluate like JobTread's", () => {
   assert.equal(evalFormula("process.exit()", {}), 0);
 });
 
-test("retail 150 ft job: $3,147.92, quantities filled in, upgrades optional", () => {
-  const r = buildGutterLines(assembly, ans, { customerType: "retail" });
+const groupNames = (r) => flat(r.lines).filter((l) => l._type === "costGroup").map((g) => g.name);
+
+test("retail gutters-only job with trees: $3,147.92, guards + drains offered, no lighting", () => {
+  const r = buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters"] });
   assert.equal(r.total, 3147.92);
   const items = flat(r.lines).filter((l) => l._type === "costItem");
   assert.equal(items.find((i) => i.name.startsWith('5" K-style')).quantity, 150);
   assert.equal(items.find((i) => i.name === "2x3 downspout - material").quantity, 98);
-  const groups = flat(r.lines).filter((l) => l._type === "costGroup");
-  assert.ok(groups.some((g) => g.name === "Optional Upgrades" && !g.isSelected));
-  assert.ok(!groups.some((g) => /guards for 6"/i.test(g.name)), "only the guards that fit");
-  assert.ok(groups.find((g) => g.name.startsWith('5"')).isSelected);
-  assert.ok(!groups.find((g) => g.name.startsWith('6"')).isSelected);
+  const names = groupNames(r);
+  assert.ok(names.includes('Gutter Guards for 5" Gutters'));
+  assert.ok(!names.includes('Gutter Guards for 6" Gutters'), "only the guards that fit");
+  assert.ok(names.includes("In-Ground Downspout Drains"));
+  assert.ok(!names.some((n) => /lighting/i.test(n)), "no lights on a gutters-only job");
+  assert.equal(items.find((i) => i.name === "In-ground drain - labor").quantity, 6, "one drain per downspout by default");
 });
 
-test("GC bid: no upgrades, no alternate size", () => {
-  const r = buildGutterLines(assembly, ans, { customerType: "gc" });
-  const names = flat(r.lines).map((l) => l.name);
-  assert.ok(!names.includes("Optional Upgrades"));
+test("retail remodel with siding: lighting offered too", () => {
+  const r = buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters", "siding"] });
+  assert.ok(groupNames(r).some((n) => /lighting/i.test(n)));
+});
+
+test("GC bid: related upgrades only (guards if trees, drains), never lighting, no alternate size", () => {
+  const gc = { customerType: "gc", trades: ["gutters", "siding"] };
+  const r = buildGutterLines(assembly, ans, gc);
+  const names = groupNames(r);
+  assert.ok(names.includes('Gutter Guards for 5" Gutters'));
+  assert.ok(names.includes("In-Ground Downspout Drains"));
+  assert.ok(!names.some((n) => /lighting/i.test(n)));
   assert.ok(!names.some((n) => n.startsWith('6"')));
-  assert.equal(r.total, 3147.92);
-  assert.ok(!questionsFor("gutters", { customerType: "gc" }).some((q) => q.upgrade));
+  assert.equal(r.total, 3147.92, "upgrades stay optional — not in the total");
+  const noTrees = groupNames(buildGutterLines(assembly, { ...ans, trees: "no" }, gc));
+  assert.ok(!noTrees.some((n) => /guards/i.test(n)), "no guards without trees");
+  assert.ok(!questionsFor("gutters", gc, { gutters: ans }).some((q) => q.key === "lightingLF"));
+  assert.ok(questionsFor("gutters", gc, { gutters: ans }).some((q) => q.key === "drains"));
 });
 
 test("6-inch choice selects the 6-inch option and guards", () => {
-  const r = buildGutterLines(assembly, { ...ans, size: "6" }, { customerType: "retail" });
+  const r = buildGutterLines(assembly, { ...ans, size: "6" }, { customerType: "retail", trades: ["gutters"] });
   const groups = flat(r.lines).filter((l) => l._type === "costGroup");
   assert.ok(groups.find((g) => g.name.startsWith('6"')).isSelected);
   assert.ok(!groups.find((g) => g.name.startsWith('5"')).isSelected);
@@ -64,7 +78,7 @@ test("small job gets topped up to the $350 minimum", () => {
 test("required questions and cleaning", () => {
   assert.deepEqual(
     missingTradeAnswers("gutters", { gutterLF: 100 }, { customerType: "retail" }).map((m) => m.key),
-    ["size", "oneStory", "twoStory", "miters", "tearOffLF"]
+    ["size", "oneStory", "twoStory", "miters", "tearOffLF", "trees"]
   );
   assert.deepEqual(missingTradeAnswers("gutters", ans, {}), []);
   assert.deepEqual(cleanTradeAnswers({ gutters: { gutterLF: "-5", size: "7", miters: "3" } }).gutters, { miters: 3 });

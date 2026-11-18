@@ -33,22 +33,32 @@ export const TRADE_QUESTIONS = {
         required: true,
         param: "Gutter Tear-off LF",
       },
-      // upgrade quantities — only asked on retail jobs (GC bids get no upsells)
+      {
+        key: "trees",
+        label: "Trees near the gutters?",
+        type: "single",
+        required: true,
+        options: [
+          { key: "yes", label: "Yes" },
+          { key: "no", label: "No" },
+        ],
+      },
+      // quantities for the upgrade options — only asked when that upgrade is offered
       {
         key: "drains",
-        label: "In-ground drains (for the upgrade option)",
+        label: "In-ground drains (for the upgrade option; blank = one per downspout)",
         type: "number",
         required: false,
         param: "In-Ground Drains",
-        upgrade: true,
+        upgrade: "drains",
       },
       {
         key: "lightingLF",
-        label: "Permanent lighting footage (for the upgrade option)",
+        label: "Permanent lighting footage (for the upgrade option; blank = gutter footage)",
         type: "number",
         required: false,
         param: "Lighting LF",
-        upgrade: true,
+        upgrade: "lighting",
       },
     ],
   },
@@ -56,15 +66,28 @@ export const TRADE_QUESTIONS = {
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
 
-// upsell options go only on retail and insurance jobs, never GC bids
-export function offersUpgrades(basics) {
-  return (basics?.customerType || "") !== "gc";
+// Upgrades are offered only where they fit the work being done — on GC bids
+// too — never as random add-ons:
+//   gutter guards: gutter jobs with trees near the gutters
+//   in-ground drains: gutter jobs
+//   permanent lighting: retail remodels that include siding (never a
+//     gutters-only job or a GC bid)
+export function upgradesFor(basics, answers = {}) {
+  const trades = new Set(basics?.trades || []);
+  const retail = (basics?.customerType || "") !== "gc";
+  const gutters = trades.has("gutters");
+  return {
+    guards: gutters && answers?.gutters?.trees === "yes",
+    drains: gutters,
+    lighting: gutters && retail && trades.has("siding"),
+  };
 }
 
-export function questionsFor(trade, basics) {
+export function questionsFor(trade, basics, answers = {}) {
   const set = TRADE_QUESTIONS[trade];
   if (!set) return [];
-  return set.questions.filter((q) => !q.upgrade || offersUpgrades(basics));
+  const offered = upgradesFor(basics, answers);
+  return set.questions.filter((q) => !q.upgrade || offered[q.upgrade]);
 }
 
 function toNumber(v) {
@@ -94,7 +117,7 @@ export function cleanTradeAnswers(input) {
 }
 
 export function missingTradeAnswers(trade, answers, basics) {
-  return questionsFor(trade, basics)
+  return questionsFor(trade, basics, { [trade]: answers })
     .filter((q) => q.required && (answers?.[q.key] === undefined || answers?.[q.key] === ""))
     .map((q) => ({ key: q.key, label: q.label }));
 }
