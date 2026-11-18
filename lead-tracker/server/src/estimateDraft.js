@@ -7,7 +7,7 @@
 // new drafts.
 
 import { pave } from "./jobtread.js";
-import { TRADE_QUESTIONS, upgradesFor } from "../../shared/tradeQuestions.js";
+import { TRADE_QUESTIONS, upgradesFor, defaultDrainCount } from "../../shared/tradeQuestions.js";
 
 export const ASSEMBLIES = {
   gutters: { id: "22PiKu7hJgmr", name: "Seamless Gutter System" },
@@ -75,7 +75,10 @@ export async function fetchAssembly(id) {
 // JobTread's API stores formulas but doesn't calculate them (only its web
 // screen does), so each quantity is worked out here from `params` and sent as
 // a number, with the formula kept alongside.
-export function assemblyToLineItems(root, { params = {}, selectGroup = () => undefined, dropGroup = () => false } = {}) {
+export function assemblyToLineItems(
+  root,
+  { params = {}, selectGroup = () => undefined, dropGroup = () => false, dropItem = () => false } = {}
+) {
   const groups = root.descendentCostGroups?.nodes || [];
   const items = root.descendentCostItems?.nodes || [];
   const byPos = (a, b) => String(a.position ?? "").localeCompare(String(b.position ?? ""), undefined, { numeric: true });
@@ -102,7 +105,10 @@ export function assemblyToLineItems(root, { params = {}, selectGroup = () => und
   const childrenOf = (groupId) => {
     const kids = [
       ...groups.filter((g) => g.parentCostGroup?.id === groupId && !dropGroup(g)).map((g) => ({ kind: "g", v: g })),
-      ...items.filter((i) => i.costGroup?.id === groupId).map((i) => ({ kind: "i", v: i })),
+      ...items
+        .filter((i) => i.costGroup?.id === groupId)
+        .filter((i) => !dropItem(i, i.quantityFormula ? evalFormula(i.quantityFormula, params) : Number(i.quantity || 0)))
+        .map((i) => ({ kind: "i", v: i })),
     ].sort((a, b) => byPos(a.v, b.v));
     return kids.map((k) => (k.kind === "i" ? itemLine(k.v) : groupLine(k.v)));
   };
@@ -169,10 +175,10 @@ export function gutterParams(answers, basics) {
   // upgrade options still need sensible quantities when they're shown
   const offered = upgradesFor(basics, { gutters: answers });
   if (offered.lighting && !answers.lightingLF) params["Lighting LF"] = params["Gutter LF"];
-  if (offered.drains && !answers.drains) {
-    params["In-Ground Drains"] =
-      params["One Story Downspouts"] + params["Two Story Downspouts"] + params["Three Story Downspouts"];
-  }
+  params["In-Ground Drains"] = offered.drains ? defaultDrainCount(answers) : 0;
+  // one more pipe section per drain past 8 ft; if only the footage is known,
+  // one section per 10 ft of it
+  if (!answers.drainsPast8 && answers.drainExtraLF) params["Drain Extra Pipe Sections"] = Math.ceil(answers.drainExtraLF / 10);
   return params;
 }
 
@@ -185,6 +191,8 @@ export function buildGutterLines(assembly, answers, basics) {
   const lines = assemblyToLineItems(assembly, {
     params,
     selectGroup: (g) => {
+      if (/^standard drain/i.test(g.name)) return answers.drainSize !== "high";
+      if (/^higher-capacity drain/i.test(g.name)) return answers.drainSize === "high";
       if (g.name.startsWith('5"')) return !six;
       if (g.name.startsWith('6"') && !/guard/i.test(g.name)) return six;
       return undefined;
@@ -199,6 +207,8 @@ export function buildGutterLines(assembly, answers, basics) {
       (/in-ground/i.test(g.name) && !offered.drains) ||
       (/lighting/i.test(g.name) && !offered.lighting) ||
       (isGc && g.name.startsWith(six ? '5"' : '6"')),
+    // extra-pipe lines only when a long run was entered
+    dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
   });
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {

@@ -37,6 +37,7 @@ test("retail gutters-only job with trees: $3,147.92, guards + drains offered, no
   assert.ok(names.includes("In-Ground Downspout Drains"));
   assert.ok(!names.some((n) => /lighting/i.test(n)), "no lights on a gutters-only job");
   assert.equal(items.find((i) => i.name === "In-ground drain - labor").quantity, 6, "one drain per downspout by default");
+  assert.equal(priceOf(r.lines, "Standard Drain (9x9 catch basin)"), 3000);
 });
 
 test("retail remodel with siding: lighting offered too", () => {
@@ -129,4 +130,34 @@ test("draftEstimate: sets job parameters and creates a draft Proposal (never sen
   const params = calls.find((c) => c.updateJob).updateJob.$.parameters;
   assert.ok(params.some((p) => p.name === "Gutter LF" && p.value === 150));
   assert.ok(!calls.some((c) => Object.keys(c).some((k) => /send/i.test(k))), "nothing sends");
+});
+
+const priceOf = (lines, groupName) => {
+  const g = flat(lines).find((l) => l.name === groupName);
+  return flat(g.lineItems).filter((l) => l._type === "costItem").reduce((s, i) => s + i.quantity * i.unitPrice, 0);
+};
+
+test("drains: $500 standard / $630 high capacity, roof downspouts skipped, extra pipe only when entered", () => {
+  const b = { customerType: "gc", trades: ["gutters"] };
+  const r = buildGutterLines(assembly, { ...ans, roofDrainDownspouts: 1 }, b);
+  // 6 downspouts, 1 drains onto a roof → 5 drains
+  assert.equal(priceOf(r.lines, "Standard Drain (9x9 catch basin)"), 2500);
+  assert.equal(priceOf(r.lines, "Higher-Capacity Drain (12x12 catch basin)"), 3150);
+  const groups = flat(r.lines).filter((l) => l._type === "costGroup");
+  assert.ok(groups.find((g) => g.name.startsWith("Standard Drain")).isSelected);
+  assert.ok(!flat(r.lines).some((l) => /extended drain run|additional drain pipe/i.test(l.name)));
+  assert.equal(r.total, 3147.92, "drains stay optional");
+
+  const long = buildGutterLines(assembly, { ...ans, drains: 2, drainsPast8: 1, drainExtraLF: 6, drainSize: "high" }, b);
+  const ext = flat(long.lines).find((l) => /extended drain run/i.test(l.name));
+  const pipe = flat(long.lines).find((l) => /additional drain pipe/i.test(l.name));
+  assert.equal(ext.quantity * ext.unitPrice, 90);
+  assert.equal(pipe.quantity * pipe.unitPrice, 25);
+  assert.ok(flat(long.lines).find((l) => l.name.startsWith("Higher-Capacity Drain")).isSelected);
+
+  // every downspout drains onto a roof → no drain option at all
+  const none = buildGutterLines(assembly, { ...ans, oneStory: 1, twoStory: 0, roofDrainDownspouts: 1 }, b);
+  assert.ok(!flat(none.lines).some((l) => /in-ground/i.test(l.name)));
+  const zero = buildGutterLines(assembly, { ...ans, drains: 0 }, b);
+  assert.ok(!flat(zero.lines).some((l) => /in-ground/i.test(l.name)), "0 drains = don't offer");
 });
