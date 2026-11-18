@@ -62,17 +62,6 @@ export const TRADE_QUESTIONS = {
         upgrade: "drains",
       },
       {
-        key: "drainSize",
-        label: "Drain size to show as picked (blank = standard)",
-        type: "single",
-        required: false,
-        upgrade: "drains",
-        options: [
-          { key: "standard", label: "Standard 9x9 ($500)" },
-          { key: "high", label: "Higher capacity 12x12 ($630)" },
-        ],
-      },
-      {
         key: "drainsPast8",
         label: "Drains running past 8 ft (only if you know)",
         type: "number",
