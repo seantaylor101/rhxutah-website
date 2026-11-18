@@ -11,6 +11,7 @@ import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
 import { cleanReportTags, parseReportTags } from "../jobReportTags.js";
+import { cleanEstimateBasics, parseEstimateBasics } from "../../../shared/estimateBasics.js";
 import {
   parsePayees,
   validatePayeeInput,
@@ -94,7 +95,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -172,6 +173,8 @@ function forRole(role, lead) {
     // check-offs), just not what they're being paid — strip the financial
     // parts of each payee rather than the whole list
     lead.payees = (lead.payees || []).map((p) => ({ id: p.id, name: p.name, role: p.role }));
+    // customer type, budget and the rest are for estimating, not the crew
+    delete lead.estimateBasics;
   }
   return lead;
 }
@@ -557,6 +560,20 @@ router.patch("/:id/job-details", requireAuth("viewer"), (req, res) => {
   if (!result.ok) return res.status(result.status).json({ error: result.error });
 
   db.prepare(`UPDATE leads SET jobDetails = ? WHERE id = ?`).run(JSON.stringify(result.value), row.id);
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+// estimate basics — the questions answered on every lead before an estimate
+// is built (shared/estimateBasics.js). Owner-only; a patch merges into what's
+// already saved, so answering one question never clears the others.
+router.patch("/:id/estimate-basics", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const patch = req.body && typeof req.body === "object" ? req.body : {};
+  const next = cleanEstimateBasics({ ...parseEstimateBasics(row.estimateBasics), ...patch });
+
+  db.prepare(`UPDATE leads SET estimateBasics = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
   res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
 });
 
