@@ -162,3 +162,11 @@ test("drains: $500 standard / $630 high capacity, roof downspouts skipped, extra
   const zero = buildGutterLines(assembly, { ...ans, drains: 0 }, b);
   assert.ok(!flat(zero.lines).some((l) => /in-ground/i.test(l.name)), "0 drains = don't offer");
 });
+
+test("optional upgrades say how many options are actually on the bid", () => {
+  const up = (r) => flat(r.lines).find((l) => l.name === "Optional Upgrades");
+  const b = { customerType: "gc", trades: ["gutters"] };
+  assert.equal(up(buildGutterLines(assembly, { ...ans, trees: "no" }, b)).maxSelectionsAllowed, 1); // drains only
+  assert.equal(up(buildGutterLines(assembly, ans, b)).maxSelectionsAllowed, 2); // guards + drains
+  assert.equal(up(buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters", "siding"] })).maxSelectionsAllowed, 3);
+});
