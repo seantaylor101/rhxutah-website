@@ -22,6 +22,12 @@ const LEAD_SOURCE_MAP = {
   website: "Website",
 };
 
+// JobTread rejects names over 300 characters
+function capName(name) {
+  const n = String(name || "").trim();
+  return n.length > 120 ? n.slice(0, 120).trimEnd() : n;
+}
+
 export function jobtreadConfigured() {
   return !!process.env.JOBTREAD_GRANT_KEY;
 }
@@ -121,28 +127,38 @@ export async function findCustomerAccount(orgId, { phone, email }) {
 // Every job gets an identifier up front, so a referral partner's account
 // (e.g. Erick Funn, who sends a lot of jobs) never fills up with look-alike
 // "Gutters" jobs: "<homeowner or street> <work>", like "Beckie Price Gutters"
-// or "123 Main St Gutters". If the lead's Job field already names the
-// homeowner, it's used as-is.
+// or "123 Main St Gutters". A short Job field ("Gutters, Lehi") is used as
+// the work; a long one is a scope description, so the trades picked are used
+// instead and the Job field text goes in the job's description.
+const MAX_JOB_FIELD_IN_NAME = 60;
+const MAX_JOB_NAME = 120; // JobTread's limit is 300
+
+export function jobFieldIsShort(lead) {
+  const jobField = String(lead.job || "").trim();
+  return !!jobField && jobField.length <= MAX_JOB_FIELD_IN_NAME && !/\n/.test(jobField);
+}
+
 export function jobNameFor(lead, basics) {
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
   const tradeLabels = (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label).filter(Boolean);
-  const jobField = String(lead.job || "").trim();
-  const work = jobField || tradeLabels.join(", ") || "Exterior work";
+  const work = (jobFieldIsShort(lead) ? String(lead.job).trim() : tradeLabels.join(", ")) || "Exterior work";
 
   const homeowner = String(basics.homeownerName || "").trim();
   const leadIsHomeowner = !homeowner || homeowner.toLowerCase() === String(lead.name || "").trim().toLowerCase();
   // the lead is the homeowner: their name is already on the customer, so
   // the street is what tells their jobs apart
   const identifier = leadIsHomeowner ? streetOf(lead.address) : homeowner;
-  if (!identifier) return work;
-  if (work.toLowerCase().includes(identifier.toLowerCase())) return work;
-  return `${identifier} ${work}`;
+  let name = work;
+  if (identifier && !work.toLowerCase().includes(identifier.toLowerCase())) name = `${identifier} ${work}`;
+  return name.length > MAX_JOB_NAME ? `${name.slice(0, MAX_JOB_NAME - 1).trimEnd()}…` : name;
 }
 
 // plain-text summary of the basics, put on the JobTread job's description so
 // the estimate (and anyone opening the job) has them
-export function basicsSummary(basics) {
+export function basicsSummary(basics, lead = {}) {
   const lines = [];
+  const jobField = String(lead.job || "").trim();
+  if (jobField && !jobFieldIsShort(lead)) lines.push(`Job notes: ${jobField}`);
   for (const q of ESTIMATE_BASICS_QUESTIONS) {
     const v = basics[q.key];
     if (q.type === "multi") {
@@ -177,7 +193,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
       if (LEAD_SOURCE_MAP[lead.source]) accountFields["Lead Source"] = LEAD_SOURCE_MAP[lead.source];
       const created = await pave({
         createAccount: {
-          $: { organizationId: orgId, type: "customer", name: lead.name, suffixIfNecessary: true, customFieldValues: accountFields },
+          $: { organizationId: orgId, type: "customer", name: capName(lead.name), suffixIfNecessary: true, customFieldValues: accountFields },
           createdAccount: { id: {}, name: {} },
         },
       });
@@ -190,7 +206,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
       if (String(lead.email || "").trim()) contactFields.Email = lead.email.trim();
       await pave({
         createContact: {
-          $: { accountId: link.accountId, name: lead.name, customFieldValues: contactFields },
+          $: { accountId: link.accountId, name: capName(lead.name), customFieldValues: contactFields },
           createdContact: { id: {} },
         },
       });
@@ -201,7 +217,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
   if (!link.locationId) {
     const created = await pave({
       createLocation: {
-        $: { accountId: link.accountId, name: streetOf(lead.address) || lead.address, address: lead.address },
+        $: { accountId: link.accountId, name: capName(streetOf(lead.address) || lead.address), address: lead.address },
         createdLocation: { id: {} },
       },
     });
@@ -215,7 +231,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
         $: {
           locationId: link.locationId,
           name: jobNameFor(lead, basics),
-          description: basicsSummary(basics),
+          description: basicsSummary(basics, lead),
           customFieldValues: { Status: "Estimating" },
         },
         createdJob: { id: {}, number: {} },

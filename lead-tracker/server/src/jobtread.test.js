@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toE164, syncLeadToJobTread, jobNameFor } from "./jobtread.js";
+import { toE164, syncLeadToJobTread, jobNameFor, basicsSummary } from "./jobtread.js";
 
 process.env.JOBTREAD_GRANT_KEY = "test-key";
 
@@ -98,4 +98,14 @@ test("already linked: creates nothing", async () => {
   const link = await syncLeadToJobTread(lead, basics, { accountId: "a", locationId: "l", jobId: "j" });
   assert.equal(link.jobId, "j");
   assert.equal(calls.filter((c) => !c.currentGrant).length, 0);
+});
+
+test("a long Job field never becomes the job name", () => {
+  const long = "Replace all gutters on the front and back, add two downspouts on the garage side, ".repeat(5);
+  const erick = { ...lead, name: "Erick Funn", job: long, address: "1841 E Hubbard Ave, SLC" };
+  const name = jobNameFor(erick, { ...basics, trades: ["gutters"] });
+  assert.equal(name, "1841 E Hubbard Ave Gutters");
+  assert.ok(basicsSummary({ trades: ["gutters"] }, erick).includes("Job notes: Replace all gutters"));
+  const huge = jobNameFor({ ...lead, job: "" }, { homeownerName: "X".repeat(400), trades: ["gutters"] });
+  assert.ok(huge.length <= 120);
 });
