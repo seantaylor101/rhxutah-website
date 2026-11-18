@@ -7516,22 +7516,6 @@ function LeadTicket({
   const [emailDraft, setEmailDraft] = useState(lead.email || "");
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressDraft, setAddressDraft] = useState(lead.address || "");
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState("");
-  const link = lead.jobtread;
-
-  const start = async () => {
-    if (!complete || starting || !onStartEstimate) return;
-    setStarting(true);
-    setStartError("");
-    try {
-      await onStartEstimate(lead.id);
-    } catch (err) {
-      setStartError(err.message || "Couldn't reach JobTread — try again.");
-    } finally {
-      setStarting(false);
-    }
-  };
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
   const [showWorkDaysPrompt, setShowWorkDaysPrompt] = useState(false);
@@ -8498,6 +8482,22 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
   const [open, setOpen] = useState(!complete);
   const [textDrafts, setTextDrafts] = useState({});
   const [addressDraft, setAddressDraft] = useState(lead.address || "");
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState("");
+  const link = lead.jobtread;
+
+  const start = async () => {
+    if (!complete || starting || !onStartEstimate) return;
+    setStarting(true);
+    setStartError("");
+    try {
+      await onStartEstimate(lead.id);
+    } catch (err) {
+      setStartError(err.message || "Couldn't reach JobTread — try again.");
+    } finally {
+      setStarting(false);
+    }
+  };
 
   useEffect(() => {
     setAddressDraft(lead.address || "");
