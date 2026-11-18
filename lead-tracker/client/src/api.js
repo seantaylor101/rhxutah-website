@@ -89,6 +89,7 @@ export const api = {
     request(`/leads/${id}/job-details`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateEstimateBasics: (id, patch) =>
     request(`/leads/${id}/estimate-basics`, { method: "PATCH", body: JSON.stringify(patch) }),
+  startEstimate: (id) => request(`/leads/${id}/start-estimate`, { method: "POST" }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
   logFollowup: (id) => request(`/leads/${id}/followups`, { method: "POST" }),
   removeFollowup: (id, followupId) => request(`/leads/${id}/followups/${followupId}`, { method: "DELETE" }),

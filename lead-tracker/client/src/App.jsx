@@ -1948,6 +1948,15 @@ function App() {
     }
   };
 
+  // Start Estimate: links the lead to a JobTread customer + job. Throws so
+  // the profile can show JobTread's message inline.
+  const startEstimate = async (id) => {
+    const updated = await api.startEstimate(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    return updated;
+  };
+
   // throws on failure so the profile can show the server's message inline
   // (e.g. "File is too large") instead of the generic banner
   const uploadLeadMedia = async (id, files, onProgress) => {
@@ -2930,6 +2939,7 @@ function App() {
           onEditStartDate={editStartDate}
           onSaveJobDetails={saveJobDetails}
           onSaveEstimateBasics={saveEstimateBasics}
+          onStartEstimate={startEstimate}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
           onUpdateMediaMeasure={updateMediaMeasure}
@@ -7506,6 +7516,22 @@ function LeadTicket({
   const [emailDraft, setEmailDraft] = useState(lead.email || "");
   const [editingAddress, setEditingAddress] = useState(false);
   const [addressDraft, setAddressDraft] = useState(lead.address || "");
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState("");
+  const link = lead.jobtread;
+
+  const start = async () => {
+    if (!complete || starting || !onStartEstimate) return;
+    setStarting(true);
+    setStartError("");
+    try {
+      await onStartEstimate(lead.id);
+    } catch (err) {
+      setStartError(err.message || "Couldn't reach JobTread — try again.");
+    } finally {
+      setStarting(false);
+    }
+  };
   const [editingStart, setEditingStart] = useState(false);
   const [startDraft, setStartDraft] = useState(lead.startDate || "");
   const [showWorkDaysPrompt, setShowWorkDaysPrompt] = useState(false);
@@ -8464,7 +8490,7 @@ function CheckRow({ checked, onToggle, disabled, children }) {
 // lead itself so the estimating questionnaire can skip straight to the
 // trade-specific questions. Taps save right away; text saves on blur.
 // Owner-only — the PM's view never receives these answers.
-function EstimateBasicsSection({ lead, onSave, onEditField }) {
+function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
   const basics = { ...emptyEstimateBasics(), ...(lead.estimateBasics || {}) };
   const missing = missingEstimateBasics(basics, lead.address);
   const done = ESTIMATE_BASICS_REQUIRED_COUNT - missing.length;
@@ -8538,6 +8564,30 @@ function EstimateBasicsSection({ lead, onSave, onEditField }) {
           ? "All basics answered — ready to estimate."
           : `${done} of ${ESTIMATE_BASICS_REQUIRED_COUNT} answered · still need: ${missing.map((m) => m.label).join(", ")}`}
       </div>
+      {link ? (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 10 }}>
+          In JobTread as job #{link.jobNumber}
+          {link.accountName ? ` for ${link.accountName}` : ""}
+          {link.reusedCustomer ? " (existing customer)" : ""} ·{" "}
+          <a href={link.jobUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, fontWeight: 600 }}>
+            Open in JobTread
+          </a>
+          <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 4 }}>
+            Next up: the trade questions and the drafted estimate — nothing is ever sent without your OK.
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={start}
+          disabled={!complete || starting}
+          style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: complete && !starting ? 1 : 0.5 }}
+        >
+          {starting ? "Adding to JobTread…" : complete ? "Start Estimate" : "Start Estimate (answer the basics first)"}
+        </button>
+      )}
+      {startError && (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.rust, marginTop: 6 }}>{startError}</div>
+      )}
       {open && (
         <div>
           {questionLabel("Address", true, "address")}
@@ -8759,6 +8809,7 @@ function LeadProfileModal({
   onEditStartDate,
   onSaveJobDetails,
   onSaveEstimateBasics,
+  onStartEstimate,
   onUploadMedia,
   onDeleteMedia,
   onUpdateMediaMeasure,
@@ -9063,7 +9114,12 @@ function LeadProfileModal({
 
         {/* owner-only: the basics every estimate needs */}
         {editable && onSaveEstimateBasics && (
-          <EstimateBasicsSection lead={lead} onSave={onSaveEstimateBasics} onEditField={onEditField} />
+          <EstimateBasicsSection
+            lead={lead}
+            onSave={onSaveEstimateBasics}
+            onEditField={onEditField}
+            onStartEstimate={onStartEstimate}
+          />
         )}
 
         {/* instructions */}
