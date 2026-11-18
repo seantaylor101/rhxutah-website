@@ -212,6 +212,7 @@ export function buildGutterLines(assembly, answers, basics) {
     // extra-pipe lines only when a long run was entered
     dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
   });
+  fitOptionalLimits(lines);
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {
     lines[0].lineItems.push({
@@ -231,6 +232,20 @@ export function buildGutterLines(assembly, answers, basics) {
     });
   }
   return { lines, params, total: Math.max(total, total > 0 ? GUTTER_MINIMUM : 0) };
+}
+
+// An optional-choices group ("Optional Upgrades", min 0) shows "select up to
+// N" on the proposal. Some options get dropped per job, so N is set to the
+// number of options actually left in it.
+export function fitOptionalLimits(lines) {
+  for (const l of lines) {
+    if (l._type !== "costGroup") continue;
+    fitOptionalLimits(l.lineItems || []);
+    if (l.minSelectionsRequired === 0 && l.maxSelectionsAllowed != null) {
+      const options = (l.lineItems || []).filter((c) => c._type === "costGroup").length;
+      l.maxSelectionsAllowed = Math.max(1, options);
+    }
+  }
 }
 
 // merges our parameters into whatever the job already has
