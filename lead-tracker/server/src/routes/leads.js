@@ -11,7 +11,8 @@ import { upsertContactFromLead, updateContact } from "../contacts.js";
 import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
 import { cleanReportTags, parseReportTags } from "../jobReportTags.js";
-import { cleanEstimateBasics, parseEstimateBasics } from "../../../shared/estimateBasics.js";
+import { cleanEstimateBasics, parseEstimateBasics, missingEstimateBasics } from "../../../shared/estimateBasics.js";
+import { syncLeadToJobTread, jobtreadConfigured, jobUrl } from "../jobtread.js";
 import {
   parsePayees,
   validatePayeeInput,
@@ -95,7 +96,7 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
+  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), jobtread: parseJobtreadLink(row.jobtread), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
 }
 
 // shared by the authenticated create route and the public website-intake route
@@ -175,6 +176,7 @@ function forRole(role, lead) {
     lead.payees = (lead.payees || []).map((p) => ({ id: p.id, name: p.name, role: p.role }));
     // customer type, budget and the rest are for estimating, not the crew
     delete lead.estimateBasics;
+    delete lead.jobtread;
   }
   return lead;
 }
@@ -575,6 +577,54 @@ router.patch("/:id/estimate-basics", requireAuth("owner"), (req, res) => {
 
   db.prepare(`UPDATE leads SET estimateBasics = ? WHERE id = ?`).run(JSON.stringify(next), row.id);
   res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+});
+
+function parseJobtreadLink(raw) {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && v.jobId ? { ...v, jobUrl: jobUrl(v.jobId) } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Start Estimate — owner-only. Requires the estimate basics, then makes sure
+// the lead exists in JobTread as a customer, location and job (reusing a
+// customer whose phone/email already matches). Safe to tap again: whatever's
+// already linked is reused rather than duplicated. Never sends anything.
+const startingEstimate = new Set();
+router.post("/:id/start-estimate", requireAuth("owner"), async (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  if (!jobtreadConfigured()) return res.status(503).json({ error: "JobTread isn't connected yet." });
+
+  const basics = parseEstimateBasics(row.estimateBasics);
+  const missing = missingEstimateBasics(basics, row.address);
+  if (missing.length) {
+    return res.status(400).json({ error: `Answer the estimate basics first: ${missing.map((m) => m.label).join(", ")}` });
+  }
+  if (startingEstimate.has(row.id)) return res.status(409).json({ error: "Already starting this estimate — one moment." });
+
+  startingEstimate.add(row.id);
+  let existing = {};
+  try {
+    existing = row.jobtread ? JSON.parse(row.jobtread) || {} : {};
+  } catch {
+    existing = {};
+  }
+  try {
+    const link = await syncLeadToJobTread(row, basics, existing);
+    db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(link), row.id);
+    res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+  } catch (err) {
+    console.error("start-estimate failed", err);
+    // keep whatever did get created, so a retry doesn't duplicate it
+    if (existing.accountId) db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(existing), row.id);
+    res.status(502).json({ error: `Couldn't reach JobTread: ${err.message}` });
+  } finally {
+    startingEstimate.delete(row.id);
+  }
 });
 
 function readFollowUps(row) {

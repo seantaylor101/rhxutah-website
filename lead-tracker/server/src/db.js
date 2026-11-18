@@ -146,6 +146,12 @@ if (!existingColumns.has("estimateBasics")) {
   db.exec(`ALTER TABLE leads ADD COLUMN estimateBasics TEXT DEFAULT ''`);
 }
 
+if (!existingColumns.has("jobtread")) {
+  // JSON link to the lead's JobTread records, set by Start Estimate:
+  // { accountId, accountName, locationId, jobId, jobNumber, syncedAt }
+  db.exec(`ALTER TABLE leads ADD COLUMN jobtread TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,
