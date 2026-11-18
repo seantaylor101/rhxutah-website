@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { ESTIMATE_BASICS_QUESTIONS, ESTIMATE_BASICS_REQUIRED_COUNT, emptyEstimateBasics, missingEstimateBasics } from "../../shared/estimateBasics.js";
+import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
 import EmployeeApp from "./payroll/EmployeeApp.jsx";
@@ -8477,7 +8477,8 @@ function CheckRow({ checked, onToggle, disabled, children }) {
 function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
   const basics = { ...emptyEstimateBasics(), ...(lead.estimateBasics || {}) };
   const missing = missingEstimateBasics(basics, lead.address);
-  const done = ESTIMATE_BASICS_REQUIRED_COUNT - missing.length;
+  const total = requiredCount(basics);
+  const done = total - missing.length;
   const complete = missing.length === 0;
   const [open, setOpen] = useState(!complete);
   const [textDrafts, setTextDrafts] = useState({});
@@ -8562,7 +8563,7 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
       <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: complete ? COLORS.accent : COLORS.rust }}>
         {complete
           ? "All basics answered — ready to estimate."
-          : `${done} of ${ESTIMATE_BASICS_REQUIRED_COUNT} answered · still need: ${missing.map((m) => m.label).join(", ")}`}
+          : `${done} of ${total} answered · still need: ${missing.map((m) => m.label).join(", ")}`}
       </div>
       {link ? (
         <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 10 }}>
@@ -8601,7 +8602,7 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
           />
           {ESTIMATE_BASICS_QUESTIONS.map((q) => (
             <div key={q.key}>
-              {questionLabel(q.label, q.required, q.key)}
+              {questionLabel(q.label, isRequired(q, basics), q.key)}
               {q.type === "text" ? (
                 q.multiline ? (
                   <textarea
