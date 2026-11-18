@@ -5,7 +5,7 @@ import {
   parseEstimateBasics,
   missingEstimateBasics,
   emptyEstimateBasics,
-  ESTIMATE_BASICS_REQUIRED_COUNT,
+  requiredCount,
 } from "./estimateBasics.js";
 
 test("clean drops unknown keys and invalid options", () => {
@@ -29,7 +29,7 @@ test("parse tolerates empty and malformed JSON", () => {
 });
 
 test("missing lists address plus every unanswered required question", () => {
-  assert.equal(missingEstimateBasics(emptyEstimateBasics(), "").length, ESTIMATE_BASICS_REQUIRED_COUNT);
+  assert.equal(missingEstimateBasics(emptyEstimateBasics(), "").length, requiredCount(emptyEstimateBasics()));
   const full = cleanEstimateBasics({
     customerType: "gc",
     trades: ["gutters"],
@@ -43,4 +43,12 @@ test("missing lists address plus every unanswered required question", () => {
     missingEstimateBasics(full, "").map((m) => m.key),
     ["address"]
   );
+});
+
+test("existing exterior is only required when the work touches the walls", () => {
+  const gutters = cleanEstimateBasics({ customerType: "retail", trades: ["gutters"], stories: "1", measurements: "onSite", timeline: "asap" });
+  assert.deepEqual(missingEstimateBasics(gutters, "1 Main St"), []);
+  const siding = { ...gutters, trades: ["gutters", "siding"] };
+  assert.deepEqual(missingEstimateBasics(siding, "1 Main St").map((m) => m.key), ["existingExterior"]);
+  assert.equal(requiredCount(gutters) + 1, requiredCount(siding));
 });

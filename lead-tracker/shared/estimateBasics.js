@@ -7,6 +7,8 @@
 // rest are helpful but optional. Nothing here blocks logging a lead — the
 // lead profile just shows what's still missing.
 
+const WALL_TRADES = new Set(["siding", "soffitFascia", "stucco", "painting", "repair"]);
+
 export const ESTIMATE_BASICS_QUESTIONS = [
   {
     key: "customerType",
@@ -58,7 +60,9 @@ export const ESTIMATE_BASICS_QUESTIONS = [
     key: "existingExterior",
     label: "Existing exterior",
     type: "multi",
-    required: true,
+    // only matters when the work touches the walls — a gutters, drainage or
+    // lighting job can be estimated without it
+    required: (b) => (b.trades || []).some((t) => WALL_TRADES.has(t)),
     options: [
       { key: "vinyl", label: "Vinyl" },
       { key: "aluminum", label: "Aluminum" },
@@ -164,6 +168,12 @@ function isAnswered(q, value) {
   return q.type === "multi" ? Array.isArray(value) && value.length > 0 : !!String(value || "").trim();
 }
 
+// whether a question is required for these answers (some only are for
+// certain kinds of work)
+export function isRequired(q, basics) {
+  return typeof q.required === "function" ? !!q.required(basics || emptyEstimateBasics()) : !!q.required;
+}
+
 // required questions still unanswered — an address counts too, since every
 // estimate (and JobTread job) needs one, but it lives on the lead itself
 export function missingEstimateBasics(basics, address) {
@@ -171,10 +181,12 @@ export function missingEstimateBasics(basics, address) {
   const missing = [];
   if (!String(address || "").trim()) missing.push({ key: "address", label: "Address" });
   for (const q of ESTIMATE_BASICS_QUESTIONS) {
-    if (q.required && !isAnswered(q, b[q.key])) missing.push({ key: q.key, label: q.label });
+    if (isRequired(q, b) && !isAnswered(q, b[q.key])) missing.push({ key: q.key, label: q.label });
   }
   return missing;
 }
 
-export const ESTIMATE_BASICS_REQUIRED_COUNT =
-  ESTIMATE_BASICS_QUESTIONS.filter((q) => q.required).length + 1; // + address
+// how many required answers these basics need (+1 for the address)
+export function requiredCount(basics) {
+  return ESTIMATE_BASICS_QUESTIONS.filter((q) => isRequired(q, basics)).length + 1;
+}
