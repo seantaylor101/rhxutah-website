@@ -75,10 +75,19 @@ test("small job gets topped up to the $350 minimum", () => {
   assert.equal(Math.round((15 * 6.58 + 15 * 5 + min.unitPrice) * 100) / 100, 350);
 });
 
+test("only gutter footage is required; blanks count as zero", () => {
+  assert.deepEqual(missingTradeAnswers("gutters", {}, {}).map((m) => m.key), ["gutterLF"]);
+  const r = buildGutterLines(assembly, { gutterLF: 100 }, { customerType: "gc", trades: ["gutters"] });
+  const names = flat(r.lines).map((l) => l.name);
+  assert.ok(names.some((n) => n.startsWith('5"')), "blank size = 5 inch");
+  assert.ok(!names.some((n) => /guards/i.test(n)), "blank trees = no guards");
+  assert.equal(flat(r.lines).find((l) => l.name === "2x3 downspout - material").quantity, 0);
+});
+
 test("required questions and cleaning", () => {
   assert.deepEqual(
     missingTradeAnswers("gutters", { gutterLF: 100 }, { customerType: "retail" }).map((m) => m.key),
-    ["size", "oneStory", "twoStory", "miters", "tearOffLF", "trees"]
+    []
   );
   assert.deepEqual(missingTradeAnswers("gutters", ans, {}), []);
   assert.deepEqual(cleanTradeAnswers({ gutters: { gutterLF: "-5", size: "7", miters: "3" } }).gutters, { miters: 3 });
