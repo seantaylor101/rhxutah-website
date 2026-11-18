@@ -24,9 +24,37 @@ test("phone normalizes to E.164", () => {
   assert.equal(toE164("555"), "");
 });
 
-test("job name falls back to the trades picked", () => {
-  assert.equal(jobNameFor(lead, basics), "Gutters, Siding");
-  assert.equal(jobNameFor({ ...lead, job: "Gutters, Lehi" }, basics), "Gutters, Lehi");
+test("job names always carry an identifier", () => {
+  // homeowner is the lead → street + work
+  assert.equal(jobNameFor(lead, basics), "123 Main St Gutters, Siding");
+  assert.equal(jobNameFor({ ...lead, job: "Gutters" }, basics), "123 Main St Gutters");
+  // referral partner (Erick) → homeowner + work
+  const erick = { ...lead, name: "Erick Funn", job: "Gutters" };
+  assert.equal(jobNameFor(erick, { ...basics, homeownerName: "Beckie Price" }), "Beckie Price Gutters");
+  // Job field already names the homeowner → used as-is
+  assert.equal(jobNameFor({ ...erick, job: "Beckie Price gutters" }, { ...basics, homeownerName: "Beckie Price" }), "Beckie Price gutters");
+  // no homeowner given → street keeps Erick's jobs apart
+  assert.equal(jobNameFor({ ...erick, address: "254 S 700 W, Layton" }, basics), "254 S 700 W Gutters");
+});
+
+test("referral partner: new address gets its own location under the same customer", async () => {
+  const calls = mockFetch((q) => {
+    if (q.currentGrant) return { currentGrant: { organization: { id: "org1" } } };
+    if (q.organization)
+      return { organization: { contacts: { nodes: [{ id: "c", account: { id: "erick", name: "Erick Funn", locations: { nodes: [{ id: "old", address: "254 S 700 W" }] } } }] } } };
+    if (q.createLocation) return { createLocation: { createdLocation: { id: "new" } } };
+    if (q.createJob) return { createJob: { createdJob: { id: "job3", number: "488" } } };
+    throw new Error("unexpected " + Object.keys(q));
+  });
+  const link = await syncLeadToJobTread(
+    { ...lead, name: "Erick Funn", job: "Gutters" },
+    { ...basics, homeownerName: "Beckie Price" },
+    {}
+  );
+  assert.equal(link.accountId, "erick");
+  assert.equal(link.locationId, "new");
+  assert.equal(calls.find((c) => c.createJob).createJob.$.name, "Beckie Price Gutters");
+  assert.ok(!calls.some((c) => c.createAccount));
 });
 
 test("new customer: creates account, contact, location, job", async () => {

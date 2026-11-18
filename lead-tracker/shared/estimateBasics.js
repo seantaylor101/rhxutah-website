@@ -20,6 +20,13 @@ export const ESTIMATE_BASICS_QUESTIONS = [
     ],
   },
   {
+    key: "homeownerName",
+    label: "Homeowner name (if the lead isn't the homeowner)",
+    type: "text",
+    required: false,
+    placeholder: "e.g. Beckie Price — for jobs from Erick or another GC",
+  },
+  {
     key: "trades",
     label: "Work needed",
     type: "multi",

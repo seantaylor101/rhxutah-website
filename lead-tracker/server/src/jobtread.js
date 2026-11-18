@@ -118,11 +118,25 @@ export async function findCustomerAccount(orgId, { phone, email }) {
   return contact ? { contactId: contact.id, ...contact.account } : null;
 }
 
+// Every job gets an identifier up front, so a referral partner's account
+// (e.g. Erick Funn, who sends a lot of jobs) never fills up with look-alike
+// "Gutters" jobs: "<homeowner or street> <work>", like "Beckie Price Gutters"
+// or "123 Main St Gutters". If the lead's Job field already names the
+// homeowner, it's used as-is.
 export function jobNameFor(lead, basics) {
-  if (String(lead.job || "").trim()) return lead.job.trim();
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
-  const labels = (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label).filter(Boolean);
-  return labels.length ? labels.join(", ") : "Exterior work";
+  const tradeLabels = (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label).filter(Boolean);
+  const jobField = String(lead.job || "").trim();
+  const work = jobField || tradeLabels.join(", ") || "Exterior work";
+
+  const homeowner = String(basics.homeownerName || "").trim();
+  const leadIsHomeowner = !homeowner || homeowner.toLowerCase() === String(lead.name || "").trim().toLowerCase();
+  // the lead is the homeowner: their name is already on the customer, so
+  // the street is what tells their jobs apart
+  const identifier = leadIsHomeowner ? streetOf(lead.address) : homeowner;
+  if (!identifier) return work;
+  if (work.toLowerCase().includes(identifier.toLowerCase())) return work;
+  return `${identifier} ${work}`;
 }
 
 // plain-text summary of the basics, put on the JobTread job's description so
