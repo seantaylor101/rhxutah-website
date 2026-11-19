@@ -28,6 +28,7 @@ export const ASSEMBLIES = {
   soffitFascia: { id: "22PiMNbFW8gC", name: "Aluminum Soffit & Fascia" },
   painting: { id: "22PiMST4Jc9E", name: "Exterior Painting" },
   drainage: { id: "22PiMTePxQft", name: "In-Ground Drains" },
+  lighting: { id: "22PiMWbxM8tF", name: "Permanent Holiday & Accent Lighting" },
 };
 
 // painting prices (same for retail and GC); costs come from the catalog
@@ -623,6 +624,15 @@ export function buildDrainageLines(assembly, answers) {
   return { lines, params, total: selectedPriceTotal(lines) };
 }
 
+// $30/ft ($22.30 material + $7.70 install) + $500 control box, catalog prices
+export function buildLightingLines(assembly, answers) {
+  const lf = Math.max(0, Number(answers.lightingLF || 0));
+  const params = { "Lighting LF": lf, "Lighting Control Boxes": lf > 0 ? 1 : 0 };
+  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
+  lines = pruneEmpty(lines);
+  return { lines, params, total: selectedPriceTotal(lines) };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -641,15 +651,17 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const doSoffit = trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia);
   const doPainting = trades.includes("painting") && hasPaintingWork(answers.painting);
   const doDrainage = trades.includes("drainage") && Number(answers.drainage?.drains) > 0;
-  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting && !doDrainage) throw new Error("None of the work on this lead is automated yet");
+  const doLighting = trades.includes("lighting") && Number(answers.lighting?.lightingLF) > 0;
+  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting && !doDrainage && !doLighting) throw new Error("None of the work on this lead is automated yet");
 
-  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, drainageAssembly, jobData, templateData] = await Promise.all([
+  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, drainageAssembly, lightingAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
     doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
     doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
     doSoffit ? fetchAssembly(ASSEMBLIES.soffitFascia.id) : null,
     doPainting ? fetchAssembly(ASSEMBLIES.painting.id) : null,
     doDrainage ? fetchAssembly(ASSEMBLIES.drainage.id) : null,
+    doLighting ? fetchAssembly(ASSEMBLIES.lighting.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -677,7 +689,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const lines = [];
   const params = {};
   let total = 0;
-  // siding, stucco, soffit & fascia, painting, gutters, then drains — the order the work goes on the house
+  // siding, stucco, soffit & fascia, painting, gutters, drains, then lighting — the order the work goes on the house
   if (doSiding) {
     const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
     lines.push(...r.lines);
@@ -710,6 +722,12 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   }
   if (doDrainage) {
     const r = buildDrainageLines(drainageAssembly, answers.drainage || {});
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doLighting) {
+    const r = buildLightingLines(lightingAssembly, answers.lighting || {});
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;
