@@ -424,3 +424,26 @@ test("soffit & fascia: $25 retail / $22 GC per foot for both, half for one; cost
   assert.ok(near(buildSoffitFasciaLines(asm, { bothLF: 100, porchCapSF: 150 }, { customerType: "retail" }).total, 2500 + 1350));
   assert.ok(hasSoffitFasciaWork({ porchCapSF: 80 }));
 });
+
+test("painting: $4/sq ft repaint, $7/ft eaves (cheaper cost with a repaint), doors, $500 minimum", async () => {
+  const { buildPaintingLines, hasPaintingWork } = await import("./estimateDraft.js");
+  const item = (id, name, f, c, p) => ({ id, name, costGroup: { id: "pt" }, position: "m", quantity: null, quantityFormula: f, unitCost: c, unitPrice: p, isTaxable: false, showQuantity: true, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null });
+  const asm = { id: "pt", name: "Exterior Painting", position: null, isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true,
+    descendentCostGroups: { nodes: [] },
+    descendentCostItems: { nodes: [
+      item("w", "Exterior repaint, Emerald Rain Refresh", "{Paint Wall SF}", 1.55, 4),
+      item("ew", "Paint eaves - with siding paint job", "{Eave LF With Repaint}", 2.38, 7),
+      item("eo", "Paint eaves - eaves-only job", "{Eave LF Only}", 3.38, 7),
+      item("g", "Paint garage door - labor", "{Garage Doors}", 200, 400),
+      item("m", "Paint man door - labor", "{Man Doors}", 150, 300),
+    ] } };
+  const r = buildPaintingLines(asm, { wallSF: 2000, eaveLF: 200, garageDoors: 1, manDoors: 2 });
+  assert.equal(r.total, 8000 + 1400 + 400 + 600);
+  const names = [];
+  const w = (l) => l.forEach((x) => (x._type === "costItem" ? names.push(x.name) : w(x.lineItems || [])));
+  w(r.lines);
+  assert.ok(names.includes("Paint eaves - with siding paint job") && !names.includes("Paint eaves - eaves-only job"));
+  const eaves = buildPaintingLines(asm, { eaveLF: 50 });
+  assert.equal(eaves.total, 500);
+  assert.ok(!hasPaintingWork({}));
+});

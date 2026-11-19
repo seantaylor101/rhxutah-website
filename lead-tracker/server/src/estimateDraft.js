@@ -26,7 +26,11 @@ export const ASSEMBLIES = {
   siding_vinyl: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
   stucco: { id: "22PiLznBbZJs", name: "Stucco" },
   soffitFascia: { id: "22PiMNbFW8gC", name: "Aluminum Soffit & Fascia" },
+  painting: { id: "22PiMST4Jc9E", name: "Exterior Painting" },
 };
+
+// painting prices (same for retail and GC); costs come from the catalog
+export const PAINTING_MINIMUM = 500;
 
 // aluminum soffit & fascia, per linear foot: $25 retail / $22 GC for both,
 // half when only one is done. Line items keep real costs (Lansing material,
@@ -551,6 +555,48 @@ export function buildSoffitFasciaLines(assembly, answers, basics) {
   return { lines, params, total: selectedPriceTotal(lines) };
 }
 
+export function paintingParams(answers = {}) {
+  const n = (k) => Math.max(0, Number(answers[k] || 0));
+  const wall = n("wallSF");
+  return {
+    "Paint Wall SF": wall,
+    // eaves cost less to paint when the walls are being painted too
+    "Eave LF With Repaint": wall > 0 ? n("eaveLF") : 0,
+    "Eave LF Only": wall > 0 ? 0 : n("eaveLF"),
+    "Garage Doors": n("garageDoors"),
+    "Man Doors": n("manDoors"),
+  };
+}
+
+export function hasPaintingWork(answers = {}) {
+  return Object.values(paintingParams(answers)).some((v) => v > 0);
+}
+
+export function buildPaintingLines(assembly, answers) {
+  const params = paintingParams(answers);
+  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
+  lines = pruneEmpty(lines);
+  const total = selectedPriceTotal(lines);
+  if (total > 0 && total < PAINTING_MINIMUM) {
+    lines[0].lineItems.push({
+      _type: "costItem",
+      name: "Small job minimum",
+      description: `Our minimum for a painting job is $${PAINTING_MINIMUM}.`,
+      quantity: 1,
+      quantityFormula: null,
+      unitCost: 0,
+      unitPrice: Math.round((PAINTING_MINIMUM - total) * 100) / 100,
+      isTaxable: false,
+      showQuantity: false,
+      costCodeId: "22PJfnqzbFf9",
+      costTypeId: OTHER_COST_TYPE,
+      unitId: EACH_UNIT,
+      organizationCostItemId: null,
+    });
+  }
+  return { lines, params, total: Math.max(total, total > 0 ? PAINTING_MINIMUM : 0) };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -567,13 +613,15 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
   const doStucco = trades.includes("stucco") && hasStuccoWork(answers.stucco);
   const doSoffit = trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia);
-  if (!doGutters && !doSiding && !doStucco && !doSoffit) throw new Error("None of the work on this lead is automated yet");
+  const doPainting = trades.includes("painting") && hasPaintingWork(answers.painting);
+  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting) throw new Error("None of the work on this lead is automated yet");
 
-  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, jobData, templateData] = await Promise.all([
+  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
     doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
     doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
     doSoffit ? fetchAssembly(ASSEMBLIES.soffitFascia.id) : null,
+    doPainting ? fetchAssembly(ASSEMBLIES.painting.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -601,7 +649,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const lines = [];
   const params = {};
   let total = 0;
-  // siding, stucco, soffit & fascia, then gutters — the order the work goes on the house
+  // siding, stucco, soffit & fascia, painting, then gutters — the order the work goes on the house
   if (doSiding) {
     const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
     lines.push(...r.lines);
@@ -616,6 +664,12 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   }
   if (doSoffit) {
     const r = buildSoffitFasciaLines(soffitAssembly, answers.soffitFascia || {}, basics);
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doPainting) {
+    const r = buildPaintingLines(paintingAssembly, answers.painting || {});
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;

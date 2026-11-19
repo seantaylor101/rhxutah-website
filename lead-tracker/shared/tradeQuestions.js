@@ -212,6 +212,17 @@ export const TRADE_QUESTIONS = {
       { key: "porchCapSF", label: "Porch cap / soffit ceiling (sq ft)", type: "number", required: false },
     ],
   },
+  // repaint $4/sq ft of wall (no window deductions), eaves $7/ft, garage
+  // doors $400, man doors $300, $500 minimum
+  painting: {
+    label: "Painting",
+    questions: [
+      { key: "wallSF", label: "Walls to repaint (sq ft, no window deductions)", type: "number", required: false },
+      { key: "eaveLF", label: "Eaves to paint (linear ft)", type: "number", required: false },
+      { key: "garageDoors", label: "Garage doors", type: "number", required: false },
+      { key: "manDoors", label: "Man doors", type: "number", required: false },
+    ],
+  },
 };
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
