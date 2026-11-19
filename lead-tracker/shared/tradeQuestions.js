@@ -6,8 +6,9 @@
 // Blank answers count as zero (or the default noted in the label); only
 // what's truly needed to price the job is required.
 //
-// Automated so far: gutters, and siding when the product is LP SmartSide.
-// Other trades and products are added as their JobTread assemblies are built.
+// Automated so far: gutters, and siding in LP SmartSide, James Hardie,
+// Alside Ascend and vinyl. Other trades are added as their JobTread
+// assemblies are built.
 
 export const TRADE_QUESTIONS = {
   gutters: {
@@ -97,9 +98,9 @@ export const TRADE_QUESTIONS = {
         required: false,
         options: [
           { key: "lp", label: "LP SmartSide" },
-          { key: "hardie", label: "Hardie (not automated yet)" },
-          { key: "vinyl", label: "Vinyl (not automated yet)" },
-          { key: "ascend", label: "Ascend (not automated yet)" },
+          { key: "hardie", label: "James Hardie" },
+          { key: "ascend", label: "Ascend" },
+          { key: "vinyl", label: "Vinyl" },
         ],
       },
       {
@@ -124,6 +125,14 @@ export const TRADE_QUESTIONS = {
       { key: "tearOffSF", label: "Tear-off area (sq ft, blank = wall area)", type: "number", required: false },
       { key: "resheathSF", label: "Resheathing (sq ft, only if needed)", type: "number", required: false, param: "Resheathing SF" },
       { key: "dumpsters", label: "Dumpsters (blank = 1)", type: "number", required: false },
+      {
+        key: "metalWraps",
+        label: "Metal wraps (windows, man doors, garage doors)",
+        type: "number",
+        required: false,
+        param: "Metal Wraps",
+        products: ["vinyl"],
+      },
     ],
   },
 };
@@ -131,7 +140,9 @@ export const TRADE_QUESTIONS = {
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
 
 // siding is only drafted for the products with a JobTread assembly
-export const AUTOMATED_SIDING = ["lp"];
+export const AUTOMATED_SIDING = ["lp", "hardie", "ascend", "vinyl"];
+// products that get painted on site (the others have a factory finish)
+export const PAINTED_SIDING = ["lp", "hardie"];
 export function sidingProduct(answers = {}) {
   return answers?.siding?.product || "lp";
 }
@@ -176,7 +187,7 @@ export function upgradesFor(basics, answers = {}) {
     // siding jobs: insulated wrap for everyone; Emerald is the paint upgrade
     // on GC bids (retail bids already get Emerald)
     insulatedWrap: siding,
-    emeraldPaint: siding && !retail,
+    emeraldPaint: siding && !retail && PAINTED_SIDING.includes(sidingProduct(answers)),
   };
 }
 
@@ -184,7 +195,9 @@ export function questionsFor(trade, basics, answers = {}) {
   const set = TRADE_QUESTIONS[trade];
   if (!set) return [];
   const offered = upgradesFor(basics, answers);
-  return set.questions.filter((q) => !q.upgrade || offered[q.upgrade]);
+  return set.questions.filter(
+    (q) => (!q.upgrade || offered[q.upgrade]) && (!q.products || q.products.includes(sidingProduct(answers)))
+  );
 }
 
 function toNumber(v) {

@@ -4,13 +4,14 @@ import fs from "node:fs";
 import {
   buildGutterLines,
   buildLpSidingLines,
+  buildSidingLines,
   sidingParams,
   draftEstimate,
   evalFormula,
   mergeParameters,
   billedFootage,
 } from "./estimateDraft.js";
-import { missingTradeAnswers, cleanTradeAnswers, questionsFor } from "../../shared/tradeQuestions.js";
+import { missingTradeAnswers, cleanTradeAnswers, questionsFor, upgradesFor } from "../../shared/tradeQuestions.js";
 
 process.env.JOBTREAD_GRANT_KEY = "test-key";
 const assembly = JSON.parse(fs.readFileSync(new URL("./__fixtures__/gutterAssembly.json", import.meta.url)));
@@ -216,12 +217,12 @@ const lpAssembly = JSON.parse(fs.readFileSync(new URL("./__fixtures__/lpSidingAs
 test("LP siding: retail $14 / GC $12 per sq ft on wall area + 10%, tear-off and dumpster on top", () => {
   const near = (a, b) => Math.abs(a - b) <= 0.1;
   const retail = buildLpSidingLines(lpAssembly, { wallSF: 2000 }, { customerType: "retail", trades: ["siding"], existingExterior: ["vinyl"] });
-  assert.ok(near(retail.total, 30800 + 2000 * 0.9 + 440), String(retail.total));
+  assert.ok(near(retail.total, 30800 + 2000 * 0.9 + 500), String(retail.total));
   const names = flat(retail.lines).map((l) => l.name);
   assert.ok(!names.includes("Contractor-Grade Paint"), "retail gets Emerald only");
   assert.ok(names.includes("Insulated Reflective House Wrap"));
   const gc = buildLpSidingLines(lpAssembly, { wallSF: 2000 }, { customerType: "gc", trades: ["siding"], existingExterior: ["newConstruction"] });
-  assert.ok(near(gc.total, 26400 + 440), String(gc.total)); // dumpster even with no tear-off
+  assert.ok(near(gc.total, 26400 + 500), String(gc.total)); // dumpster even with no tear-off
   const gcGroups = flat(gc.lines).filter((l) => l._type === "costGroup");
   assert.ok(gcGroups.find((g) => g.name === "Contractor-Grade Paint").isSelected);
   assert.ok(!gcGroups.find((g) => g.name === "Sherwin-Williams Emerald Rain Refresh").isSelected, "Emerald is the GC upgrade choice");
@@ -233,7 +234,7 @@ test("LP siding: retail $14 / GC $12 per sq ft on wall area + 10%, tear-off and 
 
 test("LP siding params: tear-off type from the basics, dumpster on every job", () => {
   assert.deepEqual(sidingParams({ wallSF: 1500 }, { existingExterior: ["wood"] }), {
-    "Wall SF": 1500, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1,
+    "Wall SF": 1500, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1, "Metal Wraps": 0,
   });
   assert.equal(sidingParams({ wallSF: 1500, tearOff: "none" }, { existingExterior: ["wood"] }).Dumpsters, 1);
   assert.equal(sidingParams({ wallSF: 1500, dumpsters: 0 }, {}).Dumpsters, 0);
@@ -264,4 +265,43 @@ test("draftEstimate: siding + gutters on one proposal, siding first", async () =
   assert.match(doc.emailMessage, /insulated reflective house wrap/);
   const params = calls.find((c) => c.updateJob).updateJob.$.parameters;
   assert.ok(params.some((p) => p.name === "Wall SF" && p.value === 1800) && params.some((p) => p.name === "Gutter LF"));
+});
+
+// the Ascend and vinyl assemblies have no paint; vinyl adds a Metal Wraps group
+function unpainted(withMetalWraps) {
+  const a = JSON.parse(JSON.stringify(lpAssembly));
+  const paintIds = new Set(a.descendentCostGroups.nodes.filter((g) => /paint|emerald|contractor/i.test(g.name)).map((g) => g.id));
+  a.descendentCostGroups.nodes = a.descendentCostGroups.nodes.filter((g) => !paintIds.has(g.id));
+  a.descendentCostItems.nodes = a.descendentCostItems.nodes.filter((i) => !paintIds.has(i.costGroup.id) && !/paint/i.test(i.name));
+  if (withMetalWraps) {
+    a.descendentCostGroups.nodes.push({ id: "mw", name: "Metal Wraps", parentCostGroup: { id: a.id }, position: "qq", isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true });
+    a.descendentCostItems.nodes.push({ id: "mwi", name: "Metal wrap (window, man door, garage door) - labor", costGroup: { id: "mw" }, position: "k", quantity: null, quantityFormula: "{Metal Wraps}", unitCost: 250, unitPrice: 450, isTaxable: false, showQuantity: false, costCode: { id: "x" }, costType: { id: "x" }, unit: { id: "x" }, organizationCostItem: null });
+  }
+  return a;
+}
+
+test("every siding product prices at its own rate on wall area + 10%", () => {
+  // whole-cent prices over 1,000+ sq ft can leave the total a dollar or so off
+  const near = (a, b) => Math.abs(a - b) <= 2;
+  const newBuild = (ct) => ({ customerType: ct, trades: ["siding"], existingExterior: ["newConstruction"] });
+  const base = (r) => r.total - 500; // less the dumpster
+  assert.ok(near(base(buildSidingLines(lpAssembly, { wallSF: 1000 }, newBuild("retail"), "hardie")), 14 * 1100));
+  assert.ok(near(base(buildSidingLines(lpAssembly, { wallSF: 1000 }, newBuild("gc"), "hardie")), 12 * 1100));
+  assert.ok(near(base(buildSidingLines(unpainted(), { wallSF: 1000 }, newBuild("retail"), "ascend")), 12.5 * 1100));
+  assert.ok(near(base(buildSidingLines(unpainted(), { wallSF: 1000 }, newBuild("gc"), "ascend")), 11 * 1100));
+  assert.ok(near(base(buildSidingLines(unpainted(true), { wallSF: 1000 }, newBuild("retail"), "vinyl")), 9 * 1100));
+  assert.ok(near(base(buildSidingLines(unpainted(true), { wallSF: 1000 }, newBuild("gc"), "vinyl")), 8 * 1100));
+  assert.ok(near(base(buildSidingLines(unpainted(true), { wallSF: 1000 }, newBuild("insurance"), "vinyl")), 6 * 1100));
+});
+
+test("vinyl metal wraps are priced on their own, only when entered", () => {
+  const b = { customerType: "retail", trades: ["siding"], existingExterior: ["newConstruction"] };
+  const none = buildSidingLines(unpainted(true), { wallSF: 1000, product: "vinyl" }, b, "vinyl");
+  assert.ok(!flat(none.lines).some((l) => /metal wrap/i.test(l.name)));
+  const four = buildSidingLines(unpainted(true), { wallSF: 1000, product: "vinyl", metalWraps: 4 }, b, "vinyl");
+  assert.ok(Math.abs(four.total - (9 * 1100 + 500 + 4 * 450)) <= 0.1, String(four.total));
+  assert.ok(questionsFor("siding", b, { siding: { product: "vinyl" } }).some((q) => q.key === "metalWraps"));
+  assert.ok(!questionsFor("siding", b, { siding: { product: "lp" } }).some((q) => q.key === "metalWraps"));
+  // no Emerald upgrade on factory-finished siding
+  assert.ok(!upgradesFor({ customerType: "gc", trades: ["siding"] }, { siding: { product: "ascend" } }).emeraldPaint);
 });
