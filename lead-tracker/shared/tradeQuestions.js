@@ -123,7 +123,7 @@ export const TRADE_QUESTIONS = {
       },
       { key: "tearOffSF", label: "Tear-off area (sq ft, blank = wall area)", type: "number", required: false },
       { key: "resheathSF", label: "Resheathing (sq ft, only if needed)", type: "number", required: false, param: "Resheathing SF" },
-      { key: "dumpsters", label: "Dumpsters (blank = 1 when there's tear-off)", type: "number", required: false },
+      { key: "dumpsters", label: "Dumpsters (blank = 1)", type: "number", required: false },
     ],
   },
 };

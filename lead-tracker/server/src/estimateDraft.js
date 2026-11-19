@@ -342,8 +342,10 @@ export function sidingParams(answers = {}, basics = {}) {
   const wall = Number(answers.wallSF || 0);
   const type = tearOffType(basics, answers);
   const tearSF = type === "none" ? 0 : Number(answers.tearOffSF ?? wall) || 0;
+  // every siding job needs a dumpster — tear-off or not, there's a lot of
+  // cut-off waste on install
   const dumpsters =
-    answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : tearSF > 0 ? 1 : 0;
+    answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : wall > 0 ? 1 : 0;
   return {
     "Wall SF": wall,
     "Vinyl Tear-off SF": type === "vinyl" ? tearSF : 0,
