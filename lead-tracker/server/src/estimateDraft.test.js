@@ -235,7 +235,7 @@ test("LP siding: retail $14 / GC $12 per sq ft on wall area + 10%, tear-off and 
 
 test("LP siding params: tear-off type from the basics, dumpster on every job", () => {
   assert.deepEqual(sidingParams({ wallSF: 1500 }, { existingExterior: ["wood"] }), {
-    "Wall SF": 1500, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1, "Metal Wraps": 0,
+    "Wall SF": 1500, "Batten SF": 0, "Shake SF": 0, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1, "Metal Wraps": 0,
   });
   assert.equal(sidingParams({ wallSF: 1500, tearOff: "none" }, { existingExterior: ["wood"] }).Dumpsters, 1);
   assert.equal(sidingParams({ wallSF: 1500, dumpsters: 0 }, {}).Dumpsters, 0);
@@ -346,4 +346,33 @@ test("stucco: full job per sq ft + 10%, repairs $2,700, popouts $750 with no min
   const req = (a) => missingTradeAnswers("stucco", a, {}).map((m) => m.key);
   assert.deepEqual(req({}), []);
   assert.deepEqual(req({ jobType: "full" }), ["stuccoSF"]);
+});
+
+test("board-and-batten and shake areas are priced at their own rates", async () => {
+  const { buildSidingLines, sidingParams } = await import("./estimateDraft.js");
+  const fs = await import("node:fs");
+  const asm = JSON.parse(fs.readFileSync(new URL("./__fixtures__/lpSidingAssembly.json", import.meta.url)));
+  const basics = { customerType: "gc", trades: ["siding"], existingExterior: ["stucco"] };
+  const { lines, params } = buildSidingLines(asm, { product: "lp", wallSF: 2000, battenSF: 500, shakeSF: 300, tearOff: "none", dumpsters: 0 }, basics, "lp");
+  assert.equal(params["Batten SF"], 500);
+  assert.equal(params["Shake SF"], 300);
+  const all = [];
+  const walk = (l) => l.forEach((x) => (x._type === "costItem" ? all.push(x) : walk(x.lineItems || [])));
+  walk(lines);
+  const lap = all.find((x) => /lap siding/.test(x.name));
+  assert.equal(lap.quantity, 1200);
+  assert.ok(all.some((x) => /shakes primed/i.test(x.name) && x.quantity === 330));
+  // base bid = 1.1 x (1200 x $12 + 500 x $15 + 300 x $22)
+  const { selectedPriceTotal } = await import("./estimateDraft.js");
+  const base = selectedPriceTotal(lines);
+  assert.ok(Math.abs(base - 1.1 * (1200 * 12 + 500 * 15 + 300 * 22)) < 3, String(base));
+  // vinyl ignores the areas; they can't exceed the wall
+  assert.equal(sidingParams({ product: "vinyl", wallSF: 1000, battenSF: 200 })["Batten SF"], 0);
+  assert.equal(sidingParams({ product: "hardie", wallSF: 1000, battenSF: 800, shakeSF: 500 })["Shake SF"], 200);
+  // with no batten/shake, those lines aren't on the bid
+  const plain = buildSidingLines(asm, { product: "lp", wallSF: 2000, tearOff: "none" }, basics, "lp");
+  const names = [];
+  const w2 = (l) => l.forEach((x) => (x._type === "costItem" ? names.push(x.name) : w2(x.lineItems || [])));
+  w2(plain.lines);
+  assert.ok(!names.some((n) => /shake|batten|panel/i.test(n)), names.join());
 });
