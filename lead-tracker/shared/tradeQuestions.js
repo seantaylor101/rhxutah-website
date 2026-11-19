@@ -140,9 +140,9 @@ export const TRADE_QUESTIONS = {
     questions: [
       {
         key: "jobType",
-        label: "Stucco job",
+        label: "Stucco job (leave blank if it's only the items below)",
         type: "single",
-        required: true,
+        required: false,
         options: [
           { key: "full", label: "Full stucco job" },
           { key: "repair", label: "Repair" },
@@ -175,6 +175,14 @@ export const TRADE_QUESTIONS = {
           { key: "no", label: "No, popouts only" },
         ],
       },
+      {
+        key: "gutterWallSpots",
+        label: "Spots where a gutter is butted against the stucco wall",
+        type: "number",
+        required: false,
+        param: "Gutter Wall Spots",
+      },
+      { key: "foundationLF", label: "Foundation plaster (linear ft)", type: "number", required: false, param: "Foundation Plaster LF" },
     ],
   },
 };

@@ -8710,7 +8710,14 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
 
   const missingAll = trades.flatMap((t) => missingTradeAnswers(t, answers[t], basics));
   // something on this lead has to be draftable (siding only when it's LP)
-  const draftable = trades.some((t) => t !== "siding" || AUTOMATED_SIDING.includes(sidingProduct(answers)));
+  const stuccoAnswers = answers.stucco || {};
+  const draftable = trades.some((t) =>
+    t === "siding"
+      ? AUTOMATED_SIDING.includes(sidingProduct(answers))
+      : t === "stucco"
+        ? !!(stuccoAnswers.jobType || stuccoAnswers.gutterWallSpots || stuccoAnswers.foundationLF)
+        : true
+  );
   const ready = draftable && missingAll.length === 0;
 
   const saveNumber = (trade, key) => {
@@ -8852,7 +8859,17 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           <a href={lead.jobtread.jobUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, fontWeight: 600 }}>
             Review in JobTread
           </a>
-          <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>Not sent — review it and send it from JobTread when it looks right.</div>
+          {e.reviewedAt ? (
+            <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>
+              {e.deleted
+                ? "Deleted in JobTread."
+                : e.changes && e.changes.length
+                  ? `Sent. You changed: ${e.changes.join("; ")}.`
+                  : "Sent as drafted."}
+            </div>
+          ) : (
+            <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>Not sent — review it and send it from JobTread when it looks right.</div>
+          )}
         </div>
       ))}
     </ProfileSection>
