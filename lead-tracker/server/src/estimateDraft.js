@@ -8,6 +8,7 @@
 
 import { pave } from "./jobtread.js";
 import { proposalMessage } from "./proposalMessage.js";
+import { snapshotLines } from "./editDiff.js";
 import {
   TRADE_QUESTIONS,
   upgradesFor,
@@ -27,11 +28,10 @@ export const ASSEMBLIES = {
 };
 
 // Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
-// repairs are a flat $2,700 (cost $1,800), popout cut-backs $750 a window
-// for any customer (cost $500), and a repair bid never goes under $2,700.
+// general repairs a flat $2,700 (cost $1,800); popout cut-backs $750 a
+// window with no minimum; foundation plaster $10/LF; a gutter butted against
+// the wall: $350 per gutter cut-back + $3,000 for the stucco repair there.
 export const STUCCO_RATES = { retail: 10, insurance: 10, gc: 8 };
-export const STUCCO_REPAIR_MINIMUM = 2700;
-const STUCCO_COST_CODE = "22PiKU5iGnRc";
 
 // Siding prices per square foot, charged on the wall area plus 10% (Sean's
 // waste rule, applied to material and labor alike). Covers siding, trim,
@@ -440,11 +440,20 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
 export function stuccoParams(answers = {}) {
   const full = answers.jobType === "full";
   const repair = answers.jobType === "repair";
+  const spots = Number(answers.gutterWallSpots || 0);
   return {
     "Stucco SF": full ? Number(answers.stuccoSF || 0) : 0,
     "Stucco Repairs": repair && answers.otherRepairs !== "no" ? 1 : 0,
     "Popout Windows": repair ? Number(answers.popouts || 0) : 0,
+    "Gutter Wall Spots": spots,
+    "Gutter Wall Stucco Repair": spots > 0 ? 1 : 0,
+    "Foundation Plaster LF": Number(answers.foundationLF || 0),
   };
+}
+
+export function hasStuccoWork(answers = {}) {
+  const p = stuccoParams(answers);
+  return Object.values(p).some((v) => v > 0);
 }
 
 export function buildStuccoLines(assembly, answers, basics) {
@@ -455,26 +464,7 @@ export function buildStuccoLines(assembly, answers, basics) {
   for (const l of lines[0]?.lineItems || []) {
     if (/full job/i.test(l.name)) l.unitPrice = rate;
   }
-  let total = selectedPriceTotal(lines);
-  if (answers.jobType === "repair" && total < STUCCO_REPAIR_MINIMUM && lines[0]) {
-    lines[0].lineItems.push({
-      _type: "costItem",
-      name: "Small job minimum",
-      description: `Our minimum for a stucco repair is $${STUCCO_REPAIR_MINIMUM.toLocaleString()}.`,
-      quantity: 1,
-      quantityFormula: null,
-      unitCost: 0,
-      unitPrice: Math.round((STUCCO_REPAIR_MINIMUM - total) * 100) / 100,
-      isTaxable: false,
-      showQuantity: false,
-      costCodeId: STUCCO_COST_CODE,
-      costTypeId: OTHER_COST_TYPE,
-      unitId: EACH_UNIT,
-      organizationCostItemId: null,
-    });
-    total = STUCCO_REPAIR_MINIMUM;
-  }
-  return { lines, params, total };
+  return { lines, params, total: selectedPriceTotal(lines) };
 }
 
 // merges our parameters into whatever the job already has
@@ -491,7 +481,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const doGutters = trades.includes("gutters");
   const product = sidingProduct(answers);
   const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
-  const doStucco = trades.includes("stucco") && !!answers.stucco?.jobType;
+  const doStucco = trades.includes("stucco") && hasStuccoWork(answers.stucco);
   if (!doGutters && !doSiding && !doStucco) throw new Error("None of the work on this lead is automated yet");
 
   const [gutterAssembly, sidingAssembly, stuccoAssembly, jobData, templateData] = await Promise.all([
@@ -595,5 +585,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
     price: doc.price ?? total,
     estimatedTotal: total,
     createdAt: new Date().toISOString(),
+    // what Lead Hammer priced, to compare with what Sean sends (editReview.js)
+    snapshot: snapshotLines(lines, doc.price ?? total),
   };
 }

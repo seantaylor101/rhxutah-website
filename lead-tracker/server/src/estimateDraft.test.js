@@ -324,18 +324,26 @@ const stuccoAssembly = {
   ] },
 };
 
-test("stucco: full job per sq ft + 10%, repairs $2,700, popouts $750, $2,700 minimum", () => {
+test("stucco: full job per sq ft + 10%, repairs $2,700, popouts $750 with no minimum, foundation $10/LF, gutter-wall $350 + $3,000", () => {
   const near = (a, b) => Math.abs(a - b) <= 0.01;
-  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "full", stuccoSF: 1000 }, { customerType: "retail" }).total, 11000));
-  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "full", stuccoSF: 1000 }, { customerType: "gc" }).total, 8800));
-  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair" }, { customerType: "gc" }).total, 2700));
-  const two = buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 2, otherRepairs: "no" }, { customerType: "retail" });
-  assert.ok(near(two.total, 2700), String(two.total));
-  assert.ok(flat(two.lines).some((l) => l.name === "Small job minimum"));
-  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 4, otherRepairs: "no" }, {}).total, 3000));
-  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 2 }, {}).total, 4200));
+  const asm = JSON.parse(JSON.stringify(stuccoAssembly));
+  asm.descendentCostGroups.nodes.push({ id: "gw", name: "Gutter Against Stucco Wall Repair", parentCostGroup: { id: "st" }, position: "q", isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true });
+  const item = (id, name, grp, f, c, p) => ({ id, name, costGroup: { id: grp }, position: "m", quantity: null, quantityFormula: f, unitCost: c, unitPrice: p, isTaxable: false, showQuantity: false, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null });
+  asm.descendentCostItems.nodes.push(
+    item("fp", "Foundation plaster - per linear foot", "st", "{Foundation Plaster LF}", 0, 10),
+    item("gc", "Gutter cut-back from stucco wall + new end cap", "gw", "{Gutter Wall Spots}", 0, 350),
+    item("gs", "Stucco repair where gutter met the wall", "gw", "{Gutter Wall Stucco Repair}", 1800, 3000)
+  );
+  assert.ok(near(buildStuccoLines(asm, { jobType: "full", stuccoSF: 1000 }, { customerType: "retail" }).total, 11000));
+  assert.ok(near(buildStuccoLines(asm, { jobType: "full", stuccoSF: 1000 }, { customerType: "gc" }).total, 8800));
+  assert.ok(near(buildStuccoLines(asm, { jobType: "repair" }, { customerType: "gc" }).total, 2700));
+  assert.ok(near(buildStuccoLines(asm, { jobType: "repair", popouts: 2, otherRepairs: "no" }, {}).total, 1500), "popouts alone: no minimum");
+  assert.ok(near(buildStuccoLines(asm, { jobType: "repair", popouts: 2 }, {}).total, 4200));
+  assert.ok(near(buildStuccoLines(asm, { foundationLF: 60 }, {}).total, 600));
+  const gw = buildStuccoLines(asm, { gutterWallSpots: 2 }, {});
+  assert.ok(near(gw.total, 2 * 350 + 3000), String(gw.total));
+  assert.ok(!flat(gw.lines).some((l) => /full job|^Stucco repair$|popout/i.test(l.name)));
   const req = (a) => missingTradeAnswers("stucco", a, {}).map((m) => m.key);
-  assert.deepEqual(req({}), ["jobType"]);
+  assert.deepEqual(req({}), []);
   assert.deepEqual(req({ jobType: "full" }), ["stuccoSF"]);
-  assert.deepEqual(req({ jobType: "repair" }), []);
 });

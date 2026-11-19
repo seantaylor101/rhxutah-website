@@ -26,6 +26,7 @@ import { startAppointmentReminderScheduler } from "./appointmentReminders.js";
 import { startAppointmentDigestScheduler } from "./appointmentDigest.js";
 import { startScheduleReminderScheduler } from "./scheduleReminders.js";
 import { startJobDigestScheduler } from "./jobDigest.js";
+import { startEditReviewScheduler } from "./editReview.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -89,3 +90,4 @@ startAppointmentReminderScheduler();
 startAppointmentDigestScheduler();
 startScheduleReminderScheduler();
 startJobDigestScheduler();
+startEditReviewScheduler();
