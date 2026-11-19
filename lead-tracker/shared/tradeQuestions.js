@@ -212,6 +212,17 @@ export const TRADE_QUESTIONS = {
       { key: "porchCapSF", label: "Porch cap / soffit ceiling (sq ft)", type: "number", required: false },
     ],
   },
+  // in-ground drains on their own (no gutters, or bid as their own section):
+  // $500 standard 9x9, 12x12 $630 as the customer's choice, past 8 ft $35 a
+  // pipe section + $15/ft
+  drainage: {
+    label: "Drainage",
+    questions: [
+      { key: "drains", label: "In-ground drains (one per downspout)", type: "number", required: true },
+      { key: "drainsPast8", label: "Drains running past 8 ft (only if you know)", type: "number", required: false },
+      { key: "drainExtraLF", label: "Total extra feet past 8 ft (only if you know)", type: "number", required: false },
+    ],
+  },
   // repaint $4/sq ft of wall (no window deductions), eaves $7/ft, garage
   // doors $400, man doors $300, $500 minimum
   painting: {
@@ -271,7 +282,8 @@ export function upgradesFor(basics, answers = {}) {
   const siding = trades.has("siding");
   return {
     guards: gutters && answers?.gutters?.trees === "yes",
-    drains: gutters && defaultDrainCount(answers?.gutters) > 0,
+    // when Drainage is its own trade on the lead, drains are bid there instead
+    drains: gutters && !trades.has("drainage") && defaultDrainCount(answers?.gutters) > 0,
     lighting: gutters && retail && siding,
     // siding jobs: insulated wrap for everyone; Emerald is the paint upgrade
     // on GC bids (retail bids already get Emerald)
