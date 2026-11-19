@@ -8717,7 +8717,7 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
       : t === "stucco"
         ? !!(stuccoAnswers.jobType || stuccoAnswers.gutterWallSpots || stuccoAnswers.foundationLF)
         : t === "soffitFascia"
-          ? ["bothLF", "soffitOnlyLF", "fasciaOnlyLF"].some((k) => Number((answers.soffitFascia || {})[k]) > 0)
+          ? ["bothLF", "soffitOnlyLF", "fasciaOnlyLF", "porchCapSF"].some((k) => Number((answers.soffitFascia || {})[k]) > 0)
           : true
   );
   const ready = draftable && missingAll.length === 0;
