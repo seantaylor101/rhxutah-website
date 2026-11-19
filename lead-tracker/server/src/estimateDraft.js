@@ -15,11 +15,30 @@ export const ASSEMBLIES = {
 };
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 const GUTTER_MINIMUM = 350;
-// Sean's all-in gutter price per foot of gutter (downspouts, miters and
-// tear-off included). The line items keep their real costs; their prices
-// are scaled so the base bid comes to exactly rate x gutter footage.
-// Upgrade options keep their own prices.
-export const GUTTER_RATE_PER_FT = { gc: 10.5, retail: 12, insurance: 12 };
+// Sean's gutter prices, per foot of gutter PLUS downspout (he bills the
+// downspout footage too). Miters and tear-off are included. The line items
+// keep their real costs; their prices are scaled so the bid lands on these
+// rates. Upgrade options keep their own prices; the $350 minimum still applies.
+export const GUTTER_RATES = {
+  retail: { 5: 12, 6: 15 },
+  insurance: { 5: 12, 6: 15 },
+  gc: { 5: 8.5, 6: 8.5 },
+};
+// customers with their own deal, by JobTread customer account
+export const CUSTOMER_GUTTER_RATES = {
+  "22PLZFJ8Yrtd": { name: "Erick Funn", rates: { 5: 7.5, 6: 7.5 } },
+};
+
+export function gutterRatesFor(basics, { accountId } = {}) {
+  if (accountId && CUSTOMER_GUTTER_RATES[accountId]) return CUSTOMER_GUTTER_RATES[accountId].rates;
+  return GUTTER_RATES[basics?.customerType] || GUTTER_RATES.retail;
+}
+
+// gutter + downspout footage billed (downspouts per Sean's takeoff rule)
+export function billedFootage(answers = {}) {
+  const n = (k) => Number(answers[k] || 0);
+  return n("gutterLF") + 13 * n("oneStory") + 23 * n("twoStory") + 33 * n("threeStory") + 2 * n("offsets");
+}
 const UTAH_TAX_RATE = 0.0745; // line items are non-taxable; kept to match existing proposals
 const GUTTERS_COST_CODE = "22PiKU5iG4cy";
 const OTHER_COST_TYPE = "22PJfnqzbFfM";
@@ -188,7 +207,7 @@ export function gutterParams(answers, basics) {
   return params;
 }
 
-export function buildGutterLines(assembly, answers, basics) {
+export function buildGutterLines(assembly, answers, basics, { accountId } = {}) {
   const six = answers.size === "6";
   const isGc = (basics?.customerType || "") === "gc";
   const offered = upgradesFor(basics, { gutters: answers });
@@ -219,7 +238,7 @@ export function buildGutterLines(assembly, answers, basics) {
     dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
   });
   fitOptionalLimits(lines);
-  applyPerFootRate(lines, GUTTER_RATE_PER_FT[basics?.customerType] ?? GUTTER_RATE_PER_FT.retail, Number(answers.gutterLF || 0));
+  applyPerFootRate(lines, gutterRatesFor(basics, { accountId }), billedFootage(answers), six);
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {
     lines[0].lineItems.push({
@@ -241,56 +260,50 @@ export function buildGutterLines(assembly, answers, basics) {
   return { lines, params, total: Math.max(total, total > 0 ? GUTTER_MINIMUM : 0) };
 }
 
-// Scales the base (non-upgrade) line prices so what the customer gets by
-// default totals rate x footage. Lines in the unpicked size option scale the
-// same way, so the 5"/6" price difference stays proportional.
-export function applyPerFootRate(lines, rate, footage) {
-  if (!rate || !footage) return;
-  const base = [];
-  const collect = (list, inUpgrades) => {
+// Prices the base bid (everything but the optional upgrades) at the
+// per-foot rate: shared lines (labor, tear-off) plus the picked size's lines
+// come to rate x footage, and the other size option — when it's shown — is
+// priced so picking it comes to its own rate x footage.
+export function applyPerFootRate(lines, rates, footage, six) {
+  if (!rates || !footage) return;
+  const shared = [];
+  const sizes = { 5: [], 6: [] };
+  const collect = (list, bucket) => {
     for (const l of list) {
-      if (l._type === "costItem") {
-        if (!inUpgrades) base.push(l);
-      } else {
-        collect(l.lineItems || [], inUpgrades || /optional upgrades/i.test(l.name));
-      }
+      if (l._type === "costItem") bucket.push(l);
+      else if (/optional upgrades/i.test(l.name)) continue;
+      else if (/^5"/.test(l.name)) collect(l.lineItems || [], sizes[5]);
+      else if (/^6"/.test(l.name)) collect(l.lineItems || [], sizes[6]);
+      else collect(l.lineItems || [], bucket);
     }
   };
-  collect(lines, false);
-  const current = selectedPriceTotal(stripUpgrades(lines));
-  if (!current) return;
-  const target = Math.round(rate * footage * 100) / 100;
-  const factor = target / current;
-  for (const l of base) l.unitPrice = Math.round(Number(l.unitPrice || 0) * factor * 100) / 100;
-  // put the rounding cents on one line so the total lands on the rate
-  const drift = Math.round((target - selectedPriceTotal(stripUpgrades(lines))) * 100) / 100;
-  if (drift) {
-    const selected = [];
-    const walk = (list, parentIsSet) => {
-      for (const l of list) {
-        if (l._type === "costItem") {
-          selected.push(l);
-        } else {
-          if (parentIsSet && !l.isSelected) continue;
-          if (/optional upgrades/i.test(l.name)) continue;
-          walk(l.lineItems || [], l.maxSelectionsAllowed != null || l.minSelectionsRequired != null);
-        }
-      }
-    };
-    walk(lines, false);
-    // the selected line with the smallest quantity absorbs it most exactly
-    // (prices are whole cents, so the total can still be off by a cent or two)
-    const pick = selected.filter((l) => Number(l.quantity) > 0).sort((a, b) => a.quantity - b.quantity)[0];
-    if (pick) pick.unitPrice = Math.round((pick.unitPrice + drift / pick.quantity) * 100) / 100;
+  collect(lines, shared);
+  const sum = (arr) => arr.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
+  const scale = (arr, f) => arr.forEach((l) => (l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100));
+  const picked = six ? 6 : 5;
+  const other = six ? 5 : 6;
+
+  const pickedTarget = rates[picked] * footage;
+  const before = sum(shared) + sum(sizes[picked]);
+  if (!before) return;
+  scale(shared, pickedTarget / before);
+  scale(sizes[picked], pickedTarget / before);
+  absorbCents([...sizes[picked], ...shared], pickedTarget - sum(shared) - sum(sizes[picked]));
+
+  if (sizes[other].length && sum(sizes[other])) {
+    const otherTarget = rates[other] * footage - sum(shared);
+    scale(sizes[other], otherTarget / sum(sizes[other]));
+    absorbCents(sizes[other], otherTarget - sum(sizes[other]));
   }
 }
 
-function stripUpgrades(lines) {
-  return lines.map((l) =>
-    l._type === "costGroup"
-      ? { ...l, lineItems: stripUpgrades((l.lineItems || []).filter((c) => !/optional upgrades/i.test(c.name))) }
-      : l
-  );
+// whole-cent prices leave the total a few cents off; the line with the
+// smallest quantity takes the difference most exactly
+function absorbCents(arr, drift) {
+  drift = Math.round(drift * 100) / 100;
+  if (!drift) return;
+  const pick = arr.filter((l) => Number(l.quantity) > 0).sort((a, b) => a.quantity - b.quantity)[0];
+  if (pick) pick.unitPrice = Math.round((pick.unitPrice + drift / pick.quantity) * 100) / 100;
 }
 
 // An optional-choices group ("Optional Upgrades", min 0) shows "select up to
@@ -346,7 +359,9 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   if (!job) throw new Error("Couldn't find the JobTread job for this lead");
   const tpl = templateData?.documentTemplate || {};
 
-  const { lines, params, total } = buildGutterLines(assembly, answers.gutters || {}, basics);
+  const { lines, params, total } = buildGutterLines(assembly, answers.gutters || {}, basics, {
+    accountId: job.location.account.id,
+  });
 
   await pave({ updateJob: { $: { id: link.jobId, parameters: mergeParameters(job.parameters, params) } } });
 
