@@ -87,11 +87,11 @@ test("small job gets topped up to the minimum, prorated by the customer's rate",
   assert.match(min.description, /\$350/);
   assert.equal(gutterMinimum(GUTTER_RATES.retail, false, "retail"), 500);
   assert.equal(gutterMinimum(GUTTER_RATES.retail, true, "retail"), 500);
-  assert.equal(gutterMinimum(GUTTER_RATES.insurance, true, "insurance"), 440);
+  assert.equal(gutterMinimum(GUTTER_RATES.insurance, true, "insurance"), 500);
   assert.equal(gutterMinimum(GUTTER_RATES.insurance, false), 305);
   assert.equal(gutterMinimum({ 5: 7.5, 6: 7.5 }, false, "gc"), 350);
   assert.equal(gutterMinimum(GUTTER_RATES.gc, false, "gc"), 350);
-  assert.equal(gutterMinimum(GUTTER_RATES.insurance, false, "insurance"), 305);
+  assert.equal(gutterMinimum(GUTTER_RATES.insurance, false, "insurance"), 500);
   // retail: $500 flat; a retail job past ~42 ft isn't topped up
   assert.equal(buildGutterLines(assembly, { gutterLF: 30 }, { customerType: "retail", trades: ["gutters"] }).total, 500);
   const big = buildGutterLines(assembly, { gutterLF: 45 }, { customerType: "retail", trades: ["gutters"] });

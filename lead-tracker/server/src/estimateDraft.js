@@ -63,8 +63,8 @@ const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 // footage (GC $250, Erick $220, insurance $305, 6" retail $440), rounded
 // to $5
 const GUTTER_MINIMUM_FEET = 350 / 12;
-// floors (Sean): never below $500 for retail or $350 for any GC, Erick included
-const GUTTER_MINIMUM_FLOOR = { retail: 500, gc: 350 };
+// floors (Sean): never below $500 for retail or insurance, or $350 for any GC (Erick included)
+const GUTTER_MINIMUM_FLOOR = { retail: 500, insurance: 500, gc: 350 };
 export function gutterMinimum(rates, six, customerType) {
   const rate = rates[six ? 6 : 5] ?? rates[5];
   const prorated = Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
