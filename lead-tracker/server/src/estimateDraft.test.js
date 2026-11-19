@@ -25,9 +25,9 @@ test("formulas evaluate like JobTread's", () => {
 
 const groupNames = (r) => flat(r.lines).filter((l) => l._type === "costGroup").map((g) => g.name);
 
-test("retail gutters-only job with trees: $3,147.92, guards + drains offered, no lighting", () => {
+test("retail gutters-only job with trees: $12/ft, guards + drains offered, no lighting", () => {
   const r = buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters"] });
-  assert.equal(r.total, 3147.92);
+  assert.ok(Math.abs(r.total - 1800) <= 0.05, String(r.total));
   const items = flat(r.lines).filter((l) => l._type === "costItem");
   assert.equal(items.find((i) => i.name.startsWith('5" K-style')).quantity, 150);
   assert.equal(items.find((i) => i.name === "2x3 downspout - material").quantity, 98);
@@ -53,7 +53,7 @@ test("GC bid: related upgrades only (guards if trees, drains), never lighting, n
   assert.ok(names.includes("In-Ground Drain for Downspouts"));
   assert.ok(!names.some((n) => /lighting/i.test(n)));
   assert.ok(!names.some((n) => n.startsWith('6"')));
-  assert.equal(r.total, 3147.92, "upgrades stay optional — not in the total");
+  assert.ok(Math.abs(r.total - 1575) <= 0.05, "upgrades stay optional — not in the total");
   const noTrees = groupNames(buildGutterLines(assembly, { ...ans, trees: "no" }, gc));
   assert.ok(!noTrees.some((n) => /guards/i.test(n)), "no guards without trees");
   assert.ok(!questionsFor("gutters", gc, { gutters: ans }).some((q) => q.key === "lightingLF"));
@@ -73,7 +73,7 @@ test("small job gets topped up to the $350 minimum", () => {
   const min = flat(r.lines).find((l) => l.name === "Small job minimum");
   assert.ok(min);
   assert.equal(r.total, 350);
-  assert.equal(Math.round((15 * 6.58 + 15 * 5 + min.unitPrice) * 100) / 100, 350);
+  assert.ok(min.unitPrice > 0);
 });
 
 test("only gutter footage is required; blanks count as zero", () => {
@@ -147,7 +147,7 @@ test("drains: $500 standard / $630 high capacity, roof downspouts skipped, extra
   const groups = flat(r.lines).filter((l) => l._type === "costGroup");
   assert.ok(groups.find((g) => g.name.startsWith("Standard In-Ground Drain")).isSelected);
   assert.ok(!flat(r.lines).some((l) => /extended drain run|additional drain pipe/i.test(l.name)));
-  assert.equal(r.total, 3147.92, "drains stay optional");
+  assert.ok(Math.abs(r.total - 1575) <= 0.05, "drains stay optional");
 
   const long = buildGutterLines(assembly, { ...ans, drains: 2, drainsPast8: 1, drainExtraLF: 6 }, b);
   const ext = flat(long.lines).find((l) => /extended drain run/i.test(l.name));
@@ -170,4 +170,16 @@ test("optional upgrades say how many options are actually on the bid", () => {
   assert.equal(up(buildGutterLines(assembly, { ...ans, trees: "no" }, b)).maxSelectionsAllowed, 1); // drains only
   assert.equal(up(buildGutterLines(assembly, ans, b)).maxSelectionsAllowed, 2); // guards + drains
   assert.equal(up(buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters", "siding"] })).maxSelectionsAllowed, 3);
+});
+
+test("per-foot rates: GC $10.50/ft, retail $12/ft, costs untouched, upgrades keep their prices", () => {
+  const gc = buildGutterLines(assembly, ans, { customerType: "gc", trades: ["gutters"] });
+  assert.ok(Math.abs(gc.total - 1575) <= 0.05, String(gc.total));
+  const retail = buildGutterLines(assembly, ans, { customerType: "retail", trades: ["gutters"] });
+  assert.ok(Math.abs(retail.total - 1800) <= 0.05, String(retail.total));
+  const items = flat(retail.lines).filter((l) => l._type === "costItem");
+  assert.equal(items.find((i) => i.name === "Gutter install - labor").unitCost, 2, "costs stay real");
+  assert.equal(priceOf(retail.lines, "Standard In-Ground Drain (9x9 catch basin)"), 3000, "drain upgrade still $500 each");
+  const small = buildGutterLines(assembly, { gutterLF: 20, oneStory: 1 }, { customerType: "gc", trades: ["gutters"] });
+  assert.equal(small.total, 350, "minimum still applies");
 });
