@@ -15,6 +15,11 @@ export const ASSEMBLIES = {
 };
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 const GUTTER_MINIMUM = 350;
+// Sean's all-in gutter price per foot of gutter (downspouts, miters and
+// tear-off included). The line items keep their real costs; their prices
+// are scaled so the base bid comes to exactly rate x gutter footage.
+// Upgrade options keep their own prices.
+export const GUTTER_RATE_PER_FT = { gc: 10.5, retail: 12, insurance: 12 };
 const UTAH_TAX_RATE = 0.0745; // line items are non-taxable; kept to match existing proposals
 const GUTTERS_COST_CODE = "22PiKU5iG4cy";
 const OTHER_COST_TYPE = "22PJfnqzbFfM";
@@ -214,6 +219,7 @@ export function buildGutterLines(assembly, answers, basics) {
     dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
   });
   fitOptionalLimits(lines);
+  applyPerFootRate(lines, GUTTER_RATE_PER_FT[basics?.customerType] ?? GUTTER_RATE_PER_FT.retail, Number(answers.gutterLF || 0));
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {
     lines[0].lineItems.push({
@@ -233,6 +239,58 @@ export function buildGutterLines(assembly, answers, basics) {
     });
   }
   return { lines, params, total: Math.max(total, total > 0 ? GUTTER_MINIMUM : 0) };
+}
+
+// Scales the base (non-upgrade) line prices so what the customer gets by
+// default totals rate x footage. Lines in the unpicked size option scale the
+// same way, so the 5"/6" price difference stays proportional.
+export function applyPerFootRate(lines, rate, footage) {
+  if (!rate || !footage) return;
+  const base = [];
+  const collect = (list, inUpgrades) => {
+    for (const l of list) {
+      if (l._type === "costItem") {
+        if (!inUpgrades) base.push(l);
+      } else {
+        collect(l.lineItems || [], inUpgrades || /optional upgrades/i.test(l.name));
+      }
+    }
+  };
+  collect(lines, false);
+  const current = selectedPriceTotal(stripUpgrades(lines));
+  if (!current) return;
+  const target = Math.round(rate * footage * 100) / 100;
+  const factor = target / current;
+  for (const l of base) l.unitPrice = Math.round(Number(l.unitPrice || 0) * factor * 100) / 100;
+  // put the rounding cents on one line so the total lands on the rate
+  const drift = Math.round((target - selectedPriceTotal(stripUpgrades(lines))) * 100) / 100;
+  if (drift) {
+    const selected = [];
+    const walk = (list, parentIsSet) => {
+      for (const l of list) {
+        if (l._type === "costItem") {
+          selected.push(l);
+        } else {
+          if (parentIsSet && !l.isSelected) continue;
+          if (/optional upgrades/i.test(l.name)) continue;
+          walk(l.lineItems || [], l.maxSelectionsAllowed != null || l.minSelectionsRequired != null);
+        }
+      }
+    };
+    walk(lines, false);
+    // the selected line with the smallest quantity absorbs it most exactly
+    // (prices are whole cents, so the total can still be off by a cent or two)
+    const pick = selected.filter((l) => Number(l.quantity) > 0).sort((a, b) => a.quantity - b.quantity)[0];
+    if (pick) pick.unitPrice = Math.round((pick.unitPrice + drift / pick.quantity) * 100) / 100;
+  }
+}
+
+function stripUpgrades(lines) {
+  return lines.map((l) =>
+    l._type === "costGroup"
+      ? { ...l, lineItems: stripUpgrades((l.lineItems || []).filter((c) => !/optional upgrades/i.test(c.name))) }
+      : l
+  );
 }
 
 // An optional-choices group ("Optional Upgrades", min 0) shows "select up to
