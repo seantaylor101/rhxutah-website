@@ -447,3 +447,26 @@ test("painting: $4/sq ft repaint, $7/ft eaves (cheaper cost with a repaint), doo
   assert.equal(eaves.total, 500);
   assert.ok(!hasPaintingWork({}));
 });
+
+test("drainage on its own: $500 per drain, 12x12 as an option, extra pipe and footage past 8 ft", async () => {
+  const { buildDrainageLines } = await import("./estimateDraft.js");
+  const { upgradesFor } = await import("../../shared/tradeQuestions.js");
+  const grp = (id, name, parent, extra = {}) => ({ id, name, parentCostGroup: { id: parent }, position: "m", isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true, ...extra });
+  const item = (id, name, g, f, c, p) => ({ id, name, costGroup: { id: g }, position: "m", quantity: null, quantityFormula: f, unitCost: c, unitPrice: p, isTaxable: false, showQuantity: true, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null });
+  const asm = { id: "dr", name: "In-Ground Drains", position: null, isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true,
+    descendentCostGroups: { nodes: [grp("sz", "Drain Size", "dr", { minSelectionsRequired: 1, maxSelectionsAllowed: 1, showChildDeltas: true }), grp("s9", "Standard In-Ground Drain (9x9 catch basin)", "sz", { isSelected: true }), grp("s12", "Higher-Capacity In-Ground Drain (12x12 catch basin)", "sz")] },
+    descendentCostItems: { nodes: [
+      item("a", "In-ground drain - labor", "s9", "{In-Ground Drains}", 100, 250),
+      item("b", "In-ground drain kit, 9x9 basin - material", "s9", "{In-Ground Drains}", 115.35, 250),
+      item("c", "In-ground drain, higher capacity (12x12) - labor", "s12", "{In-Ground Drains}", 100, 300),
+      item("d", "In-ground drain kit, 12x12 basin - material", "s12", "{In-Ground Drains}", 150.03, 330),
+      item("e", "Extended drain run past 8 ft - labor", "dr", "{Drain Extra LF}", 5, 15),
+      item("f", "Additional drain pipe section (10 ft) - material", "dr", "{Drain Extra Pipe Sections}", 26.3, 35),
+    ] } };
+  assert.equal(buildDrainageLines(asm, { drains: 3 }).total, 1500);
+  assert.equal(buildDrainageLines(asm, { drains: 2, drainExtraLF: 12 }).total, 1000 + 2 * 35 + 12 * 15);
+  // with Drainage as its own trade, the gutter bid doesn't also offer drains
+  const g = { gutters: { gutterLF: 100, oneStory: 2 } };
+  assert.equal(upgradesFor({ trades: ["gutters"] }, g).drains, true);
+  assert.equal(upgradesFor({ trades: ["gutters", "drainage"] }, g).drains, false);
+});

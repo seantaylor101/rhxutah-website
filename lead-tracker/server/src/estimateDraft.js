@@ -27,6 +27,7 @@ export const ASSEMBLIES = {
   stucco: { id: "22PiLznBbZJs", name: "Stucco" },
   soffitFascia: { id: "22PiMNbFW8gC", name: "Aluminum Soffit & Fascia" },
   painting: { id: "22PiMST4Jc9E", name: "Exterior Painting" },
+  drainage: { id: "22PiMTePxQft", name: "In-Ground Drains" },
 };
 
 // painting prices (same for retail and GC); costs come from the catalog
@@ -597,6 +598,31 @@ export function buildPaintingLines(assembly, answers) {
   return { lines, params, total: Math.max(total, total > 0 ? PAINTING_MINIMUM : 0) };
 }
 
+export function drainageParams(answers = {}) {
+  const n = (k) => Math.max(0, Number(answers[k] || 0));
+  const extraLF = n("drainExtraLF");
+  return {
+    "In-Ground Drains": n("drains"),
+    // one more pipe section per drain past 8 ft; if only the footage is
+    // known, one section per 10 ft of it
+    "Drain Extra Pipe Sections": n("drainsPast8") || Math.ceil(extraLF / 10),
+    "Drain Extra LF": extraLF,
+  };
+}
+
+// catalog prices as they are: $500 a standard drain, $630 for the 12x12
+// option, $35 per extra pipe section, $15/ft past 8 ft
+export function buildDrainageLines(assembly, answers) {
+  const params = drainageParams(answers);
+  let lines = assemblyToLineItems(assembly, {
+    params,
+    selectGroup: (g) => (/9x9/i.test(g.name) ? true : /12x12/i.test(g.name) ? false : undefined),
+    dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
+  });
+  lines = pruneEmpty(lines);
+  return { lines, params, total: selectedPriceTotal(lines) };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -614,14 +640,16 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const doStucco = trades.includes("stucco") && hasStuccoWork(answers.stucco);
   const doSoffit = trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia);
   const doPainting = trades.includes("painting") && hasPaintingWork(answers.painting);
-  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting) throw new Error("None of the work on this lead is automated yet");
+  const doDrainage = trades.includes("drainage") && Number(answers.drainage?.drains) > 0;
+  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting && !doDrainage) throw new Error("None of the work on this lead is automated yet");
 
-  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, jobData, templateData] = await Promise.all([
+  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, drainageAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
     doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
     doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
     doSoffit ? fetchAssembly(ASSEMBLIES.soffitFascia.id) : null,
     doPainting ? fetchAssembly(ASSEMBLIES.painting.id) : null,
+    doDrainage ? fetchAssembly(ASSEMBLIES.drainage.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -649,7 +677,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const lines = [];
   const params = {};
   let total = 0;
-  // siding, stucco, soffit & fascia, painting, then gutters — the order the work goes on the house
+  // siding, stucco, soffit & fascia, painting, gutters, then drains — the order the work goes on the house
   if (doSiding) {
     const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
     lines.push(...r.lines);
@@ -676,6 +704,12 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   }
   if (doGutters) {
     const r = buildGutterLines(gutterAssembly, answers.gutters || {}, basics, { accountId: job.location.account.id });
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doDrainage) {
+    const r = buildDrainageLines(drainageAssembly, answers.drainage || {});
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;
