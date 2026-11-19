@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "./api.js";
-import { TRADE_QUESTIONS, AUTOMATED_TRADES, questionsFor, missingTradeAnswers, upgradesFor } from "../../shared/tradeQuestions.js";
+import {
+  TRADE_QUESTIONS,
+  AUTOMATED_TRADES,
+  AUTOMATED_SIDING,
+  questionsFor,
+  missingTradeAnswers,
+  upgradesFor,
+  sidingProduct,
+} from "../../shared/tradeQuestions.js";
 import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
@@ -8700,7 +8708,9 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
   const estimates = (lead.jobtread && lead.jobtread.estimates) || [];
 
   const missingAll = trades.flatMap((t) => missingTradeAnswers(t, answers[t], basics));
-  const ready = trades.length > 0 && missingAll.length === 0;
+  // something on this lead has to be draftable (siding only when it's LP)
+  const draftable = trades.some((t) => t !== "siding" || AUTOMATED_SIDING.includes(sidingProduct(answers)));
+  const ready = draftable && missingAll.length === 0;
 
   const saveNumber = (trade, key) => {
     const id = `${trade}.${key}`;
@@ -8796,7 +8806,12 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           })}
         </div>
       ))}
-      {notAutomated.length > 0 && trades.length > 0 && (
+      {trades.includes("siding") && !AUTOMATED_SIDING.includes(sidingProduct(answers)) && (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.rust, marginTop: 10 }}>
+          Only LP SmartSide siding is automated so far — the draft will leave siding out. Add it in JobTread.
+        </div>
+      )}
+            {notAutomated.length > 0 && trades.length > 0 && (
         <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
           Not automated yet: add the rest of the work in JobTread after the draft is built.
         </div>
@@ -8806,7 +8821,13 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
             {(() => {
               const o = upgradesFor(basics, answers);
-              const names = [o.guards && "gutter guards", o.drains && "in-ground drains", o.lighting && "permanent lighting"].filter(Boolean);
+              const names = [
+                o.guards && "gutter guards",
+                o.drains && "in-ground drains",
+                o.lighting && "permanent lighting",
+                o.insulatedWrap && "insulated reflective house wrap",
+                o.emeraldPaint && "Emerald Rain Refresh paint",
+              ].filter(Boolean);
               return names.length
                 ? `Optional upgrades on this bid: ${names.join(", ")}.`
                 : "No upgrade options fit this job.";

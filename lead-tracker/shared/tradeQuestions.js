@@ -6,8 +6,8 @@
 // Blank answers count as zero (or the default noted in the label); only
 // what's truly needed to price the job is required.
 //
-// Only gutters is automated so far; other trades are added as their JobTread
-// assemblies are built.
+// Automated so far: gutters, and siding when the product is LP SmartSide.
+// Other trades and products are added as their JobTread assemblies are built.
 
 export const TRADE_QUESTIONS = {
   gutters: {
@@ -87,9 +87,66 @@ export const TRADE_QUESTIONS = {
       },
     ],
   },
+  siding: {
+    label: "Siding",
+    questions: [
+      {
+        key: "product",
+        label: "Siding product (blank = LP SmartSide)",
+        type: "single",
+        required: false,
+        options: [
+          { key: "lp", label: "LP SmartSide" },
+          { key: "hardie", label: "Hardie (not automated yet)" },
+          { key: "vinyl", label: "Vinyl (not automated yet)" },
+          { key: "ascend", label: "Ascend (not automated yet)" },
+        ],
+      },
+      {
+        key: "wallSF",
+        label: "Wall area (sq ft, no window deductions; 10% is added)",
+        type: "number",
+        required: true,
+        param: "Wall SF",
+      },
+      {
+        key: "tearOff",
+        label: "What comes off (blank = from the existing exterior)",
+        type: "single",
+        required: false,
+        options: [
+          { key: "none", label: "Nothing" },
+          { key: "vinyl", label: "Vinyl / aluminum" },
+          { key: "wood", label: "Wood / difficult" },
+          { key: "stucco", label: "Stucco" },
+        ],
+      },
+      { key: "tearOffSF", label: "Tear-off area (sq ft, blank = wall area)", type: "number", required: false },
+      { key: "resheathSF", label: "Resheathing (sq ft, only if needed)", type: "number", required: false, param: "Resheathing SF" },
+      { key: "dumpsters", label: "Dumpsters (blank = 1 when there's tear-off)", type: "number", required: false },
+    ],
+  },
 };
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
+
+// siding is only drafted for the products with a JobTread assembly
+export const AUTOMATED_SIDING = ["lp"];
+export function sidingProduct(answers = {}) {
+  return answers?.siding?.product || "lp";
+}
+
+// what's coming off the walls: the answer, or a guess from the existing
+// exterior in the basics
+export function tearOffType(basics = {}, siding = {}) {
+  if (siding.tearOff) return siding.tearOff;
+  const ext = new Set(basics.existingExterior || []);
+  if (ext.has("newConstruction")) return "none";
+  if (ext.has("stucco")) return "stucco";
+  if (ext.has("wood") || ext.has("fiberCement") || ext.has("lp")) return "wood";
+  if (ext.has("vinyl") || ext.has("aluminum")) return "vinyl";
+  return "none";
+}
 
 // drains to offer: what was entered, or one per downspout that reaches the
 // ground (downspouts draining onto a roof don't get one)
@@ -105,14 +162,21 @@ export function defaultDrainCount(g = {}) {
 //   in-ground drains: gutter jobs with downspouts that reach the ground
 //   permanent lighting: retail remodels that include siding (never a
 //     gutters-only job or a GC bid)
+//   insulated reflective house wrap: siding jobs
+//   Emerald Rain Refresh paint: GC siding bids (retail already gets it)
 export function upgradesFor(basics, answers = {}) {
   const trades = new Set(basics?.trades || []);
   const retail = (basics?.customerType || "") !== "gc";
   const gutters = trades.has("gutters");
+  const siding = trades.has("siding");
   return {
     guards: gutters && answers?.gutters?.trees === "yes",
     drains: gutters && defaultDrainCount(answers?.gutters) > 0,
-    lighting: gutters && retail && trades.has("siding"),
+    lighting: gutters && retail && siding,
+    // siding jobs: insulated wrap for everyone; Emerald is the paint upgrade
+    // on GC bids (retail bids already get Emerald)
+    insulatedWrap: siding,
+    emeraldPaint: siding && !retail,
   };
 }
 
