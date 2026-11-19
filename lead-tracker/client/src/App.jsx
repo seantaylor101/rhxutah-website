@@ -8806,11 +8806,6 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           })}
         </div>
       ))}
-      {trades.includes("siding") && !AUTOMATED_SIDING.includes(sidingProduct(answers)) && (
-        <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.rust, marginTop: 10 }}>
-          Only LP SmartSide siding is automated so far — the draft will leave siding out. Add it in JobTread.
-        </div>
-      )}
             {notAutomated.length > 0 && trades.length > 0 && (
         <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 10 }}>
           Not automated yet: add the rest of the work in JobTread after the draft is built.

@@ -42,7 +42,7 @@ function workLabel(basics, answers = {}) {
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
   const phrases = (basics.trades || []).map((k) => {
     if (k === "gutters") return "new gutters and downspouts";
-    if (k === "siding") return SIDING_PHRASE[answers?.siding?.product || "lp"];
+    if (k === "siding") return SIDING_PHRASE[answers?.siding?.product] || "new siding";
     return trades.options.find((o) => o.key === k)?.label.toLowerCase();
   });
   const list_ = phrases.filter(Boolean);

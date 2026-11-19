@@ -256,7 +256,7 @@ test("draftEstimate: siding + gutters on one proposal, siding first", async () =
   await draftEstimate({
     lead: { name: "Pat Doe", address: "1 Main, Lehi", phone: "", email: "" },
     basics: { customerType: "retail", trades: ["siding", "gutters"], existingExterior: ["vinyl"] },
-    answers: { siding: { wallSF: 1800 }, gutters: ans },
+    answers: { siding: { product: "lp", wallSF: 1800 }, gutters: ans },
     link: { jobId: "j" },
   });
   const doc = calls.find((c) => c.createDocument).createDocument.$;
@@ -304,4 +304,10 @@ test("vinyl metal wraps are priced on their own, only when entered", () => {
   assert.ok(!questionsFor("siding", b, { siding: { product: "lp" } }).some((q) => q.key === "metalWraps"));
   // no Emerald upgrade on factory-finished siding
   assert.ok(!upgradesFor({ customerType: "gc", trades: ["siding"] }, { siding: { product: "ascend" } }).emeraldPaint);
+});
+
+test("siding product has no default — it has to be picked", () => {
+  const b = { customerType: "retail", trades: ["siding"] };
+  assert.deepEqual(missingTradeAnswers("siding", { wallSF: 1500 }, b).map((m) => m.key), ["product"]);
+  assert.deepEqual(missingTradeAnswers("siding", { wallSF: 1500, product: "vinyl" }, b), []);
 });
