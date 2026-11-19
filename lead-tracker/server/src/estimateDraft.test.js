@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { buildGutterLines, draftEstimate, evalFormula, mergeParameters, billedFootage } from "./estimateDraft.js";
+import {
+  buildGutterLines,
+  buildLpSidingLines,
+  sidingParams,
+  draftEstimate,
+  evalFormula,
+  mergeParameters,
+  billedFootage,
+} from "./estimateDraft.js";
 import { missingTradeAnswers, cleanTradeAnswers, questionsFor } from "../../shared/tradeQuestions.js";
 
 process.env.JOBTREAD_GRANT_KEY = "test-key";
@@ -201,4 +209,57 @@ test("per-foot rates on gutter + downspout footage: Erick $7.50, other GCs $8.50
 test("insurance gutters: $10.50/ft for 5-inch", () => {
   const r = buildGutterLines(assembly, ans, { customerType: "insurance", trades: ["gutters"] });
   assert.ok(Math.abs(r.total - 2604) <= 0.05, String(r.total)); // 248 ft x $10.50
+});
+
+const lpAssembly = JSON.parse(fs.readFileSync(new URL("./__fixtures__/lpSidingAssembly.json", import.meta.url)));
+
+test("LP siding: retail $14 / GC $12 per sq ft on wall area + 10%, tear-off and dumpster on top", () => {
+  const near = (a, b) => Math.abs(a - b) <= 0.1;
+  const retail = buildLpSidingLines(lpAssembly, { wallSF: 2000 }, { customerType: "retail", trades: ["siding"], existingExterior: ["vinyl"] });
+  assert.ok(near(retail.total, 30800 + 2000 * 0.9 + 440), String(retail.total));
+  const names = flat(retail.lines).map((l) => l.name);
+  assert.ok(!names.includes("Contractor-Grade Paint"), "retail gets Emerald only");
+  assert.ok(names.includes("Insulated Reflective House Wrap"));
+  const gc = buildLpSidingLines(lpAssembly, { wallSF: 2000 }, { customerType: "gc", trades: ["siding"], existingExterior: ["newConstruction"] });
+  assert.ok(near(gc.total, 26400), String(gc.total));
+  const gcGroups = flat(gc.lines).filter((l) => l._type === "costGroup");
+  assert.ok(gcGroups.find((g) => g.name === "Contractor-Grade Paint").isSelected);
+  assert.ok(!gcGroups.find((g) => g.name === "Sherwin-Williams Emerald Rain Refresh").isSelected, "Emerald is the GC upgrade choice");
+  assert.ok(!gcGroups.some((g) => /tear-off/i.test(g.name)), "new construction: no tear-off section");
+  // costs stay real
+  assert.equal(flat(gc.lines).find((l) => /install/.test(l.name)).unitCost, 2.5);
+});
+
+test("LP siding params: tear-off type from the basics, dumpster when there's tear-off", () => {
+  assert.deepEqual(sidingParams({ wallSF: 1500 }, { existingExterior: ["wood"] }), {
+    "Wall SF": 1500, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1,
+  });
+  assert.equal(sidingParams({ wallSF: 1500, tearOff: "none" }, { existingExterior: ["wood"] }).Dumpsters, 0);
+  assert.equal(sidingParams({ wallSF: 1500, tearOffSF: 600 }, { existingExterior: ["stucco"] })["Stucco Tear-off SF"], 600);
+});
+
+test("draftEstimate: siding + gutters on one proposal, siding first", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const q = JSON.parse(opts.body).query;
+    calls.push(q);
+    let out = {};
+    if (q.costGroup) out = { costGroup: q.costGroup.$.id === "22PiLt4qNebY" ? lpAssembly : assembly };
+    else if (q.job) out = { job: { parameters: null, location: { name: "1 Main", address: "1 Main, Lehi", account: { id: "acc", name: "Pat" } } } };
+    else if (q.documentTemplate) out = { documentTemplate: { dueDays: 30 } };
+    else if (q.createDocument) out = { createDocument: { createdDocument: { id: "d", fullName: "Proposal 1-1", status: "draft", price: 1 } } };
+    return { ok: true, status: 200, text: async () => JSON.stringify(out) };
+  };
+  await draftEstimate({
+    lead: { name: "Pat Doe", address: "1 Main, Lehi", phone: "", email: "" },
+    basics: { customerType: "retail", trades: ["siding", "gutters"], existingExterior: ["vinyl"] },
+    answers: { siding: { wallSF: 1800 }, gutters: ans },
+    link: { jobId: "j" },
+  });
+  const doc = calls.find((c) => c.createDocument).createDocument.$;
+  assert.deepEqual(doc.lineItems.map((l) => l.name), ["LP SmartSide Siding System", "Seamless Gutter System"]);
+  assert.match(doc.emailMessage, /new LP SmartSide siding and new gutters and downspouts/);
+  assert.match(doc.emailMessage, /insulated reflective house wrap/);
+  const params = calls.find((c) => c.updateJob).updateJob.$.parameters;
+  assert.ok(params.some((p) => p.name === "Wall SF" && p.value === 1800) && params.some((p) => p.name === "Gutter LF"));
 });

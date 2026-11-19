@@ -36,11 +36,17 @@ function list(items) {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-function workLabel(basics) {
+const SIDING_PHRASE = { lp: "new LP SmartSide siding", hardie: "new James Hardie siding", vinyl: "new vinyl siding", ascend: "new Ascend siding" };
+
+function workLabel(basics, answers = {}) {
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
-  const labels = (basics.trades || []).map((k) => trades.options.find((o) => o.key === k)?.label.toLowerCase()).filter(Boolean);
-  if (labels.length === 1 && labels[0] === "gutters") return "new gutters and downspouts";
-  return labels.length ? list(labels) : "the exterior work";
+  const phrases = (basics.trades || []).map((k) => {
+    if (k === "gutters") return "new gutters and downspouts";
+    if (k === "siding") return SIDING_PHRASE[answers?.siding?.product || "lp"];
+    return trades.options.find((o) => o.key === k)?.label.toLowerCase();
+  });
+  const list_ = phrases.filter(Boolean);
+  return list_.length ? list(list_) : "the exterior work";
 }
 
 // one sentence on the upgrade options, saying why each one is there — like
@@ -51,16 +57,20 @@ export function upgradeSentence(offered, { gc = false } = {}) {
   if (offered.guards) items.push({ name: "gutter guards", why: "to cut down on maintenance with the trees on the property" });
   if (offered.drains) items.push({ name: "in-ground drains", why: "to carry the downspout water away from the foundation" });
   if (offered.lighting) items.push({ name: "permanent holiday lighting", why: "since we'll already be up on the eaves" });
+  if (offered.insulatedWrap) {
+    items.push({ name: "an insulated reflective house wrap", why: "to help keep the walls cooler in summer and warmer in winter" });
+  }
+  if (offered.emeraldPaint) items.push({ name: "Sherwin-Williams Emerald Rain Refresh paint", why: "" });
   if (!items.length) return "";
   if (gc) return `I added ${list(items.map((i) => i.name))} as ${items.length === 1 ? "an option" : "options"}.`;
   const [first, ...rest] = items;
-  const more = rest.map((i) => `${i.name} ${i.why}`);
-  return `I also added ${first.name} as an option ${first.why}${more.length ? `, as well as ${list(more)}` : ""}.`;
+  const more = rest.map((i) => `${i.name}${i.why ? ` ${i.why}` : ""}`);
+  return `I also added ${first.name} as an option${first.why ? ` ${first.why}` : ""}${more.length ? `, as well as ${list(more)}` : ""}.`;
 }
 
-export function proposalMessage({ lead, basics, offered = {} }) {
+export function proposalMessage({ lead, basics, answers = {}, offered = {} }) {
   const type = basics.customerType || "retail";
-  const work = workLabel(basics);
+  const work = workLabel(basics, answers);
   const city = cityOf(lead.address);
   const street = String(lead.address || "").split(/[,\n]/)[0].trim();
   const homeowner = String(basics.homeownerName || "").trim();

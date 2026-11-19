@@ -8,11 +8,29 @@
 
 import { pave } from "./jobtread.js";
 import { proposalMessage } from "./proposalMessage.js";
-import { TRADE_QUESTIONS, upgradesFor, defaultDrainCount } from "../../shared/tradeQuestions.js";
+import {
+  TRADE_QUESTIONS,
+  upgradesFor,
+  defaultDrainCount,
+  sidingProduct,
+  tearOffType,
+  AUTOMATED_SIDING,
+} from "../../shared/tradeQuestions.js";
 
 export const ASSEMBLIES = {
   gutters: { id: "22PiKu7hJgmr", name: "Seamless Gutter System" },
+  siding_lp: { id: "22PiLt4qNebY", name: "LP SmartSide Siding System" },
 };
+
+// Siding prices per square foot, charged on the wall area plus 10% (Sean's
+// waste rule, applied to material and labor alike). Covers siding, trim,
+// house wrap, sundries and paint; tear-off, resheathing and the dumpster are
+// priced on their own, and upgrades keep their own prices. LP never comes
+// through insurance, so insurance leads get the retail rate.
+export const SIDING_RATES = {
+  lp: { retail: 14, insurance: 14, gc: 12 },
+};
+export const SIDING_WASTE = 1.1;
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 const GUTTER_MINIMUM = 350;
 // Sean's gutter prices, per foot of gutter PLUS downspout (he bills the
@@ -320,6 +338,79 @@ export function fitOptionalLimits(lines) {
   }
 }
 
+export function sidingParams(answers = {}, basics = {}) {
+  const wall = Number(answers.wallSF || 0);
+  const type = tearOffType(basics, answers);
+  const tearSF = type === "none" ? 0 : Number(answers.tearOffSF ?? wall) || 0;
+  const dumpsters =
+    answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : tearSF > 0 ? 1 : 0;
+  return {
+    "Wall SF": wall,
+    "Vinyl Tear-off SF": type === "vinyl" ? tearSF : 0,
+    "Wood Tear-off SF": type === "wood" ? tearSF : 0,
+    "Stucco Tear-off SF": type === "stucco" ? tearSF : 0,
+    "Resheathing SF": Number(answers.resheathSF || 0),
+    Dumpsters: dumpsters,
+  };
+}
+
+// drops groups left with nothing in them (e.g. tear-off on new construction)
+function pruneEmpty(lines) {
+  return lines
+    .map((l) => (l._type === "costGroup" ? { ...l, lineItems: pruneEmpty(l.lineItems || []) } : l))
+    .filter((l) => l._type !== "costGroup" || (l.lineItems || []).length > 0);
+}
+
+export function buildLpSidingLines(assembly, answers, basics) {
+  const isGc = (basics?.customerType || "") === "gc";
+  const offered = upgradesFor(basics, { siding: answers });
+  const params = sidingParams(answers, basics);
+  let lines = assemblyToLineItems(assembly, {
+    params,
+    selectGroup: (g) => {
+      // retail gets Emerald; GC bids are priced on contractor-grade paint
+      // with Emerald shown as the upgrade
+      if (/emerald/i.test(g.name)) return !isGc;
+      if (/contractor-grade/i.test(g.name)) return isGc;
+      return undefined;
+    },
+    dropGroup: (g) =>
+      (!isGc && /contractor-grade/i.test(g.name)) ||
+      (/optional upgrades/i.test(g.name) && !offered.insulatedWrap) ||
+      (/insulated reflective/i.test(g.name) && !offered.insulatedWrap),
+    // tear-off, resheathing and dumpster lines only when they apply
+    dropItem: (i, qty) => /tear off|sheathing|dumpster/i.test(i.name) && !qty,
+  });
+  lines = pruneEmpty(lines);
+  fitOptionalLimits(lines);
+
+  // price the base bid at the per-square-foot rate on wall area + 10%
+  const rate = (SIDING_RATES.lp[basics?.customerType] ?? SIDING_RATES.lp.retail);
+  const billedSF = params["Wall SF"] * SIDING_WASTE;
+  const shared = [];
+  const paint = { picked: [], other: [] };
+  const collect = (list, bucket) => {
+    for (const l of list) {
+      if (l._type === "costItem") bucket.push(l);
+      else if (/optional upgrades|tear-off/i.test(l.name)) continue;
+      else if (/emerald|contractor-grade/i.test(l.name)) collect(l.lineItems || [], l.isSelected ? paint.picked : paint.other);
+      else collect(l.lineItems || [], bucket);
+    }
+  };
+  collect(lines, shared);
+  const sum = (arr) => arr.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
+  const before = sum(shared) + sum(paint.picked);
+  if (billedSF && before) {
+    const target = rate * billedSF;
+    const f = target / before;
+    for (const l of [...shared, ...paint.picked, ...paint.other]) {
+      l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100;
+    }
+    absorbCents([...paint.picked, ...shared], target - sum(shared) - sum(paint.picked));
+  }
+  return { lines, params, total: selectedPriceTotal(lines) };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -330,11 +421,14 @@ export function mergeParameters(existing, params) {
 
 // creates the draft Proposal on the job; returns { documentId, fullName, total }
 export async function draftEstimate({ lead, basics, answers, link }) {
-  const trades = (basics.trades || []).filter((t) => ASSEMBLIES[t]);
-  if (!trades.includes("gutters")) throw new Error("Only gutter estimates are automated so far");
+  const trades = basics.trades || [];
+  const doGutters = trades.includes("gutters");
+  const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(sidingProduct(answers));
+  if (!doGutters && !doSiding) throw new Error("None of the work on this lead is automated yet");
 
-  const [assembly, jobData, templateData] = await Promise.all([
-    fetchAssembly(ASSEMBLIES.gutters.id),
+  const [gutterAssembly, sidingAssembly, jobData, templateData] = await Promise.all([
+    doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
+    doSiding ? fetchAssembly(ASSEMBLIES.siding_lp.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -359,9 +453,22 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   if (!job) throw new Error("Couldn't find the JobTread job for this lead");
   const tpl = templateData?.documentTemplate || {};
 
-  const { lines, params, total } = buildGutterLines(assembly, answers.gutters || {}, basics, {
-    accountId: job.location.account.id,
-  });
+  const lines = [];
+  const params = {};
+  let total = 0;
+  // siding first, then gutters — the order the work goes on the house
+  if (doSiding) {
+    const r = buildLpSidingLines(sidingAssembly, answers.siding || {}, basics);
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doGutters) {
+    const r = buildGutterLines(gutterAssembly, answers.gutters || {}, basics, { accountId: job.location.account.id });
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
 
   await pave({ updateJob: { $: { id: link.jobId, parameters: mergeParameters(job.parameters, params) } } });
 
@@ -398,7 +505,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
         showCostItemFiles: tpl.showCostItemFiles ?? true,
         showQuantity: false,
         // pre-filled email for JobTread's Send screen, in Sean's words
-        emailMessage: proposalMessage({ lead, basics, offered: upgradesFor(basics, answers) }),
+        emailMessage: proposalMessage({ lead, basics, answers, offered: upgradesFor(basics, answers) }),
         lineItems: lines,
       },
       createdDocument: { id: {}, fullName: {}, status: {}, price: {} },
