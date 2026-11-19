@@ -33,7 +33,7 @@ export const ASSEMBLIES = {
 // Alex's $4/ft both or $2/ft one); prices are scaled to land on these rates.
 export const SOFFIT_FASCIA_RATES = { retail: 25, insurance: 25, gc: 22 };
 // porch caps (aluminum soffit ceilings), per sq ft; Alex $2/sq ft
-export const PORCH_CAP_RATES = { retail: 8, insurance: 8, gc: 8 };
+export const PORCH_CAP_RATES = { retail: 9, insurance: 9, gc: 9 };
 
 // Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
 // general repairs a flat $2,700 (cost $1,800); popout cut-backs $750 a
