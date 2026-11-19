@@ -63,12 +63,12 @@ const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 // footage (GC $250, Erick $220, insurance $305, 6" retail $440), rounded
 // to $5
 const GUTTER_MINIMUM_FEET = 350 / 12;
-// retail is a flat $500 minimum (5" or 6"), Sean's call
-const GUTTER_MINIMUM_BY_TYPE = { retail: 500 };
+// floors (Sean): never below $500 for retail or $350 for any GC, Erick included
+const GUTTER_MINIMUM_FLOOR = { retail: 500, gc: 350 };
 export function gutterMinimum(rates, six, customerType) {
-  if (GUTTER_MINIMUM_BY_TYPE[customerType]) return GUTTER_MINIMUM_BY_TYPE[customerType];
   const rate = rates[six ? 6 : 5] ?? rates[5];
-  return Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
+  const prorated = Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
+  return Math.max(prorated, GUTTER_MINIMUM_FLOOR[customerType] || 0);
 }
 // Sean's gutter prices, per foot of gutter PLUS downspout (he bills the
 // downspout footage too). Miters and tear-off are included. The line items
