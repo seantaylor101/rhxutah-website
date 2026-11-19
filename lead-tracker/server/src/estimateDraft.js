@@ -20,15 +20,24 @@ import {
 export const ASSEMBLIES = {
   gutters: { id: "22PiKu7hJgmr", name: "Seamless Gutter System" },
   siding_lp: { id: "22PiLt4qNebY", name: "LP SmartSide Siding System" },
+  siding_hardie: { id: "22PiLwHsrbUv", name: "James Hardie Siding System" },
+  siding_ascend: { id: "22PiLwLfsi72", name: "Alside Ascend Siding System" },
+  siding_vinyl: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
 };
 
 // Siding prices per square foot, charged on the wall area plus 10% (Sean's
 // waste rule, applied to material and labor alike). Covers siding, trim,
-// house wrap, sundries and paint; tear-off, resheathing and the dumpster are
-// priced on their own, and upgrades keep their own prices. LP never comes
-// through insurance, so insurance leads get the retail rate.
+// house wrap, sundries and paint (LP and Hardie); tear-off, resheathing, the
+// dumpster and metal wraps are priced on their own, and upgrades keep their
+// own prices. LP, Hardie and Ascend don't come through insurance, so those
+// get the retail rate on an insurance lead.
 export const SIDING_RATES = {
   lp: { retail: 14, insurance: 14, gc: 12 },
+  hardie: { retail: 14, insurance: 14, gc: 12 },
+  ascend: { retail: 12.5, insurance: 12.5, gc: 11 },
+  // vinyl insurance: adjusters pay about $6.75-7/sq ft all-in, so the base
+  // starts at $6 and tear-off + dumpster bring it to about $7
+  vinyl: { retail: 9, insurance: 6, gc: 8 },
 };
 export const SIDING_WASTE = 1.1;
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
@@ -353,6 +362,7 @@ export function sidingParams(answers = {}, basics = {}) {
     "Stucco Tear-off SF": type === "stucco" ? tearSF : 0,
     "Resheathing SF": Number(answers.resheathSF || 0),
     Dumpsters: dumpsters,
+    "Metal Wraps": Number(answers.metalWraps || 0),
   };
 }
 
@@ -363,7 +373,12 @@ function pruneEmpty(lines) {
     .filter((l) => l._type !== "costGroup" || (l.lineItems || []).length > 0);
 }
 
+// kept for the LP tests and callers
 export function buildLpSidingLines(assembly, answers, basics) {
+  return buildSidingLines(assembly, answers, basics, "lp");
+}
+
+export function buildSidingLines(assembly, answers, basics, product = "lp") {
   const isGc = (basics?.customerType || "") === "gc";
   const offered = upgradesFor(basics, { siding: answers });
   const params = sidingParams(answers, basics);
@@ -380,21 +395,22 @@ export function buildLpSidingLines(assembly, answers, basics) {
       (!isGc && /contractor-grade/i.test(g.name)) ||
       (/optional upgrades/i.test(g.name) && !offered.insulatedWrap) ||
       (/insulated reflective/i.test(g.name) && !offered.insulatedWrap),
-    // tear-off, resheathing and dumpster lines only when they apply
-    dropItem: (i, qty) => /tear off|sheathing|dumpster/i.test(i.name) && !qty,
+    // tear-off, resheathing, dumpster and metal wrap lines only when they apply
+    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap/i.test(i.name) && !qty,
   });
   lines = pruneEmpty(lines);
   fitOptionalLimits(lines);
 
   // price the base bid at the per-square-foot rate on wall area + 10%
-  const rate = (SIDING_RATES.lp[basics?.customerType] ?? SIDING_RATES.lp.retail);
+  const rates = SIDING_RATES[product] || SIDING_RATES.lp;
+  const rate = rates[basics?.customerType] ?? rates.retail;
   const billedSF = params["Wall SF"] * SIDING_WASTE;
   const shared = [];
   const paint = { picked: [], other: [] };
   const collect = (list, bucket) => {
     for (const l of list) {
       if (l._type === "costItem") bucket.push(l);
-      else if (/optional upgrades|tear-off/i.test(l.name)) continue;
+      else if (/optional upgrades|tear-off|metal wraps/i.test(l.name)) continue;
       else if (/emerald|contractor-grade/i.test(l.name)) collect(l.lineItems || [], l.isSelected ? paint.picked : paint.other);
       else collect(l.lineItems || [], bucket);
     }
@@ -425,12 +441,13 @@ export function mergeParameters(existing, params) {
 export async function draftEstimate({ lead, basics, answers, link }) {
   const trades = basics.trades || [];
   const doGutters = trades.includes("gutters");
-  const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(sidingProduct(answers));
+  const product = sidingProduct(answers);
+  const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
   if (!doGutters && !doSiding) throw new Error("None of the work on this lead is automated yet");
 
   const [gutterAssembly, sidingAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
-    doSiding ? fetchAssembly(ASSEMBLIES.siding_lp.id) : null,
+    doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -460,7 +477,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   let total = 0;
   // siding first, then gutters — the order the work goes on the house
   if (doSiding) {
-    const r = buildLpSidingLines(sidingAssembly, answers.siding || {}, basics);
+    const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;
