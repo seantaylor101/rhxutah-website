@@ -63,7 +63,10 @@ const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 // footage (GC $250, Erick $220, insurance $305, 6" retail $440), rounded
 // to $5
 const GUTTER_MINIMUM_FEET = 350 / 12;
-export function gutterMinimum(rates, six) {
+// retail is a flat $500 minimum (5" or 6"), Sean's call
+const GUTTER_MINIMUM_BY_TYPE = { retail: 500 };
+export function gutterMinimum(rates, six, customerType) {
+  if (GUTTER_MINIMUM_BY_TYPE[customerType]) return GUTTER_MINIMUM_BY_TYPE[customerType];
   const rate = rates[six ? 6 : 5] ?? rates[5];
   return Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
 }
@@ -292,7 +295,7 @@ export function buildGutterLines(assembly, answers, basics, { accountId } = {}) 
   fitOptionalLimits(lines);
   const rates = gutterRatesFor(basics, { accountId });
   applyPerFootRate(lines, rates, billedFootage(answers), six);
-  const GUTTER_MINIMUM = gutterMinimum(rates, six);
+  const GUTTER_MINIMUM = gutterMinimum(rates, six, accountId && CUSTOMER_GUTTER_RATES[accountId] ? "gc" : basics?.customerType || "retail");
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {
     lines[0].lineItems.push({
