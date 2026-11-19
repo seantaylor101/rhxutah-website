@@ -221,20 +221,22 @@ test("LP siding: retail $14 / GC $12 per sq ft on wall area + 10%, tear-off and 
   assert.ok(!names.includes("Contractor-Grade Paint"), "retail gets Emerald only");
   assert.ok(names.includes("Insulated Reflective House Wrap"));
   const gc = buildLpSidingLines(lpAssembly, { wallSF: 2000 }, { customerType: "gc", trades: ["siding"], existingExterior: ["newConstruction"] });
-  assert.ok(near(gc.total, 26400), String(gc.total));
+  assert.ok(near(gc.total, 26400 + 440), String(gc.total)); // dumpster even with no tear-off
   const gcGroups = flat(gc.lines).filter((l) => l._type === "costGroup");
   assert.ok(gcGroups.find((g) => g.name === "Contractor-Grade Paint").isSelected);
   assert.ok(!gcGroups.find((g) => g.name === "Sherwin-Williams Emerald Rain Refresh").isSelected, "Emerald is the GC upgrade choice");
-  assert.ok(!gcGroups.some((g) => /tear-off/i.test(g.name)), "new construction: no tear-off section");
+  assert.ok(!flat(gc.lines).some((l) => /tear off/i.test(l.name)), "new construction: no tear-off lines");
+  assert.ok(flat(gc.lines).some((l) => l.name === "Dumpster"), "dumpster on every siding job");
   // costs stay real
   assert.equal(flat(gc.lines).find((l) => /install/.test(l.name)).unitCost, 2.5);
 });
 
-test("LP siding params: tear-off type from the basics, dumpster when there's tear-off", () => {
+test("LP siding params: tear-off type from the basics, dumpster on every job", () => {
   assert.deepEqual(sidingParams({ wallSF: 1500 }, { existingExterior: ["wood"] }), {
     "Wall SF": 1500, "Vinyl Tear-off SF": 0, "Wood Tear-off SF": 1500, "Stucco Tear-off SF": 0, "Resheathing SF": 0, Dumpsters: 1,
   });
-  assert.equal(sidingParams({ wallSF: 1500, tearOff: "none" }, { existingExterior: ["wood"] }).Dumpsters, 0);
+  assert.equal(sidingParams({ wallSF: 1500, tearOff: "none" }, { existingExterior: ["wood"] }).Dumpsters, 1);
+  assert.equal(sidingParams({ wallSF: 1500, dumpsters: 0 }, {}).Dumpsters, 0);
   assert.equal(sidingParams({ wallSF: 1500, tearOffSF: 600 }, { existingExterior: ["stucco"] })["Stucco Tear-off SF"], 600);
 });
 
