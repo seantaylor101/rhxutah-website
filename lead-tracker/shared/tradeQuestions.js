@@ -93,9 +93,9 @@ export const TRADE_QUESTIONS = {
     questions: [
       {
         key: "product",
-        label: "Siding product (blank = LP SmartSide)",
+        label: "Siding product",
         type: "single",
-        required: false,
+        required: true,
         options: [
           { key: "lp", label: "LP SmartSide" },
           { key: "hardie", label: "James Hardie" },
@@ -143,8 +143,9 @@ export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
 export const AUTOMATED_SIDING = ["lp", "hardie", "ascend", "vinyl"];
 // products that get painted on site (the others have a factory finish)
 export const PAINTED_SIDING = ["lp", "hardie"];
+// no default: Sean picks what he's installing on every siding job
 export function sidingProduct(answers = {}) {
-  return answers?.siding?.product || "lp";
+  return answers?.siding?.product || null;
 }
 
 // what's coming off the walls: the answer, or a guess from the existing
