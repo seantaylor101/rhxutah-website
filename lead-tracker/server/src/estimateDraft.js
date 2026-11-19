@@ -47,6 +47,15 @@ export const SIDING_RATES = {
   // starts at $6 and tear-off + dumpster bring it to about $7
   vinyl: { retail: 9, insurance: 6, gc: 8 },
 };
+// board-and-batten and shake areas (LP and Hardie), priced per square foot
+// of that area + 10% instead of the lap rate. Set to keep about the same
+// margin as lap: panels, battens and shakes cost more, and Alex charges
+// $350/square for board-and-batten and $400 for shake vs $250 for lap.
+export const SIDING_STYLE_RATES = {
+  batten: { retail: 17.5, insurance: 17.5, gc: 15 },
+  shake: { retail: 25.5, insurance: 25.5, gc: 22 },
+};
+export const STYLED_SIDING = ["lp", "hardie"];
 export const SIDING_WASTE = 1.1;
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 const GUTTER_MINIMUM = 350;
@@ -198,7 +207,7 @@ export function assemblyToLineItems(
 // Evaluates the assembly formulas the way JobTread will ({Param} * numbers),
 // to total the selected (non-optional) lines for the minimum-charge check.
 export function evalFormula(formula, params) {
-  const expr = String(formula).replace(/\{([^}]+)\}/g, (_, name) => String(Number(params[name] ?? 0)));
+  const expr = String(formula).replace(/\{([^}]+)\}/g, (_, name) => `(${Number(params[name] ?? 0)})`);
   if (!/^[\d\s+\-*/().]+$/.test(expr)) return 0;
   // eslint-disable-next-line no-new-func
   const v = Function(`"use strict"; return (${expr});`)();
@@ -363,8 +372,14 @@ export function sidingParams(answers = {}, basics = {}) {
   // cut-off waste on install
   const dumpsters =
     answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : wall > 0 ? 1 : 0;
+  // board-and-batten and shake are part of the wall area (LP/Hardie only)
+  const styled = STYLED_SIDING.includes(answers.product);
+  const batten = styled ? Math.min(Number(answers.battenSF || 0), wall) : 0;
+  const shake = styled ? Math.min(Number(answers.shakeSF || 0), wall - batten) : 0;
   return {
     "Wall SF": wall,
+    "Batten SF": batten,
+    "Shake SF": shake,
     "Vinyl Tear-off SF": type === "vinyl" ? tearSF : 0,
     "Wood Tear-off SF": type === "wood" ? tearSF : 0,
     "Stucco Tear-off SF": type === "stucco" ? tearSF : 0,
@@ -404,7 +419,7 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
       (/optional upgrades/i.test(g.name) && !offered.insulatedWrap) ||
       (/insulated reflective/i.test(g.name) && !offered.insulatedWrap),
     // tear-off, resheathing, dumpster and metal wrap lines only when they apply
-    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap/i.test(i.name) && !qty,
+    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap|batten|panel|shingle|shake/i.test(i.name) && !qty,
   });
   lines = pruneEmpty(lines);
   fitOptionalLimits(lines);
@@ -412,6 +427,10 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
   // price the base bid at the per-square-foot rate on wall area + 10%
   const rates = SIDING_RATES[product] || SIDING_RATES.lp;
   const rate = rates[basics?.customerType] ?? rates.retail;
+  const batten = params["Batten SF"] || 0;
+  const shake = params["Shake SF"] || 0;
+  const lapSF = params["Wall SF"] - batten - shake;
+  const style = (k) => SIDING_STYLE_RATES[k][basics?.customerType] ?? SIDING_STYLE_RATES[k].retail;
   const billedSF = params["Wall SF"] * SIDING_WASTE;
   const shared = [];
   const paint = { picked: [], other: [] };
@@ -427,7 +446,7 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
   const sum = (arr) => arr.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
   const before = sum(shared) + sum(paint.picked);
   if (billedSF && before) {
-    const target = rate * billedSF;
+    const target = SIDING_WASTE * (rate * lapSF + style("batten") * batten + style("shake") * shake);
     const f = target / before;
     for (const l of [...shared, ...paint.picked, ...paint.other]) {
       l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100;

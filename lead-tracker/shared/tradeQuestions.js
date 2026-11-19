@@ -110,6 +110,21 @@ export const TRADE_QUESTIONS = {
         required: true,
         param: "Wall SF",
       },
+      // part of the wall area; priced higher than lap (LP and Hardie only)
+      {
+        key: "battenSF",
+        label: "Board-and-batten area (sq ft, part of the wall area)",
+        type: "number",
+        required: false,
+        products: ["lp", "hardie"],
+      },
+      {
+        key: "shakeSF",
+        label: "Shake area (sq ft, part of the wall area)",
+        type: "number",
+        required: false,
+        products: ["lp", "hardie"],
+      },
       {
         key: "tearOff",
         label: "What comes off (blank = from the existing exterior)",
