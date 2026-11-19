@@ -6,8 +6,8 @@
 // Blank answers count as zero (or the default noted in the label); only
 // what's truly needed to price the job is required.
 //
-// Automated so far: gutters, and siding in LP SmartSide, James Hardie,
-// Alside Ascend and vinyl. Other trades are added as their JobTread
+// Automated so far: gutters, stucco, and siding in LP SmartSide, James
+// Hardie, Alside Ascend and vinyl. Other trades are added as their JobTread
 // assemblies are built.
 
 export const TRADE_QUESTIONS = {
@@ -135,6 +135,48 @@ export const TRADE_QUESTIONS = {
       },
     ],
   },
+  stucco: {
+    label: "Stucco",
+    questions: [
+      {
+        key: "jobType",
+        label: "Stucco job",
+        type: "single",
+        required: true,
+        options: [
+          { key: "full", label: "Full stucco job" },
+          { key: "repair", label: "Repair" },
+        ],
+      },
+      {
+        key: "stuccoSF",
+        label: "Wall area (sq ft; 10% is added)",
+        type: "number",
+        required: (a) => a?.jobType === "full",
+        showIf: (a) => a?.jobType === "full",
+        param: "Stucco SF",
+      },
+      {
+        key: "popouts",
+        label: "Popout windows to cut back",
+        type: "number",
+        required: false,
+        showIf: (a) => a?.jobType === "repair",
+        param: "Popout Windows",
+      },
+      {
+        key: "otherRepairs",
+        label: "Other stucco repairs (cracks, patches, damage)? (blank = yes)",
+        type: "single",
+        required: false,
+        showIf: (a) => a?.jobType === "repair",
+        options: [
+          { key: "yes", label: "Yes" },
+          { key: "no", label: "No, popouts only" },
+        ],
+      },
+    ],
+  },
 };
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
@@ -197,7 +239,10 @@ export function questionsFor(trade, basics, answers = {}) {
   if (!set) return [];
   const offered = upgradesFor(basics, answers);
   return set.questions.filter(
-    (q) => (!q.upgrade || offered[q.upgrade]) && (!q.products || q.products.includes(sidingProduct(answers)))
+    (q) =>
+      (!q.upgrade || offered[q.upgrade]) &&
+      (!q.products || q.products.includes(sidingProduct(answers))) &&
+      (!q.showIf || q.showIf(answers?.[trade] || {}))
   );
 }
 
@@ -227,8 +272,14 @@ export function cleanTradeAnswers(input) {
   return out;
 }
 
+// a question's required can depend on the other answers (e.g. stucco wall
+// area only on a full job)
+export function isQuestionRequired(q, tradeAnswers) {
+  return typeof q.required === "function" ? !!q.required(tradeAnswers || {}) : !!q.required;
+}
+
 export function missingTradeAnswers(trade, answers, basics) {
   return questionsFor(trade, basics, { [trade]: answers })
-    .filter((q) => q.required && (answers?.[q.key] === undefined || answers?.[q.key] === ""))
+    .filter((q) => isQuestionRequired(q, answers) && (answers?.[q.key] === undefined || answers?.[q.key] === ""))
     .map((q) => ({ key: q.key, label: q.label }));
 }
