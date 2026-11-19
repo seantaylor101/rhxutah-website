@@ -470,3 +470,22 @@ test("drainage on its own: $500 per drain, 12x12 as an option, extra pipe and fo
   assert.equal(upgradesFor({ trades: ["gutters"] }, g).drains, true);
   assert.equal(upgradesFor({ trades: ["gutters", "drainage"] }, g).drains, false);
 });
+
+test("permanent lighting on its own: $30/ft + $500 control box for every customer", async () => {
+  const { buildLightingLines } = await import("./estimateDraft.js");
+  const { upgradesFor } = await import("../../shared/tradeQuestions.js");
+  const item = (id, name, f, c, p) => ({ id, name, costGroup: { id: "lt" }, position: "m", quantity: null, quantityFormula: f, unitCost: c, unitPrice: p, isTaxable: false, showQuantity: true, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null });
+  const asm = { id: "lt", name: "Permanent Holiday & Accent Lighting", position: null, isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true,
+    descendentCostGroups: { nodes: [] },
+    descendentCostItems: { nodes: [
+      item("m", "Permanent holiday lighting - material", "{Lighting LF}", 12.89, 22.3),
+      item("l", "Permanent holiday lighting - install labor", "{Lighting LF}", 3.5, 7.7),
+      item("b", "Permanent lighting control box", "{Lighting Control Boxes}", 429.8, 500),
+    ] } };
+  assert.ok(Math.abs(buildLightingLines(asm, { lightingLF: 120 }).total - (120 * 30 + 500)) < 0.01);
+  assert.equal(buildLightingLines(asm, {}).total, 0);
+  // lighting as its own trade: not also offered as a gutter upgrade
+  const b = { customerType: "retail", trades: ["gutters", "siding"] };
+  assert.equal(upgradesFor(b, { gutters: { gutterLF: 100 } }).lighting, true);
+  assert.equal(upgradesFor({ ...b, trades: [...b.trades, "lighting"] }, { gutters: { gutterLF: 100 } }).lighting, false);
+});

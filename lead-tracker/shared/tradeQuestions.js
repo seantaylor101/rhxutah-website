@@ -223,6 +223,11 @@ export const TRADE_QUESTIONS = {
       { key: "drainExtraLF", label: "Total extra feet past 8 ft (only if you know)", type: "number", required: false },
     ],
   },
+  // permanent lighting on its own: $30/ft + $500 control box, every customer
+  lighting: {
+    label: "Permanent lighting",
+    questions: [{ key: "lightingLF", label: "Lighting (linear ft)", type: "number", required: true }],
+  },
   // repaint $4/sq ft of wall (no window deductions), eaves $7/ft, garage
   // doors $400, man doors $300, $500 minimum
   painting: {
@@ -284,7 +289,7 @@ export function upgradesFor(basics, answers = {}) {
     guards: gutters && answers?.gutters?.trees === "yes",
     // when Drainage is its own trade on the lead, drains are bid there instead
     drains: gutters && !trades.has("drainage") && defaultDrainCount(answers?.gutters) > 0,
-    lighting: gutters && retail && siding,
+    lighting: gutters && retail && siding && !trades.has("lighting"),
     // siding jobs: insulated wrap for everyone; Emerald is the paint upgrade
     // on GC bids (retail bids already get Emerald)
     insulatedWrap: siding,

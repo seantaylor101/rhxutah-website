@@ -44,6 +44,7 @@ function workLabel(basics, answers = {}) {
     if (k === "gutters") return "new gutters and downspouts";
     if (k === "siding") return SIDING_PHRASE[answers?.siding?.product] || "new siding";
     if (k === "stucco") return answers?.stucco?.jobType === "full" ? "new stucco" : "the stucco repairs";
+    if (k === "lighting") return "permanent holiday lighting";
     if (k === "drainage") return Number(answers?.drainage?.drains) === 1 ? "an in-ground drain" : "in-ground drains";
     if (k === "painting") {
       const a = answers?.painting || {};
