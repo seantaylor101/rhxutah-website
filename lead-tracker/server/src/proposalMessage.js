@@ -44,6 +44,12 @@ function workLabel(basics, answers = {}) {
     if (k === "gutters") return "new gutters and downspouts";
     if (k === "siding") return SIDING_PHRASE[answers?.siding?.product] || "new siding";
     if (k === "stucco") return answers?.stucco?.jobType === "full" ? "new stucco" : "the stucco repairs";
+    if (k === "painting") {
+      const a = answers?.painting || {};
+      if (Number(a.wallSF) > 0) return "painting the exterior";
+      if (Number(a.eaveLF) > 0) return "painting the eaves";
+      return "the exterior painting";
+    }
     if (k === "soffitFascia") {
       const a = answers?.soffitFascia || {};
       if (Number(a.bothLF) > 0 || (Number(a.soffitOnlyLF) > 0 && Number(a.fasciaOnlyLF) > 0)) return "new aluminum soffit and fascia";
