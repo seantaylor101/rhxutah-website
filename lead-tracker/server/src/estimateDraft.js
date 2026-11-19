@@ -23,7 +23,15 @@ export const ASSEMBLIES = {
   siding_hardie: { id: "22PiLwHsrbUv", name: "James Hardie Siding System" },
   siding_ascend: { id: "22PiLwLfsi72", name: "Alside Ascend Siding System" },
   siding_vinyl: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
+  stucco: { id: "22PiLznBbZJs", name: "Stucco" },
 };
+
+// Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
+// repairs are a flat $2,700 (cost $1,800), popout cut-backs $750 a window
+// for any customer (cost $500), and a repair bid never goes under $2,700.
+export const STUCCO_RATES = { retail: 10, insurance: 10, gc: 8 };
+export const STUCCO_REPAIR_MINIMUM = 2700;
+const STUCCO_COST_CODE = "22PiKU5iGnRc";
 
 // Siding prices per square foot, charged on the wall area plus 10% (Sean's
 // waste rule, applied to material and labor alike). Covers siding, trim,
@@ -429,6 +437,46 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
   return { lines, params, total: selectedPriceTotal(lines) };
 }
 
+export function stuccoParams(answers = {}) {
+  const full = answers.jobType === "full";
+  const repair = answers.jobType === "repair";
+  return {
+    "Stucco SF": full ? Number(answers.stuccoSF || 0) : 0,
+    "Stucco Repairs": repair && answers.otherRepairs !== "no" ? 1 : 0,
+    "Popout Windows": repair ? Number(answers.popouts || 0) : 0,
+  };
+}
+
+export function buildStuccoLines(assembly, answers, basics) {
+  const params = stuccoParams(answers);
+  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
+  lines = pruneEmpty(lines);
+  const rate = STUCCO_RATES[basics?.customerType] ?? STUCCO_RATES.retail;
+  for (const l of lines[0]?.lineItems || []) {
+    if (/full job/i.test(l.name)) l.unitPrice = rate;
+  }
+  let total = selectedPriceTotal(lines);
+  if (answers.jobType === "repair" && total < STUCCO_REPAIR_MINIMUM && lines[0]) {
+    lines[0].lineItems.push({
+      _type: "costItem",
+      name: "Small job minimum",
+      description: `Our minimum for a stucco repair is $${STUCCO_REPAIR_MINIMUM.toLocaleString()}.`,
+      quantity: 1,
+      quantityFormula: null,
+      unitCost: 0,
+      unitPrice: Math.round((STUCCO_REPAIR_MINIMUM - total) * 100) / 100,
+      isTaxable: false,
+      showQuantity: false,
+      costCodeId: STUCCO_COST_CODE,
+      costTypeId: OTHER_COST_TYPE,
+      unitId: EACH_UNIT,
+      organizationCostItemId: null,
+    });
+    total = STUCCO_REPAIR_MINIMUM;
+  }
+  return { lines, params, total };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -443,11 +491,13 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const doGutters = trades.includes("gutters");
   const product = sidingProduct(answers);
   const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
-  if (!doGutters && !doSiding) throw new Error("None of the work on this lead is automated yet");
+  const doStucco = trades.includes("stucco") && !!answers.stucco?.jobType;
+  if (!doGutters && !doSiding && !doStucco) throw new Error("None of the work on this lead is automated yet");
 
-  const [gutterAssembly, sidingAssembly, jobData, templateData] = await Promise.all([
+  const [gutterAssembly, sidingAssembly, stuccoAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
     doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
+    doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -475,9 +525,15 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const lines = [];
   const params = {};
   let total = 0;
-  // siding first, then gutters — the order the work goes on the house
+  // siding, then stucco, then gutters — the order the work goes on the house
   if (doSiding) {
     const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doStucco) {
+    const r = buildStuccoLines(stuccoAssembly, answers.stucco || {}, basics);
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;

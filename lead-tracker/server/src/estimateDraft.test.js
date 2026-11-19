@@ -5,6 +5,7 @@ import {
   buildGutterLines,
   buildLpSidingLines,
   buildSidingLines,
+  buildStuccoLines,
   sidingParams,
   draftEstimate,
   evalFormula,
@@ -310,4 +311,31 @@ test("siding product has no default — it has to be picked", () => {
   const b = { customerType: "retail", trades: ["siding"] };
   assert.deepEqual(missingTradeAnswers("siding", { wallSF: 1500 }, b).map((m) => m.key), ["product"]);
   assert.deepEqual(missingTradeAnswers("siding", { wallSF: 1500, product: "vinyl" }, b), []);
+});
+
+const stuccoAssembly = {
+  id: "st", name: "Stucco", position: null, isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null,
+  showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true,
+  descendentCostGroups: { nodes: [] },
+  descendentCostItems: { nodes: [
+    { id: "f", name: "Stucco, full job (labor, material, scaffolding)", costGroup: { id: "st" }, position: "m", quantity: null, quantityFormula: "1.1*{Stucco SF}", unitCost: 6, unitPrice: 10, isTaxable: false, showQuantity: false, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null },
+    { id: "r", name: "Stucco repair", costGroup: { id: "st" }, position: "n", quantity: null, quantityFormula: "{Stucco Repairs}", unitCost: 1800, unitPrice: 2700, isTaxable: false, showQuantity: false, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null },
+    { id: "p", name: "Stucco popout cut-back - per window", costGroup: { id: "st" }, position: "o", quantity: null, quantityFormula: "{Popout Windows}", unitCost: 500, unitPrice: 750, isTaxable: false, showQuantity: true, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null },
+  ] },
+};
+
+test("stucco: full job per sq ft + 10%, repairs $2,700, popouts $750, $2,700 minimum", () => {
+  const near = (a, b) => Math.abs(a - b) <= 0.01;
+  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "full", stuccoSF: 1000 }, { customerType: "retail" }).total, 11000));
+  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "full", stuccoSF: 1000 }, { customerType: "gc" }).total, 8800));
+  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair" }, { customerType: "gc" }).total, 2700));
+  const two = buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 2, otherRepairs: "no" }, { customerType: "retail" });
+  assert.ok(near(two.total, 2700), String(two.total));
+  assert.ok(flat(two.lines).some((l) => l.name === "Small job minimum"));
+  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 4, otherRepairs: "no" }, {}).total, 3000));
+  assert.ok(near(buildStuccoLines(stuccoAssembly, { jobType: "repair", popouts: 2 }, {}).total, 4200));
+  const req = (a) => missingTradeAnswers("stucco", a, {}).map((m) => m.key);
+  assert.deepEqual(req({}), ["jobType"]);
+  assert.deepEqual(req({ jobType: "full" }), ["stuccoSF"]);
+  assert.deepEqual(req({ jobType: "repair" }), []);
 });

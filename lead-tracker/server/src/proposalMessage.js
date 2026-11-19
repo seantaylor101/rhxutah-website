@@ -43,6 +43,7 @@ function workLabel(basics, answers = {}) {
   const phrases = (basics.trades || []).map((k) => {
     if (k === "gutters") return "new gutters and downspouts";
     if (k === "siding") return SIDING_PHRASE[answers?.siding?.product] || "new siding";
+    if (k === "stucco") return answers?.stucco?.jobType === "repair" ? "the stucco repairs" : "new stucco";
     return trades.options.find((o) => o.key === k)?.label.toLowerCase();
   });
   const list_ = phrases.filter(Boolean);

@@ -8,6 +8,7 @@ import {
   missingTradeAnswers,
   upgradesFor,
   sidingProduct,
+  isQuestionRequired,
 } from "../../shared/tradeQuestions.js";
 import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
@@ -8763,12 +8764,13 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
           </div>
           {questionsFor(trade, basics, answers).map((q) => {
             const value = answers[trade] ? answers[trade][q.key] : undefined;
-            const missing = q.required && (value === undefined || value === "");
+            const required = isQuestionRequired(q, answers[trade]);
+            const missing = required && (value === undefined || value === "");
             return (
               <div key={q.key}>
                 <div style={{ ...modalLabel, marginTop: 12 }}>
                   {q.label}
-                  {q.required && (
+                  {required && (
                     <span style={{ color: missing ? COLORS.rust : COLORS.muted, marginLeft: 4 }}>
                       {missing ? "• required" : "✓"}
                     </span>
@@ -8797,7 +8799,7 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
                     onChange={(e) => setDrafts((d) => ({ ...d, [`${trade}.${q.key}`]: e.target.value }))}
                     onBlur={() => saveNumber(trade, q.key)}
                     onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                    placeholder={q.required ? "" : "Leave blank if none"}
+                    placeholder={required ? "" : "Leave blank if none"}
                     style={modalInput}
                   />
                 )}
