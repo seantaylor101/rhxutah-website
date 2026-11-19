@@ -389,3 +389,33 @@ test("board-and-batten and shake areas are priced at their own rates", async () 
   w2(plain.lines);
   assert.ok(!names.some((n) => /shake|batten|panel/i.test(n)), names.join());
 });
+
+test("soffit & fascia: $25 retail / $22 GC per foot for both, half for one; costs stay real", async () => {
+  const { buildSoffitFasciaLines, soffitFasciaParams, hasSoffitFasciaWork } = await import("./estimateDraft.js");
+  const item = (id, name, f, c, p) => ({ id, name, costGroup: { id: "sf" }, position: "m", quantity: null, quantityFormula: f, unitCost: c, unitPrice: p, isTaxable: false, showQuantity: false, costCode: { id: "c" }, costType: { id: "t" }, unit: { id: "u" }, organizationCostItem: null });
+  const asm = { id: "sf", name: "Aluminum Soffit & Fascia", position: null, isSelected: false, minSelectionsRequired: null, maxSelectionsAllowed: null, showChildDeltas: false, showChildren: true, showChildCosts: true, showDescription: true,
+    descendentCostGroups: { nodes: [] },
+    descendentCostItems: { nodes: [
+      item("s", 'Aluminum soffit, Triple 4" - material', "1.1*{Soffit SF}", 2.27, 5.45),
+      item("j", "Soffit J-channel - material", "1.1*{Soffit LF}", 0.86, 2.06),
+      item("f", 'Aluminum fascia, Envoy ribbed 6" - material', "1.1*{Fascia LF}", 2.55, 6.12),
+      item("b", "Soffit & fascia install - labor", "{Soffit And Fascia LF}", 4, 9.6),
+      item("o", "Soffit only or fascia only - labor", "{Soffit Only LF}+{Fascia Only LF}", 2, 4.8),
+    ] } };
+  // cent rounding can leave the total a dollar or two off, like the other trades
+  const near = (a, b) => Math.abs(a - b) <= 2;
+  assert.ok(near(buildSoffitFasciaLines(asm, { bothLF: 200 }, { customerType: "retail" }).total, 5000));
+  assert.ok(near(buildSoffitFasciaLines(asm, { bothLF: 200 }, { customerType: "gc" }).total, 4400));
+  assert.ok(near(buildSoffitFasciaLines(asm, { fasciaOnlyLF: 100 }, { customerType: "retail" }).total, 1250));
+  const mixed = buildSoffitFasciaLines(asm, { bothLF: 100, soffitOnlyLF: 40 }, { customerType: "gc" });
+  assert.ok(near(mixed.total, 100 * 22 + 40 * 11), String(mixed.total));
+  // fascia-only jobs carry no soffit lines; costs are untouched
+  const names = [];
+  const w = (l) => l.forEach((x) => (x._type === "costItem" ? names.push([x.name, x.unitCost]) : w(x.lineItems || [])));
+  w(buildSoffitFasciaLines(asm, { fasciaOnlyLF: 100 }, {}).lines);
+  assert.deepEqual(names.map((n) => n[0]), ['Aluminum fascia, Envoy ribbed 6" - material', "Soffit only or fascia only - labor"]);
+  assert.equal(names[0][1], 2.55);
+  assert.equal(soffitFasciaParams({ bothLF: 120, overhangIn: 24 })["Soffit SF"], 240);
+  assert.equal(soffitFasciaParams({ bothLF: 120 })["Soffit SF"], 180);
+  assert.ok(!hasSoffitFasciaWork({ overhangIn: 24 }));
+});

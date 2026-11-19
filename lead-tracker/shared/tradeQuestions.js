@@ -200,6 +200,17 @@ export const TRADE_QUESTIONS = {
       { key: "foundationLF", label: "Foundation plaster (linear ft)", type: "number", required: false, param: "Foundation Plaster LF" },
     ],
   },
+  // aluminum only. Footage is along the eaves/rakes; $25 retail / $22 GC per
+  // foot for both, half that when only one is done
+  soffitFascia: {
+    label: "Soffit & fascia",
+    questions: [
+      { key: "bothLF", label: "Soffit AND fascia (linear ft)", type: "number", required: false },
+      { key: "soffitOnlyLF", label: "Soffit only (linear ft)", type: "number", required: false },
+      { key: "fasciaOnlyLF", label: "Fascia only (linear ft)", type: "number", required: false },
+      { key: "overhangIn", label: "Overhang depth (inches, blank = 18)", type: "number", required: false },
+    ],
+  },
 };
 
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);

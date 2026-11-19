@@ -25,7 +25,13 @@ export const ASSEMBLIES = {
   siding_ascend: { id: "22PiLwLfsi72", name: "Alside Ascend Siding System" },
   siding_vinyl: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
   stucco: { id: "22PiLznBbZJs", name: "Stucco" },
+  soffitFascia: { id: "22PiMNbFW8gC", name: "Aluminum Soffit & Fascia" },
 };
+
+// aluminum soffit & fascia, per linear foot: $25 retail / $22 GC for both,
+// half when only one is done. Line items keep real costs (Lansing material,
+// Alex's $4/ft both or $2/ft one); prices are scaled to land on these rates.
+export const SOFFIT_FASCIA_RATES = { retail: 25, insurance: 25, gc: 22 };
 
 // Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
 // general repairs a flat $2,700 (cost $1,800); popout cut-backs $750 a
@@ -499,6 +505,45 @@ export function buildStuccoLines(assembly, answers, basics) {
   return { lines, params, total: selectedPriceTotal(lines) };
 }
 
+export function soffitFasciaParams(answers = {}) {
+  const n = (k) => Math.max(0, Number(answers[k] || 0));
+  const both = n("bothLF"), soffitOnly = n("soffitOnlyLF"), fasciaOnly = n("fasciaOnlyLF");
+  const depth = Number(answers.overhangIn) > 0 ? Number(answers.overhangIn) : 18;
+  const soffitLF = both + soffitOnly;
+  return {
+    "Soffit And Fascia LF": both,
+    "Soffit Only LF": soffitOnly,
+    "Fascia Only LF": fasciaOnly,
+    "Soffit LF": soffitLF,
+    "Fascia LF": both + fasciaOnly,
+    "Soffit SF": Math.round(((soffitLF * depth) / 12) * 100) / 100,
+  };
+}
+
+export function hasSoffitFasciaWork(answers = {}) {
+  const p = soffitFasciaParams(answers);
+  return p["Soffit LF"] + p["Fascia LF"] > 0;
+}
+
+export function buildSoffitFasciaLines(assembly, answers, basics) {
+  const params = soffitFasciaParams(answers);
+  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
+  lines = pruneEmpty(lines);
+  const rate = SOFFIT_FASCIA_RATES[basics?.customerType] ?? SOFFIT_FASCIA_RATES.retail;
+  const target = rate * params["Soffit And Fascia LF"] + (rate / 2) * (params["Soffit Only LF"] + params["Fascia Only LF"]);
+  const items = [];
+  const walk = (l) => l.forEach((x) => (x._type === "costItem" ? items.push(x) : walk(x.lineItems || [])));
+  walk(lines);
+  const sum = () => items.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
+  const before = sum();
+  if (target && before) {
+    const f = target / before;
+    for (const l of items) l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100;
+    absorbCents(items, target - sum());
+  }
+  return { lines, params, total: selectedPriceTotal(lines) };
+}
+
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
@@ -514,12 +559,14 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const product = sidingProduct(answers);
   const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
   const doStucco = trades.includes("stucco") && hasStuccoWork(answers.stucco);
-  if (!doGutters && !doSiding && !doStucco) throw new Error("None of the work on this lead is automated yet");
+  const doSoffit = trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia);
+  if (!doGutters && !doSiding && !doStucco && !doSoffit) throw new Error("None of the work on this lead is automated yet");
 
-  const [gutterAssembly, sidingAssembly, stuccoAssembly, jobData, templateData] = await Promise.all([
+  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, jobData, templateData] = await Promise.all([
     doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
     doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
     doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
+    doSoffit ? fetchAssembly(ASSEMBLIES.soffitFascia.id) : null,
     pave({
       job: {
         $: { id: link.jobId },
@@ -547,7 +594,7 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   const lines = [];
   const params = {};
   let total = 0;
-  // siding, then stucco, then gutters — the order the work goes on the house
+  // siding, stucco, soffit & fascia, then gutters — the order the work goes on the house
   if (doSiding) {
     const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
     lines.push(...r.lines);
@@ -556,6 +603,12 @@ export async function draftEstimate({ lead, basics, answers, link }) {
   }
   if (doStucco) {
     const r = buildStuccoLines(stuccoAssembly, answers.stucco || {}, basics);
+    lines.push(...r.lines);
+    Object.assign(params, r.params);
+    total += r.total;
+  }
+  if (doSoffit) {
+    const r = buildSoffitFasciaLines(soffitAssembly, answers.soffitFascia || {}, basics);
     lines.push(...r.lines);
     Object.assign(params, r.params);
     total += r.total;

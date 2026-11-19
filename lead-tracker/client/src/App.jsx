@@ -8716,7 +8716,9 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
       ? AUTOMATED_SIDING.includes(sidingProduct(answers))
       : t === "stucco"
         ? !!(stuccoAnswers.jobType || stuccoAnswers.gutterWallSpots || stuccoAnswers.foundationLF)
-        : true
+        : t === "soffitFascia"
+          ? ["bothLF", "soffitOnlyLF", "fasciaOnlyLF"].some((k) => Number((answers.soffitFascia || {})[k]) > 0)
+          : true
   );
   const ready = draftable && missingAll.length === 0;
 
