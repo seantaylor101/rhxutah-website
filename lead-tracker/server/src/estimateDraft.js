@@ -21,7 +21,7 @@ const GUTTER_MINIMUM = 350;
 // rates. Upgrade options keep their own prices; the $350 minimum still applies.
 export const GUTTER_RATES = {
   retail: { 5: 12, 6: 15 },
-  insurance: { 5: 12, 6: 15 },
+  insurance: { 5: 10.5, 6: 15 },
   gc: { 5: 8.5, 6: 8.5 },
 };
 // customers with their own deal, by JobTread customer account

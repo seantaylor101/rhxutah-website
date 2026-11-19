@@ -197,3 +197,8 @@ test("per-foot rates on gutter + downspout footage: Erick $7.50, other GCs $8.50
   const small = buildGutterLines(assembly, { gutterLF: 20, oneStory: 1 }, { customerType: "gc", trades: gutters });
   assert.equal(small.total, 350);
 });
+
+test("insurance gutters: $10.50/ft for 5-inch", () => {
+  const r = buildGutterLines(assembly, ans, { customerType: "insurance", trades: ["gutters"] });
+  assert.ok(Math.abs(r.total - 2604) <= 0.05, String(r.total)); // 248 ft x $10.50
+});
