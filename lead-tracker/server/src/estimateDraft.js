@@ -32,6 +32,8 @@ export const ASSEMBLIES = {
 // half when only one is done. Line items keep real costs (Lansing material,
 // Alex's $4/ft both or $2/ft one); prices are scaled to land on these rates.
 export const SOFFIT_FASCIA_RATES = { retail: 25, insurance: 25, gc: 22 };
+// porch caps (aluminum soffit ceilings), per sq ft; Alex $2/sq ft
+export const PORCH_CAP_RATES = { retail: 8, insurance: 8, gc: 8 };
 
 // Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
 // general repairs a flat $2,700 (cost $1,800); popout cut-backs $750 a
@@ -517,12 +519,13 @@ export function soffitFasciaParams(answers = {}) {
     "Soffit LF": soffitLF,
     "Fascia LF": both + fasciaOnly,
     "Soffit SF": Math.round(((soffitLF * depth) / 12) * 100) / 100,
+    "Porch Cap SF": n("porchCapSF"),
   };
 }
 
 export function hasSoffitFasciaWork(answers = {}) {
   const p = soffitFasciaParams(answers);
-  return p["Soffit LF"] + p["Fascia LF"] > 0;
+  return p["Soffit LF"] + p["Fascia LF"] + p["Porch Cap SF"] > 0;
 }
 
 export function buildSoffitFasciaLines(assembly, answers, basics) {
@@ -530,7 +533,11 @@ export function buildSoffitFasciaLines(assembly, answers, basics) {
   let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
   lines = pruneEmpty(lines);
   const rate = SOFFIT_FASCIA_RATES[basics?.customerType] ?? SOFFIT_FASCIA_RATES.retail;
-  const target = rate * params["Soffit And Fascia LF"] + (rate / 2) * (params["Soffit Only LF"] + params["Fascia Only LF"]);
+  const porch = PORCH_CAP_RATES[basics?.customerType] ?? PORCH_CAP_RATES.retail;
+  const target =
+    rate * params["Soffit And Fascia LF"] +
+    (rate / 2) * (params["Soffit Only LF"] + params["Fascia Only LF"]) +
+    porch * params["Porch Cap SF"];
   const items = [];
   const walk = (l) => l.forEach((x) => (x._type === "costItem" ? items.push(x) : walk(x.lineItems || [])));
   walk(lines);

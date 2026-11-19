@@ -418,4 +418,9 @@ test("soffit & fascia: $25 retail / $22 GC per foot for both, half for one; cost
   assert.equal(soffitFasciaParams({ bothLF: 120, overhangIn: 24 })["Soffit SF"], 240);
   assert.equal(soffitFasciaParams({ bothLF: 120 })["Soffit SF"], 180);
   assert.ok(!hasSoffitFasciaWork({ overhangIn: 24 }));
+  // porch caps: $8/sq ft
+  asm.descendentCostItems.nodes.push(item("pc", "Porch cap (aluminum soffit ceiling) install - labor", "{Porch Cap SF}", 2, 4.8));
+  assert.ok(near(buildSoffitFasciaLines(asm, { porchCapSF: 150 }, { customerType: "gc" }).total, 1200));
+  assert.ok(near(buildSoffitFasciaLines(asm, { bothLF: 100, porchCapSF: 150 }, { customerType: "retail" }).total, 2500 + 1200));
+  assert.ok(hasSoffitFasciaWork({ porchCapSF: 80 }));
 });

@@ -209,6 +209,7 @@ export const TRADE_QUESTIONS = {
       { key: "soffitOnlyLF", label: "Soffit only (linear ft)", type: "number", required: false },
       { key: "fasciaOnlyLF", label: "Fascia only (linear ft)", type: "number", required: false },
       { key: "overhangIn", label: "Overhang depth (inches, blank = 18)", type: "number", required: false },
+      { key: "porchCapSF", label: "Porch cap / soffit ceiling (sq ft)", type: "number", required: false },
     ],
   },
 };

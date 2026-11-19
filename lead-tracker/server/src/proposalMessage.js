@@ -49,6 +49,7 @@ function workLabel(basics, answers = {}) {
       if (Number(a.bothLF) > 0 || (Number(a.soffitOnlyLF) > 0 && Number(a.fasciaOnlyLF) > 0)) return "new aluminum soffit and fascia";
       if (Number(a.soffitOnlyLF) > 0) return "new aluminum soffit";
       if (Number(a.fasciaOnlyLF) > 0) return "new aluminum fascia";
+      if (Number(a.porchCapSF) > 0) return "the new aluminum porch ceiling";
       return "new aluminum soffit and fascia";
     }
     return trades.options.find((o) => o.key === k)?.label.toLowerCase();
