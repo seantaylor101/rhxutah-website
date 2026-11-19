@@ -78,12 +78,20 @@ test("6-inch choice selects the 6-inch option and guards", () => {
   assert.ok(groups.some((g) => /guards for 6"/i.test(g.name)) && !groups.some((g) => /guards for 5"/i.test(g.name)));
 });
 
-test("small job gets topped up to the $350 minimum", () => {
+test("small job gets topped up to the minimum, prorated by the customer's rate", async () => {
+  const { gutterMinimum, GUTTER_RATES } = await import("./estimateDraft.js");
   const r = buildGutterLines(assembly, { gutterLF: 15, size: "5", oneStory: 0, twoStory: 0, miters: 0, tearOffLF: 0 }, { customerType: "gc" });
   const min = flat(r.lines).find((l) => l.name === "Small job minimum");
-  assert.ok(min);
-  assert.equal(r.total, 350);
-  assert.ok(min.unitPrice > 0);
+  assert.ok(min && min.unitPrice > 0);
+  assert.equal(r.total, 250);
+  assert.match(min.description, /\$250/);
+  assert.equal(gutterMinimum(GUTTER_RATES.retail, false), 350);
+  assert.equal(gutterMinimum(GUTTER_RATES.retail, true), 440);
+  assert.equal(gutterMinimum(GUTTER_RATES.insurance, false), 305);
+  assert.equal(gutterMinimum({ 5: 7.5, 6: 7.5 }, false), 220);
+  // a retail job past ~29 ft isn't topped up
+  const big = buildGutterLines(assembly, { gutterLF: 30 }, { customerType: "retail", trades: ["gutters"] });
+  assert.ok(!flat(big.lines).some((l) => l.name === "Small job minimum"));
 });
 
 test("only gutter footage is required; blanks count as zero", () => {
@@ -204,8 +212,10 @@ test("per-foot rates on gutter + downspout footage: Erick $7.50, other GCs $8.50
   const items = flat(retail.lines).filter((l) => l._type === "costItem");
   assert.equal(items.find((i) => i.name === "Gutter install - labor").unitCost, 2);
   assert.equal(priceOf(retail.lines, "Standard In-Ground Drain (9x9 catch basin)"), 3000);
+  // GC 33 ft x $8.50 = $280.50 clears the GC minimum ($250); 20 ft doesn't
   const small = buildGutterLines(assembly, { gutterLF: 20, oneStory: 1 }, { customerType: "gc", trades: gutters });
-  assert.equal(small.total, 350);
+  assert.ok(near(small.total, 280.5), String(small.total));
+  assert.equal(buildGutterLines(assembly, { gutterLF: 20 }, { customerType: "gc", trades: gutters }).total, 250);
 });
 
 test("insurance gutters: $10.50/ft for 5-inch", () => {

@@ -58,11 +58,19 @@ export const SIDING_STYLE_RATES = {
 export const STYLED_SIDING = ["lp", "hardie"];
 export const SIDING_WASTE = 1.1;
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
-const GUTTER_MINIMUM = 350;
+// the minimum is the same footage for everyone: $350 at the $12 retail rate
+// is about 29 ft, so each customer's minimum is their own rate x that
+// footage (GC $250, Erick $220, insurance $305, 6" retail $440), rounded
+// to $5
+const GUTTER_MINIMUM_FEET = 350 / 12;
+export function gutterMinimum(rates, six) {
+  const rate = rates[six ? 6 : 5] ?? rates[5];
+  return Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
+}
 // Sean's gutter prices, per foot of gutter PLUS downspout (he bills the
 // downspout footage too). Miters and tear-off are included. The line items
 // keep their real costs; their prices are scaled so the bid lands on these
-// rates. Upgrade options keep their own prices; the $350 minimum still applies.
+// rates. Upgrade options keep their own prices; the small-job minimum (gutterMinimum) still applies.
 export const GUTTER_RATES = {
   retail: { 5: 12, 6: 15 },
   insurance: { 5: 10.5, 6: 15 },
@@ -282,7 +290,9 @@ export function buildGutterLines(assembly, answers, basics, { accountId } = {}) 
     dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
   });
   fitOptionalLimits(lines);
-  applyPerFootRate(lines, gutterRatesFor(basics, { accountId }), billedFootage(answers), six);
+  const rates = gutterRatesFor(basics, { accountId });
+  applyPerFootRate(lines, rates, billedFootage(answers), six);
+  const GUTTER_MINIMUM = gutterMinimum(rates, six);
   const total = selectedPriceTotal(lines);
   if (total > 0 && total < GUTTER_MINIMUM) {
     lines[0].lineItems.push({
