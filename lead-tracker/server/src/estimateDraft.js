@@ -69,7 +69,13 @@ export const SIDING_STYLE_RATES = {
   batten: { retail: 17.5, insurance: 17.5, gc: 15 },
   shake: { retail: 25.5, insurance: 25.5, gc: 22 },
 };
+// vinyl shake (Foundry 7" Staggered Shake, $4.61/sq ft cost vs $1.69 for
+// Ovation lap): installs at the same labor as vinyl lap, so it's the vinyl
+// rate plus the extra material at the same 1.8x markup (+$5.26/sq ft)
+export const VINYL_SHAKE_RATES = { retail: 14.25, insurance: 11.25, gc: 13.25 };
 export const STYLED_SIDING = ["lp", "hardie"];
+// products with a shake area on the questionnaire
+export const SHAKE_SIDING = ["lp", "hardie", "vinyl"];
 export const SIDING_WASTE = 1.1;
 const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
 // the minimum is the same footage for everyone: $350 at the $12 retail rate
@@ -399,10 +405,11 @@ export function sidingParams(answers = {}, basics = {}) {
   // cut-off waste on install
   const dumpsters =
     answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : wall > 0 ? 1 : 0;
-  // board-and-batten and shake are part of the wall area (LP/Hardie only)
+  // board-and-batten (LP/Hardie) and shake (LP/Hardie/vinyl) are part of
+  // the wall area
   const styled = STYLED_SIDING.includes(answers.product);
   const batten = styled ? Math.min(Number(answers.battenSF || 0), wall) : 0;
-  const shake = styled ? Math.min(Number(answers.shakeSF || 0), wall - batten) : 0;
+  const shake = SHAKE_SIDING.includes(answers.product) ? Math.min(Number(answers.shakeSF || 0), wall - batten) : 0;
   return {
     "Wall SF": wall,
     "Batten SF": batten,
@@ -457,7 +464,8 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
   const batten = params["Batten SF"] || 0;
   const shake = params["Shake SF"] || 0;
   const lapSF = params["Wall SF"] - batten - shake;
-  const style = (k) => SIDING_STYLE_RATES[k][basics?.customerType] ?? SIDING_STYLE_RATES[k].retail;
+  const styleRates = (k) => (k === "shake" && product === "vinyl" ? VINYL_SHAKE_RATES : SIDING_STYLE_RATES[k]);
+  const style = (k) => styleRates(k)[basics?.customerType] ?? styleRates(k).retail;
   const billedSF = params["Wall SF"] * SIDING_WASTE;
   const shared = [];
   const paint = { picked: [], other: [] };

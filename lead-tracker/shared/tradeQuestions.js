@@ -110,7 +110,8 @@ export const TRADE_QUESTIONS = {
         required: true,
         param: "Wall SF",
       },
-      // part of the wall area; priced higher than lap (LP and Hardie only)
+      // part of the wall area; priced higher than lap (batten: LP and Hardie
+      // only; shake: LP, Hardie and vinyl)
       {
         key: "battenSF",
         label: "Board-and-batten area (sq ft, part of the wall area)",
@@ -123,7 +124,8 @@ export const TRADE_QUESTIONS = {
         label: "Shake area (sq ft, part of the wall area)",
         type: "number",
         required: false,
-        products: ["lp", "hardie"],
+        // vinyl shake is Foundry 7" Staggered Shake (installed like vinyl lap)
+        products: ["lp", "hardie", "vinyl"],
       },
       {
         key: "tearOff",

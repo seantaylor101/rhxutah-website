@@ -379,8 +379,10 @@ test("board-and-batten and shake areas are priced at their own rates", async () 
   const { selectedPriceTotal } = await import("./estimateDraft.js");
   const base = selectedPriceTotal(lines);
   assert.ok(Math.abs(base - 1.1 * (1200 * 12 + 500 * 15 + 300 * 22)) < 3, String(base));
-  // vinyl ignores the areas; they can't exceed the wall
+  // vinyl ignores batten but takes shake; they can't exceed the wall
   assert.equal(sidingParams({ product: "vinyl", wallSF: 1000, battenSF: 200 })["Batten SF"], 0);
+  assert.equal(sidingParams({ product: "vinyl", wallSF: 1000, shakeSF: 300 })["Shake SF"], 300);
+  assert.equal(sidingParams({ product: "ascend", wallSF: 1000, shakeSF: 300 })["Shake SF"], 0);
   assert.equal(sidingParams({ product: "hardie", wallSF: 1000, battenSF: 800, shakeSF: 500 })["Shake SF"], 200);
   // with no batten/shake, those lines aren't on the bid
   const plain = buildSidingLines(asm, { product: "lp", wallSF: 2000, tearOff: "none" }, basics, "lp");
@@ -488,4 +490,17 @@ test("permanent lighting on its own: $30/ft + $500 control box for every custome
   const b = { customerType: "retail", trades: ["gutters", "siding"] };
   assert.equal(upgradesFor(b, { gutters: { gutterLF: 100 } }).lighting, true);
   assert.equal(upgradesFor({ ...b, trades: [...b.trades, "lighting"] }, { gutters: { gutterLF: 100 } }).lighting, false);
+});
+
+test("vinyl shake is priced at the vinyl shake rate", async () => {
+  const { buildSidingLines, selectedPriceTotal } = await import("./estimateDraft.js");
+  const asm = JSON.parse(fs.readFileSync(new URL("./__fixtures__/lpSidingAssembly.json", import.meta.url)));
+  for (const [type, lap, shake] of [["retail", 9, 14.25], ["gc", 8, 13.25]]) {
+    const basics = { customerType: type, trades: ["siding"], existingExterior: ["vinyl"] };
+    const { lines } = buildSidingLines(asm, { product: "vinyl", wallSF: 2000, shakeSF: 400, tearOff: "none", dumpsters: 0 }, basics, "vinyl");
+    const base = selectedPriceTotal(lines);
+    assert.ok(Math.abs(base - 1.1 * (1600 * lap + 400 * shake)) < 3, `${type} ${base}`);
+  }
+  const q = questionsFor("siding", { trades: ["siding"] }, { siding: { product: "vinyl" } }).map((x) => x.key);
+  assert.ok(q.includes("shakeSF") && !q.includes("battenSF"), q.join());
 });
