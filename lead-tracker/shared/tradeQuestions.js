@@ -101,6 +101,9 @@ export const TRADE_QUESTIONS = {
           { key: "hardie", label: "James Hardie" },
           { key: "ascend", label: "Ascend" },
           { key: "vinyl", label: "Vinyl" },
+          // the whole wall in Foundry 7" Staggered Shake; for lap with some
+          // shake (gables etc.), pick Vinyl and fill in the shake area
+          { key: "vinylShake", label: "Vinyl shake (Foundry)" },
         ],
       },
       {
@@ -148,7 +151,7 @@ export const TRADE_QUESTIONS = {
         type: "number",
         required: false,
         param: "Metal Wraps",
-        products: ["vinyl"],
+        products: ["vinyl", "vinylShake"],
       },
     ],
   },
@@ -246,7 +249,7 @@ export const TRADE_QUESTIONS = {
 export const AUTOMATED_TRADES = Object.keys(TRADE_QUESTIONS);
 
 // siding is only drafted for the products with a JobTread assembly
-export const AUTOMATED_SIDING = ["lp", "hardie", "ascend", "vinyl"];
+export const AUTOMATED_SIDING = ["lp", "hardie", "ascend", "vinyl", "vinylShake"];
 // products that get painted on site (the others have a factory finish)
 export const PAINTED_SIDING = ["lp", "hardie"];
 // no default: Sean picks what he's installing on every siding job

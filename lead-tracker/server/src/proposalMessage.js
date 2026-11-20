@@ -36,7 +36,7 @@ function list(items) {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-const SIDING_PHRASE = { lp: "new LP SmartSide siding", hardie: "new James Hardie siding", vinyl: "new vinyl siding", ascend: "new Ascend siding" };
+const SIDING_PHRASE = { lp: "new LP SmartSide siding", hardie: "new James Hardie siding", vinyl: "new vinyl siding", vinylShake: "new vinyl shake siding", ascend: "new Ascend siding" };
 
 function workLabel(basics, answers = {}) {
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");

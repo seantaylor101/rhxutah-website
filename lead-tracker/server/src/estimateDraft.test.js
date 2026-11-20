@@ -501,6 +501,12 @@ test("vinyl shake is priced at the vinyl shake rate", async () => {
     const base = selectedPriceTotal(lines);
     assert.ok(Math.abs(base - 1.1 * (1600 * lap + 400 * shake)) < 3, `${type} ${base}`);
   }
+  // all-shake vinyl: the whole wall at the shake rate
+  const all = buildSidingLines(asm, { product: "vinylShake", wallSF: 1000, tearOff: "none", dumpsters: 0 }, { customerType: "retail", trades: ["siding"] }, "vinylShake");
+  assert.equal(all.params["Shake SF"], 1000);
+  assert.ok(Math.abs(selectedPriceTotal(all.lines) - 1.1 * 1000 * 14.25) < 3, String(selectedPriceTotal(all.lines)));
+  const opts = questionsFor("siding", {}, {})[0].options.map((o) => o.key);
+  assert.ok(opts.includes("vinylShake"), opts.join());
   const q = questionsFor("siding", { trades: ["siding"] }, { siding: { product: "vinyl" } }).map((x) => x.key);
   assert.ok(q.includes("shakeSF") && !q.includes("battenSF"), q.join());
 });
