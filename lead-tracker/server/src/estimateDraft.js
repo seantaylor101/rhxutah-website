@@ -461,7 +461,7 @@ export function buildSidingLines(assembly, answers, basics, product = "lp") {
       (/optional upgrades/i.test(g.name) && !offered.insulatedWrap) ||
       (/insulated reflective/i.test(g.name) && !offered.insulatedWrap),
     // tear-off, resheathing, dumpster and metal wrap lines only when they apply
-    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap|batten|panel|shingle|shake/i.test(i.name) && !qty,
+    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap|batten|panel|shingle|shake|lap/i.test(i.name) && !qty,
   });
   lines = pruneEmpty(lines);
   fitOptionalLimits(lines);
