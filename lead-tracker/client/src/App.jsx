@@ -271,12 +271,14 @@ const COLORS = {
   // vivid red/orange used for the header's icon tiles and hero CTA —
   // sampled from the reference mockup, distinct from the app-wide rust/
   // accent colors used everywhere else
+  insurance: "#7D6BA6",
   heroRed: "#EC4139",
   heroRedDeep: "#D1352A",
 };
 
 const STAGES = [
   { key: "new", label: "New Lead", short: "New", color: COLORS.info },
+  { key: "insurance", label: "Insurance Jobs", short: "Insurance", color: COLORS.insurance },
   { key: "bid", label: "Bid Complete / Waiting", short: "Bid Sent", color: COLORS.amber },
   { key: "lost", label: "Lost", short: "Lost", color: COLORS.lost },
   { key: "won", label: "Job Won — Not Started", short: "Won", color: COLORS.accent },
@@ -297,6 +299,26 @@ const PREVIOUS_STAGE = {
   completed: "progress",
   paid: "completed",
 };
+
+// an insurance job came out of the insurance bucket, not "bid" — so moving
+// it back from won, or reopening it once lost, returns it there
+function previousStageFor(lead) {
+  if (lead.insurance && lead.stage === "won") return "insurance";
+  return PREVIOUS_STAGE[lead.stage];
+}
+
+// the insurance bucket's per-lead checklist, in order — keys match
+// INSURANCE_STEPS in server/src/routes/leads.js. Checking "jobWon" moves the
+// lead on to "won".
+const INSURANCE_STEPS = [
+  { key: "initialInspection", label: "Initial inspection" },
+  { key: "claimLetterSent", label: "Insurance claim letter sent" },
+  { key: "itelSent", label: "ITEL sent", hint: "check if not applicable" },
+  { key: "supplementSent", label: "Supplement sent" },
+  { key: "costingComplete", label: "Costing complete" },
+  { key: "finalEstimateSent", label: "Final estimate sent to customer" },
+  { key: "jobWon", label: "Job won", hint: "moves it to Won" },
+];
 
 const SOURCES = [
   { key: "referral", label: "Referral" },
@@ -1803,14 +1825,14 @@ function App() {
     setShowPushPrompt(false);
   };
 
-  const addLead = async (name, job, phone, email, source, sourceOther) => {
+  const addLead = async (name, job, phone, email, source, sourceOther, insurance) => {
     if (!name.trim() || !source) return;
     try {
-      const lead = await api.addLead({ name, job, phone, email, source, sourceOther });
+      const lead = await api.addLead({ name, job, phone, email, source, sourceOther, insurance: !!insurance });
       leadsVersionRef.current++;
       setLeads((prev) => [lead, ...(prev || [])]);
       setShowAdd(false);
-      setActiveStage("new");
+      setActiveStage(lead.stage === "insurance" ? "insurance" : "new");
       setView("board");
       setError("");
       loadContacts();
@@ -1863,6 +1885,35 @@ function App() {
       await api.deleteContact(id);
     } catch {
       setContacts(prevContacts);
+    }
+  };
+
+  // check/uncheck an insurance checklist step — checking "Job won" moves
+  // the lead to Won server-side, so follow it there and run the same
+  // who's-managing-it prompt a normal win gets
+  const toggleInsuranceStep = async (id, step, done) => {
+    leadsVersionRef.current++;
+    const now = new Date().toISOString();
+    setLeads((prev) =>
+      prev.map((l) => {
+        if (l.id !== id) return l;
+        const insuranceChecklist = { ...(l.insuranceChecklist || {}) };
+        if (done) insuranceChecklist[step] = insuranceChecklist[step] || now;
+        else delete insuranceChecklist[step];
+        return { ...l, insuranceChecklist };
+      })
+    );
+    try {
+      const updated = await api.setInsuranceStep(id, step, done);
+      setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+      setError("");
+      if (step === "jobWon" && done && updated.stage === "won") {
+        setActiveStage("won");
+        setManagerPromptLead(updated);
+      }
+    } catch {
+      setError("Couldn't save that checklist item — try again.");
+      loadLeads();
     }
   };
 
@@ -2828,6 +2879,8 @@ function App() {
                 <div style={{ fontFamily: FONT_BODY, color: COLORS.muted, fontSize: 13 }}>
                   {activeStage === "new"
                     ? "Tap “New Lead” to log one."
+                    : activeStage === "insurance"
+                    ? "Check “Insurance job” when logging a new lead to put it here."
                     : "Leads land here once they move through the board."}
                 </div>
               </div>
@@ -2845,6 +2898,7 @@ function App() {
                   highlighted={lead.id === highlightedLeadId}
                   onOpenReport={setReportLead}
                   onLogFollowup={logFollowup}
+                  onToggleInsuranceStep={toggleInsuranceStep}
                   onRemoveFollowup={removeFollowup}
                   settings={settings}
                   mapsPreference={mapsPreference}
@@ -4613,7 +4667,7 @@ function DashboardView({
             <span style={{ fontFamily: FONT_BODY, fontWeight: 400, fontSize: 13, color: COLORS.muted }}> active</span>
           </div>
           <div style={{ fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 3 }}>
-            {counts.new || 0} new · {counts.won || 0} won · {counts.scheduled || 0} scheduled · {counts.progress || 0} in progress
+            {counts.new || 0} new · {counts.insurance ? `${counts.insurance} insurance · ` : ""}{counts.won || 0} won · {counts.scheduled || 0} scheduled · {counts.progress || 0} in progress
           </div>
         </DashboardTile>
 
@@ -7546,6 +7600,7 @@ function LeadTicket({
   onOpenReport,
   onLogFollowup,
   onRemoveFollowup,
+  onToggleInsuranceStep,
   settings,
   mapsPreference,
   onOpenProfile,
@@ -7750,6 +7805,22 @@ function LeadTicket({
             >
               {lead.name}
             </div>
+            {lead.insurance && lead.stage !== "insurance" && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontFamily: FONT_UTIL,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  color: "#fff",
+                  background: COLORS.insurance,
+                  borderRadius: 6,
+                  padding: "2px 6px",
+                }}
+              >
+                Insurance
+              </span>
+            )}
             <ChevronRight size={16} color={COLORS.muted} style={{ flexShrink: 0 }} />
           </div>
           {editable && (
@@ -8394,7 +8465,15 @@ function LeadTicket({
           <ActionRow lead={lead} onMove={onMove} onOpenReport={editable ? onOpenReport : undefined} settings={settings} editable={editable} />
         )}
 
-        {editable && (lead.stage === "new" || lead.stage === "bid") && (
+        {lead.stage === "insurance" && (
+          <InsuranceChecklist
+            lead={lead}
+            editable={editable}
+            onToggle={(step, done) => onToggleInsuranceStep(lead.id, step, done)}
+          />
+        )}
+
+        {editable && (lead.stage === "new" || lead.stage === "insurance" || lead.stage === "bid") && (
           <FollowUpSection
             lead={lead}
             onLog={() => onLogFollowup(lead.id)}
@@ -8468,6 +8547,63 @@ function materialsSummary(m) {
   if (!m.ordered) return "";
   const when = m.availability === "date" && m.availableDate ? `available ${fmtDate(m.availableDate)}` : "available now";
   return `${m.supplier} · ${when}`;
+}
+
+// the insurance bucket's checklist on each card — owner can tick steps off,
+// the PM sees progress read-only
+function InsuranceChecklist({ lead, editable, onToggle }) {
+  const checklist = lead.insuranceChecklist || {};
+  const doneCount = INSURANCE_STEPS.filter((s) => checklist[s.key]).length;
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: "6px 12px 4px",
+        borderRadius: 10,
+        border: `1px solid ${COLORS.border}`,
+        background: COLORS.surfaceMuted,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontFamily: FONT_UTIL,
+          fontSize: 11.5,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+          color: COLORS.insurance,
+          paddingTop: 4,
+        }}
+      >
+        <span>Insurance checklist</span>
+        <span style={{ color: COLORS.muted }}>
+          {doneCount}/{INSURANCE_STEPS.length}
+        </span>
+      </div>
+      {INSURANCE_STEPS.map((step) => {
+        const checkedAt = checklist[step.key];
+        return (
+          <CheckRow
+            key={step.key}
+            checked={!!checkedAt}
+            disabled={!editable}
+            onToggle={() => onToggle(step.key, !checkedAt)}
+          >
+            <span style={{ color: checkedAt ? COLORS.muted : COLORS.ink }}>{step.label}</span>
+            {step.hint && !checkedAt && (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}> · {step.hint}</span>
+            )}
+            {checkedAt && (
+              <span style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}> · {fmtDateOnly(checkedAt)}</span>
+            )}
+          </CheckRow>
+        );
+      })}
+    </div>
+  );
 }
 
 function CheckRow({ checked, onToggle, disabled, children }) {
@@ -11702,7 +11838,7 @@ function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
 
 function LeadMoreMenu({ lead, onMove }) {
   const [open, setOpen] = useState(false);
-  const prevStage = PREVIOUS_STAGE[lead.stage];
+  const prevStage = previousStageFor(lead);
   if (!prevStage) return null;
   const prevLabel = STAGES.find((s) => s.key === prevStage)?.short || prevStage;
 
@@ -11871,11 +12007,17 @@ function ActionRow({ lead, onMove, onOpenReport, settings, editable }) {
     case "new":
       actions = [btn("Bid sent", "bid")];
       break;
+    case "insurance":
+      // moves on by checking "Job won" in the checklist above
+      actions = [];
+      break;
     case "bid":
       actions = [btn("Won", "won")];
       break;
     case "lost":
-      actions = [btn("Reopen as new", "new", "secondary")];
+      actions = lead.insurance
+        ? [btn("Reopen as insurance", "insurance", "secondary")]
+        : [btn("Reopen as new", "new", "secondary")];
       break;
     case "won":
       actions = [btn("Scheduled", "scheduled")];
@@ -12070,6 +12212,7 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
   const [email, setEmail] = useState("");
   const [source, setSource] = useState("");
   const [sourceOther, setSourceOther] = useState("");
+  const [insurance, setInsurance] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showContactPicker, setShowContactPicker] = useState(false);
 
@@ -12077,7 +12220,7 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
 
   const submit = () => {
     if (!canSubmit) return;
-    onAdd(name, job, phone, email, source, sourceOther);
+    onAdd(name, job, phone, email, source, sourceOther, insurance);
   };
 
   // repeat-customer autofill — matched against the owner's auto-saved
@@ -12236,6 +12379,12 @@ function AddLeadModal({ onAdd, onClose, contacts }) {
             />
           </>
         )}
+        <div style={{ marginTop: 10 }}>
+          <CheckRow checked={insurance} onToggle={() => setInsurance((v) => !v)}>
+            <span style={{ fontWeight: 600 }}>Insurance job</span>
+            <span style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted }}> · goes to the Insurance bucket, not New</span>
+          </CheckRow>
+        </div>
         <div style={{ fontFamily: FONT_UTIL, fontSize: 12.5, color: COLORS.muted, marginTop: 8, marginBottom: 18 }}>
           Timestamped now — you can edit the received time after adding.
         </div>

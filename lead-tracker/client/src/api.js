@@ -94,6 +94,8 @@ export const api = {
     request(`/leads/${id}/trade-answers`, { method: "PATCH", body: JSON.stringify(patch) }),
   draftEstimate: (id) => request(`/leads/${id}/draft-estimate`, { method: "POST" }),
   updateReport: (id, patch) => request(`/leads/${id}/report`, { method: "PATCH", body: JSON.stringify(patch) }),
+  setInsuranceStep: (id, step, done) =>
+    request(`/leads/${id}/insurance-checklist`, { method: "PATCH", body: JSON.stringify({ step, done }) }),
   logFollowup: (id) => request(`/leads/${id}/followups`, { method: "POST" }),
   removeFollowup: (id, followupId) => request(`/leads/${id}/followups/${followupId}`, { method: "DELETE" }),
   deleteLead: (id) => request(`/leads/${id}`, { method: "DELETE" }),
