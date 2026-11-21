@@ -12,7 +12,9 @@ import { localMonthKey } from "../businessTime.js";
 import { parseJobDetails, applyJobDetailsPatch } from "../jobDetails.js";
 import { cleanReportTags, parseReportTags } from "../jobReportTags.js";
 import { cleanEstimateBasics, parseEstimateBasics, missingEstimateBasics } from "../../../shared/estimateBasics.js";
-import { syncLeadToJobTread, jobtreadConfigured, jobUrl } from "../jobtread.js";
+import { syncLeadToJobTread, jobtreadConfigured, jobUrl, PossibleDuplicateError } from "../jobtread.js";
+import { reviewDraft } from "../estimateReview.js";
+import { sendPreview, sendApprovedProposal, SendRefused } from "../proposalSend.js";
 import { cleanTradeAnswers, missingTradeAnswers, AUTOMATED_TRADES } from "../../../shared/tradeQuestions.js";
 import { draftEstimate } from "../estimateDraft.js";
 import {
@@ -657,11 +659,20 @@ router.post("/:id/start-estimate", requireAuth("owner"), async (req, res) => {
   } catch {
     existing = {};
   }
+  // Sean's answer when a same-name/same-address customer was found
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const choice = {
+    useAccountId: typeof body.useAccountId === "string" && /^[A-Za-z0-9]{6,40}$/.test(body.useAccountId) ? body.useAccountId : null,
+    createNew: body.createNew === true,
+  };
   try {
-    const link = await syncLeadToJobTread(row, basics, existing);
+    const link = await syncLeadToJobTread(row, basics, existing, choice);
     db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(link), row.id);
     res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
   } catch (err) {
+    if (err instanceof PossibleDuplicateError) {
+      return res.status(409).json({ error: err.message, duplicates: err.candidates });
+    }
     console.error("start-estimate failed", err);
     // keep whatever did get created, so a retry doesn't duplicate it
     if (existing.accountId) db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(existing), row.id);
@@ -726,7 +737,9 @@ router.post("/:id/draft-estimate", requireAuth("owner"), async (req, res) => {
 
   draftingEstimate.add(row.id);
   try {
-    const draft = await draftEstimate({ lead: row, basics, answers, link });
+    const { lines, emailMessage, ...draft } = await draftEstimate({ lead: row, basics, answers, link });
+    // past pricing + Claude's rule check; flags only, never changes the draft
+    draft.review = await reviewDraft({ basics, lines, emailMessage });
     link.estimates = [...(Array.isArray(link.estimates) ? link.estimates : []), draft];
     db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(link), row.id);
     res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
@@ -735,6 +748,67 @@ router.post("/:id/draft-estimate", requireAuth("owner"), async (req, res) => {
     res.status(502).json({ error: `Couldn't build the estimate: ${err.message}` });
   } finally {
     draftingEstimate.delete(row.id);
+  }
+});
+
+function linkOf(row) {
+  try {
+    return row.jobtread ? JSON.parse(row.jobtread) : null;
+  } catch {
+    return null;
+  }
+}
+
+function draftedDoc(link, documentId) {
+  return (Array.isArray(link?.estimates) ? link.estimates : []).find((e) => e.documentId === documentId);
+}
+
+// Send preview — owner-only, read-only: exactly what would go out for this
+// drafted proposal (recipient, message, attachments, total) and the
+// approval key for it. Pass `emailMessage` to preview an edited message.
+router.post("/:id/estimates/:documentId/send-preview", requireAuth("owner"), async (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  const link = linkOf(row);
+  if (!link?.jobId || !draftedDoc(link, req.params.documentId)) return res.status(404).json({ error: "That proposal wasn't drafted from this lead." });
+  try {
+    const emailMessage = typeof req.body?.emailMessage === "string" ? req.body.emailMessage.slice(0, 10000) : undefined;
+    res.json(await sendPreview(link, req.params.documentId, { emailMessage }));
+  } catch (err) {
+    if (err instanceof SendRefused) return res.status(err.status).json({ error: err.message });
+    res.status(502).json({ error: `Couldn't reach JobTread: ${err.message}` });
+  }
+});
+
+// Approve & send — owner-only. The ONLY way Lead Hammer emails a customer,
+// and only with the approval key from a preview Sean looked at. Refused if
+// anything changed since; afterwards the proposal is set to pending so the
+// customer can sign.
+const sendingEstimate = new Set();
+router.post("/:id/estimates/:documentId/send", requireAuth("owner"), async (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+  if (!jobtreadConfigured()) return res.status(503).json({ error: "JobTread isn't connected yet." });
+  const link = linkOf(row);
+  const entry = draftedDoc(link, req.params.documentId);
+  if (!link?.jobId || !entry) return res.status(404).json({ error: "That proposal wasn't drafted from this lead." });
+  if (req.body?.approved !== true) return res.status(400).json({ error: "Approve this proposal before sending it." });
+  if (sendingEstimate.has(req.params.documentId)) return res.status(409).json({ error: "Already sending — one moment." });
+  sendingEstimate.add(req.params.documentId);
+  try {
+    const emailMessage = typeof req.body?.emailMessage === "string" ? req.body.emailMessage.slice(0, 10000) : undefined;
+    const sent = await sendApprovedProposal(link, req.params.documentId, { approvalKey: String(req.body?.approvalKey || ""), emailMessage });
+    entry.sent = sent;
+    entry.status = sent.status;
+    db.prepare(`UPDATE leads SET jobtread = ? WHERE id = ?`).run(JSON.stringify(link), row.id);
+    res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+  } catch (err) {
+    console.error("send-estimate failed", err);
+    if (err instanceof SendRefused) return res.status(err.status).json({ error: err.message });
+    // a failure partway through may or may not have emailed: say so plainly
+    res.status(502).json({ error: `JobTread error while sending: ${err.message}. Check the proposal in JobTread before trying again.` });
+  } finally {
+    sendingEstimate.delete(req.params.documentId);
   }
 });
 

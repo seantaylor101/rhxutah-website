@@ -10,6 +10,7 @@
 // organization only).
 
 import { ESTIMATE_BASICS_QUESTIONS } from "../../shared/estimateBasics.js";
+import { JOBTREAD } from "../../estimating/index.js";
 
 const PAVE_URL = "https://api.jobtread.com/pave";
 
@@ -130,7 +131,7 @@ export async function findCustomerAccount(orgId, { phone, email }) {
 // or "123 Main St Gutters". JobTread caps job names at 30 characters, so the
 // longest version that fits is used; whatever doesn't fit (a long Job field)
 // goes in the job's description instead.
-const MAX_JOB_NAME = 30;
+const MAX_JOB_NAME = JOBTREAD.limits.jobName;
 
 function tradeLabelsOf(basics) {
   const trades = ESTIMATE_BASICS_QUESTIONS.find((q) => q.key === "trades");
@@ -187,16 +188,96 @@ export function basicsSummary(basics, lead = {}) {
   return `From Lead Hammer:\n${lines.join("\n")}`;
 }
 
+// Raised when a customer with the same name or street address already exists
+// in JobTread (but no phone/email match): Sean picks one or says "create
+// new" instead of the estimator guessing.
+export class PossibleDuplicateError extends Error {
+  constructor(candidates) {
+    super("A customer with this name or address is already in JobTread");
+    this.candidates = candidates;
+  }
+}
+
+const normName = (n) => String(n || "").toLowerCase().replace(/[^a-z]/g, "");
+
+// customers with the same full name, or a location on the same street
+// address. Matching on name alone is exact (other Petersons don't count).
+export async function findSimilarAccounts(orgId, lead) {
+  const name = String(lead.name || "").trim();
+  const houseNumber = (streetOf(lead.address).match(/^\d+/) || [""])[0];
+  const lastWord = name.split(/\s+/).pop() || "";
+  const data = await pave({
+    organization: {
+      $: { id: orgId },
+      ...(lastWord
+        ? {
+            accounts: {
+              $: { where: { and: [["type", "customer"], ["name", "like", `%${lastWord}%`]] }, size: 50 },
+              nodes: { id: {}, name: {} },
+            },
+          }
+        : {}),
+      ...(houseNumber
+        ? {
+            locations: {
+              $: { where: { and: [["address", "like", `${houseNumber} %`], [["account", "type"], "customer"]] }, size: 50 },
+              nodes: { id: {}, address: {}, account: { id: {}, name: {} } },
+            },
+          }
+        : {}),
+    },
+  });
+  const out = new Map();
+  for (const a of data?.organization?.accounts?.nodes || []) {
+    if (normName(a.name) && normName(a.name) === normName(name)) out.set(a.id, { accountId: a.id, name: a.name, matchedOn: ["name"] });
+  }
+  for (const l of data?.organization?.locations?.nodes || []) {
+    if (!sameStreet(l.address, lead.address)) continue;
+    const prev = out.get(l.account.id) || { accountId: l.account.id, name: l.account.name, matchedOn: [] };
+    if (!prev.matchedOn.includes("address")) prev.matchedOn.push("address");
+    prev.address = l.address;
+    prev.locationId = l.id;
+    out.set(l.account.id, prev);
+  }
+  return [...out.values()];
+}
+
+async function accountWithLocations(accountId) {
+  const data = await pave({
+    account: { $: { id: accountId }, id: {}, name: {}, type: {}, locations: { $: { size: 50 }, nodes: { id: {}, address: {} } } },
+  });
+  const a = data?.account;
+  if (!a?.id || a.type !== "customer") throw new Error("That JobTread customer couldn't be found");
+  return a;
+}
+
 // Makes sure the lead exists in JobTread as customer → location → job,
 // reusing whatever's already linked (existing) or already in JobTread.
 // Fills in `link` as it goes (so a failure partway through still leaves the
 // ids of whatever got created, and a retry picks up from there) and returns it.
-export async function syncLeadToJobTread(lead, basics, link = {}) {
+//
+// Duplicate guard: a phone/email match is reused automatically. Otherwise a
+// customer with the same name or street address stops here with a
+// PossibleDuplicateError, unless Sean already chose: `choice.useAccountId`
+// (reuse that customer) or `choice.createNew` (make a new one anyway).
+export async function syncLeadToJobTread(lead, basics, link = {}, choice = {}) {
   const orgId = await organizationId();
 
   // 1. customer account (+ contact)
+  if (!link.accountId && choice.useAccountId) {
+    const a = await accountWithLocations(choice.useAccountId);
+    link.accountId = a.id;
+    link.accountName = a.name;
+    link.reusedCustomer = true;
+    const loc = (a.locations?.nodes || []).find((l) => sameStreet(l.address, lead.address));
+    if (loc) link.locationId = loc.id;
+  }
   if (!link.accountId) {
     const found = await findCustomerAccount(orgId, lead);
+    if (!found && !choice.createNew) {
+      const candidates = await findSimilarAccounts(orgId, lead);
+      if (candidates.length) throw new PossibleDuplicateError(candidates);
+    }
     if (found) {
       link.accountId = found.id;
       link.accountName = found.name;
@@ -217,8 +298,8 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
 
       const contactFields = {};
       const e164 = toE164(lead.phone);
-      if (e164) contactFields.Phone = e164;
-      if (String(lead.email || "").trim()) contactFields.Email = lead.email.trim();
+      if (e164) contactFields[JOBTREAD.customFields.contactPhone] = e164;
+      if (String(lead.email || "").trim()) contactFields[JOBTREAD.customFields.contactEmail] = lead.email.trim();
       await pave({
         createContact: {
           $: { accountId: link.accountId, name: capName(lead.name), customFieldValues: contactFields },
@@ -247,7 +328,7 @@ export async function syncLeadToJobTread(lead, basics, link = {}) {
           locationId: link.locationId,
           name: jobNameFor(lead, basics),
           description: basicsSummary(basics, lead),
-          customFieldValues: { Status: "Estimating" },
+          customFieldValues: { [JOBTREAD.customFields.jobStatus]: JOBTREAD.customFields.jobStatusEstimating },
         },
         createdJob: { id: {}, number: {} },
       },

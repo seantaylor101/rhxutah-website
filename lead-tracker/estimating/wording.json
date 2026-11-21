@@ -1,0 +1,59 @@
+{
+  "_about": "Customer-facing wording for proposal lines. Lifetime warranty goes ONLY on full installs (see rules.md). Keep lines short: no 'haul away debris' style filler.",
+
+  "warranty": {
+    "lifetime": "Covered by the Ridgeline Home Exteriors Lifetime Workmanship Warranty (see warranty terms).",
+    "paint": "One coat applied in two passes. Paint workmanship covers missed coverage found within the first year.",
+    "manufacturer": "Manufacturer warranty from {maker}; registering it is the customer's responsibility.{link} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs.",
+    "stuccoColorMatch": "Stucco repairs can't be perfectly color-matched to the existing wall."
+  },
+
+  "manufacturers": {
+    "_about": "registrationUrl is linked on the line when set. (CONFIRM) the registration/claims links Sean wants used.",
+    "lp": { "maker": "LP Building Solutions", "registrationUrl": null },
+    "hardie": { "maker": "James Hardie", "registrationUrl": null },
+    "ascend": { "maker": "Alside", "registrationUrl": null },
+    "vinyl": { "maker": "the siding manufacturer", "registrationUrl": null },
+    "vinylShake": { "maker": "Foundry", "registrationUrl": null },
+    "bulldog": { "maker": "Bulldog", "registrationUrl": null }
+  },
+
+  "siding": {
+    "lp": {
+      "lap": "LP SmartSide lap siding with trim & house wrap",
+      "batten": "LP SmartSide board & batten with trim & house wrap",
+      "shake": "LP SmartSide cedar-texture shakes with trim & house wrap",
+      "description": "Genuine LP SmartSide engineered wood siding, primed and painted on site."
+    },
+    "hardie": {
+      "lap": "James Hardie HardiePlank lap siding with genuine HardieTrim & house wrap",
+      "batten": "James Hardie board & batten with genuine HardieTrim & house wrap",
+      "shake": "James Hardie HardieShingle with genuine HardieTrim & house wrap",
+      "description": "Genuine James Hardie fiber cement siding and genuine HardieTrim, primed and painted on site."
+    },
+    "ascend": {
+      "lap": "Alside Ascend composite cladding with Ascend trim & house wrap",
+      "description": "Genuine Alside Ascend composite cladding with matching Ascend trim."
+    },
+    "vinyl": {
+      "lap": "Vinyl siding with trim & house wrap",
+      "shake": "Foundry 7\" staggered vinyl shake with trim & house wrap",
+      "description": "Premium vinyl siding with matching trim and corner posts."
+    },
+    "vinylShake": {
+      "shake": "Foundry 7\" staggered vinyl shake siding with trim & house wrap",
+      "description": "Foundry 7\" staggered vinyl shake with matching trim and corner posts."
+    },
+    "paintRetail": "Painted with Sherwin-Williams Emerald Rain Refresh.",
+    "paintGc": "Painted with contractor-grade exterior paint."
+  },
+
+  "gutters": {
+    "description": "Seamless K-style aluminum gutters and downspouts.",
+    "tearOff": "Includes removing the existing gutters."
+  },
+
+  "repairs": "Repair work isn't covered by the lifetime workmanship warranty.",
+
+  "drains": "Price assumes no concrete, roots or landscaping in the drain path; if we find any, we'll quote it before doing that part."
+}

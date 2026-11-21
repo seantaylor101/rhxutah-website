@@ -1,0 +1,81 @@
+{
+  "_about": "JobTread IDs and Proposal defaults for Ridgeline Home Exteriors. The estimator reads these; nothing in code hard-codes an ID.",
+
+  "organizationId": "22PJfnq4z27F",
+
+  "costTypes": {
+    "labor": "22PJfnqzbFfJ",
+    "materials": "22PJfnqzbFfK",
+    "subcontractor": "22PJfnqzbFfL",
+    "other": "22PJfnqzbFfM",
+    "_installed": "other"
+  },
+
+  "units": {
+    "each": "22PJfnqzbFeZ",
+    "lf": "22PJfnqzbFec",
+    "lump": "22PJfnqzbFed",
+    "sf": "22PJfnqzbFef",
+    "squares": "22PJfnqzbFeg",
+    "hours": "22PJfnqzbFeb"
+  },
+
+  "costCodes": {
+    "gutters": "22PiKU5iG4cy",
+    "gutterGuards": "22PiKU5iG4cz",
+    "drainage": "22PiKU5iG4d2",
+    "soffitFascia": "22PiKU5iG4cx",
+    "siding_vinyl": "22PiKU5iGnRb",
+    "siding_vinylShake": "22PiKU5iGnRb",
+    "siding_ascend": "22PiKU5iGnRd",
+    "siding_hardie": "22PiKU5iGnRe",
+    "siding_lp": "22PiKYHASwec",
+    "sidingPrep": "22PiKU5iGnRf",
+    "stucco": "22PiKU5iGnRc",
+    "lighting": "22PiKsYkywFv",
+    "painting": "22PJfnqzbFf9"
+  },
+
+  "assemblies": {
+    "gutters": "22PiKu7hJgmr",
+    "siding_lp": "22PiLt4qNebY",
+    "siding_hardie": "22PiLwHsrbUv",
+    "siding_ascend": "22PiLwLfsi72",
+    "siding_vinyl": "22PiLwPwWcMs",
+    "siding_vinylShake": "22PiLwPwWcMs",
+    "stucco": "22PiLznBbZJs",
+    "soffitFascia": "22PiMNbFW8gC",
+    "painting": "22PiMST4Jc9E",
+    "drainage": "22PiMTePxQft",
+    "lighting": "22PiMWbxM8tF"
+  },
+
+  "proposalTemplateId": "22PJfnqzbFfh",
+
+  "customFields": {
+    "contactEmail": "Email",
+    "contactPhone": "Phone",
+    "jobStatus": "Status",
+    "jobStatusEstimating": "Estimating"
+  },
+
+  "limits": { "jobName": 30 },
+
+  "proposal": {
+    "type": "customerOrder",
+    "name": "Proposal",
+    "fromName": "Sean Taylor",
+    "fromOrganizationName": "Ridgeline Home Exteriors",
+    "fromAddress": "2051 Wallflower Cir, Saratoga Springs, UT 84045, USA",
+    "fromEmailAddress": "sean@rhxutah.com",
+    "fromPhoneNumber": "+18018000831",
+    "requireSignature": true,
+    "showQuantity": false,
+    "dueDays": 30
+  },
+
+  "sending": {
+    "_about": "Sending through the API delivers the email but leaves the document 'draft' (Proposal 492-1 was opened by the customer while still draft). After a send Sean approved, the estimator sets it to 'pending' with notify:false and re-checks the status and emailDeliveryStatus.",
+    "statusAfterSend": "pending"
+  }
+}

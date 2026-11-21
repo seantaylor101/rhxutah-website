@@ -1,47 +1,60 @@
-# Lead Hammer → JobTread estimator plan
+# Lead Hammer → JobTread estimator
 
-Goal: from a lead in Lead Hammer, tap **Start Estimate**, answer a short
-questionnaire, and get a drafted JobTread estimate priced the way Ridgeline
-Home Exteriors prices work. **Nothing is ever sent to a customer without
-Sean's explicit OK.**
+From a lead in Lead Hammer: tap **Start Estimate**, answer the trade
+questions, and get a draft JobTread Proposal priced the way Ridgeline Home
+Exteriors prices work. **Nothing is ever sent to a customer without Sean
+approving that specific proposal.**
 
-## Pieces
+## Single source of truth: `estimating/`
 
-1. **Estimate basics** (done, PR #132) — owner-only questions on every lead:
-   address, customer type, work needed, stories, existing exterior,
-   measurements, timeline (+ optional HOA, year built, budget, notes).
-   `shared/estimateBasics.js`.
-2. **Customer sync** (this PR) — Start Estimate creates the JobTread
-   customer (or reuses one matching phone/email), location and job
-   (Status: Estimating, basics in the description). `server/src/jobtread.js`,
-   `POST /api/leads/:id/start-estimate`. Safe to tap again; partial failures
-   resume instead of duplicating.
-3. **Trade questionnaire** (next) — only the questions for the trades picked
-   in the basics, mapped to the JobTread catalog assemblies' parameters
-   (e.g. Seamless Gutter System: Gutter LF, downspouts by story, offsets,
-   miters, tear-off LF; LP/Hardie/vinyl/Ascend siding: wall SF, trim, corners,
-   tear-off type, cut-up walls, wrap). Prefilled from Lead Hammer Measure
-   reports when available.
-4. **Draft estimate** (next) — server copies the matching catalog assemblies
-   onto the job's estimate with the answers as parameters, adds good/better/
-   best upgrades as optional selections, and uses Claude
-   (ANTHROPIC_API_KEY) for scope wording and sanity checks. Enforces rules
-   JobTread formulas can't: $350 gutter minimum, $3,000 stucco repair
-   minimum, Emerald only on retail, contractor-grade paint on GC jobs.
-5. **Review & send** — Lead Hammer shows the draft summary and a link to it in
-   JobTread. Sending stays a manual step for Sean.
+| File | What's in it |
+|---|---|
+| `rules.md` | The estimating rules in plain English: workflow, options, proposal format, cover email, warranty, pricing rules. Claude's draft review reads it word for word. |
+| `pricing.json` | Every rate as data (gutters, guards, repairs, drains, siding, soffit/fascia, stucco, painting, lighting, tax, rounding). **Change prices here, not in code.** |
+| `jobtread.json` | JobTread org, cost type, unit, cost code, assembly and template IDs, and the Proposal defaults. |
+| `wording.json` | Line wording, warranty sentences, manufacturer notes. |
+| `index.js` | Loads and validates all of it. A missing rate fails at startup (and in tests). |
 
-## Product rules the estimator must follow
+Costs still come live from the JobTread catalog assemblies, so supplier price
+changes flow into new drafts.
 
-- Push LP SmartSide over Hardie; Hardie trim only on Hardie jobs; never
-  MiraTEC, CemPlank, ColorPlus, Diamond Kote or LP ExpertFinish.
-- Insulated reflective house wrap offered as a premium upgrade.
-- Paint: one full coat applied in two passes unless the customer asks for more
-  and it's noted before signing.
-- Lifetime workmanship warranty (non-transferable); paint covers missed
-  coverage reported within 1 year; manufacturer defects not covered.
+## Flow
+
+1. **Estimate basics** (`shared/estimateBasics.js`): customer type, work,
+   stories, existing exterior, measurements, timeline, address. Required
+   before Start Estimate.
+2. **Start Estimate** (`server/src/jobtread.js`): creates the JobTread
+   customer, contact, location and job only now, not when the lead is logged.
+   - Duplicate guard: a phone/email match is reused automatically.
+   - A same-name or same-street customer stops and shows Sean the matches
+     ("Use this customer" or "Create new customer").
+   - Safe to tap again.
+3. **Trade questions** (`shared/tradeQuestions.js`): per trade, including
+   gutter color, repair/odd-job lines from presets, and good/better/best gutter
+   guard options (footage, difficult access, reason, recommended).
+4. **Draft** (`server/src/estimateDraft.js`): one **installed** line per item
+   (material + labor combined, cost type Other) on every proposal.
+   - Prices come from `pricing.json`, rounded to $0.25 per unit or $5 lump.
+   - Lifetime warranty appears only on full installs.
+   - Option sets use a min 0 / max 1 parent with the recommended option
+     pre-selected.
+   - Tax is 7.45% on insurance proposals only, 0 on retail and GC.
+5. **Review** (`server/src/estimateReview.js`): past pricing for the same
+   lines from JobTread history, plus Claude checking the draft and email
+   against `rules.md`. It only flags problems and never changes prices.
+6. **Approve & send** (`server/src/proposalSend.js`):
+   - Lead Hammer shows the exact recipient, message, attachments and total.
+   - Sean can edit the message, then approves.
+   - The server refuses the send if anything changed since he approved.
+   - After sending, it sets the Proposal to **pending** (the API send leaves
+     it draft, so the customer couldn't sign) and reads back the email
+     delivery status.
+
+Reference job for testing: Scott Peterson, JobTread #492. The tests rebuild it
+exactly ($1,060 base; Option A $2,464; Option B $1,820; no tax).
 
 ## Config
 
-- `JOBTREAD_GRANT_KEY` — grant scoped to Ridgeline Home Exteriors only.
-- `ANTHROPIC_API_KEY` — already set.
+- `JOBTREAD_GRANT_KEY`: grant scoped to Ridgeline Home Exteriors only.
+- `ANTHROPIC_API_KEY`: the rule review. Without it the review is skipped and
+  drafting still works.

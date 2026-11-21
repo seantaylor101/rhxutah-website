@@ -1,14 +1,10 @@
-// The email message that goes out with a drafted Proposal, written the way
-// Sean writes his own proposal emails in JobTread: "Hey <first name>, here is
-// the quote for <work> ...", a sentence on any upgrade options and why
-// they're there, a close inviting questions or scheduling, "Thanks so much,
-// Sean". GC messages are short and to the point; retail ones mention the
-// lifetime workmanship warranty. It's only pre-filled — Sean can still edit
-// it in JobTread's send screen before anything goes out.
+// The cover email that goes with a drafted Proposal (body only; JobTread
+// supplies the subject). Rules (estimating/rules.md): short, first person
+// ("Thanks for having me out"), one or two sentences on why the options
+// exist, and point them to sign in the proposal. It never restates the bid.
+// It's only sent after Sean approves this specific proposal.
 
 import { ESTIMATE_BASICS_QUESTIONS } from "../../shared/estimateBasics.js";
-
-const SIGNATURE = "Sean Taylor\nRidgeline Home Exteriors\n801-800-0831";
 
 // "Sam Willis" → "Sam"; "Cindy and Layne Bell" → "Cindy and Layne"
 export function greetingName(name) {
@@ -63,61 +59,64 @@ function workLabel(basics, answers = {}) {
     return trades.options.find((o) => o.key === k)?.label.toLowerCase();
   });
   const list_ = phrases.filter(Boolean);
+  // a gutter job without new gutters is repairs and/or guards
+  const g = answers?.gutters || {};
+  const gi = list_.indexOf("new gutters and downspouts");
+  if (gi >= 0 && !(Number(g.gutterLF) > 0) && (g.repairs?.length || g.guardOptions?.length)) {
+    list_[gi] = [g.repairs?.length && "the gutter repairs", g.guardOptions?.length && "gutter guards"].filter(Boolean).join(" and ");
+  }
   return list_.length ? list(list_) : "the exterior work";
 }
 
-// one sentence on the upgrade options, saying why each one is there — like
-// "I also added gutter guards as an option to eliminate maintenance due to
-// the large trees on the property as well as an in-ground drain..."
-export function upgradeSentence(offered, { gc = false } = {}) {
+// one sentence on why the options are there
+export function upgradeSentence(offered, { gc = false, guardOptions = [] } = {}) {
   const items = [];
   if (offered.guards) items.push({ name: "gutter guards", why: "to cut down on maintenance with the trees on the property" });
   if (offered.drains) items.push({ name: "in-ground drains", why: "to carry the downspout water away from the foundation" });
   if (offered.lighting) items.push({ name: "permanent holiday lighting", why: "since we'll already be up on the eaves" });
-  if (offered.insulatedWrap) {
-    items.push({ name: "an insulated reflective house wrap", why: "to help keep the walls cooler in summer and warmer in winter" });
+  if (offered.insulatedWrap) items.push({ name: "an insulated reflective house wrap", why: "to help keep the walls cooler in summer and warmer in winter" });
+  if (offered.emeraldPaint) items.push({ name: "Sherwin-Williams Emerald Rain Refresh paint", why: "for a longer-lasting finish" });
+  const parts = [];
+  if (guardOptions.length > 1) {
+    const rec = guardOptions.findIndex((o) => o.recommended);
+    parts.push(
+      `I put together ${guardOptions.length} gutter guard options so you can choose how much of the house to cover${rec >= 0 ? `; Option ${"ABCD"[rec]} is the one I'd recommend` : ""}.`
+    );
+  } else if (guardOptions.length === 1) {
+    parts.push("I added gutter guards as an option to cut down on maintenance.");
   }
-  if (offered.emeraldPaint) items.push({ name: "Sherwin-Williams Emerald Rain Refresh paint", why: "" });
-  if (!items.length) return "";
-  if (gc) return `I added ${list(items.map((i) => i.name))} as ${items.length === 1 ? "an option" : "options"}.`;
-  const [first, ...rest] = items;
-  const more = rest.map((i) => `${i.name}${i.why ? ` ${i.why}` : ""}`);
-  return `I also added ${first.name} as an option${first.why ? ` ${first.why}` : ""}${more.length ? `, as well as ${list(more)}` : ""}.`;
+  if (items.length) {
+    if (gc) parts.push(`I included ${list(items.map((i) => i.name))} as ${items.length === 1 ? "an option" : "options"}.`);
+    else {
+      const [first, ...rest] = items;
+      const more = rest.map((i) => `${i.name} ${i.why}`);
+      parts.push(`I also included ${first.name} as an option ${first.why}${more.length ? `, as well as ${list(more)}` : ""}.`);
+    }
+  }
+  return parts.join(" ");
 }
+
+// closing and signature as Sean writes them (Proposal 492-1)
+const QUESTIONS = "If you have any questions, just reply here or call me at 801-800-0831.";
+const SIGNATURE = "Thanks,\nSean\nRidgeline Home Exteriors\n801-800-0831 | sean@rhxutah.com";
+const signHere = (hasOptions) => (hasOptions ? "You can choose an option and sign right in the proposal." : "You can review everything and sign right in the proposal.");
 
 export function proposalMessage({ lead, basics, answers = {}, offered = {} }) {
   const type = basics.customerType || "retail";
   const work = workLabel(basics, answers);
-  const city = cityOf(lead.address);
   const street = String(lead.address || "").split(/[,\n]/)[0].trim();
   const homeowner = String(basics.homeownerName || "").trim();
   const hi = `Hey ${greetingName(lead.name)},`;
+  const options = upgradeSentence(offered, { gc: type === "gc", guardOptions: answers?.gutters?.guardOptions || [] });
 
   if (type === "gc") {
     const forWhom = homeowner || street;
-    return [
-      hi,
-      [`Here is the estimate for the ${work}${forWhom ? ` for ${forWhom}` : ""}.`, upgradeSentence(offered, { gc: true })]
-        .filter(Boolean)
-        .join(" "),
-      "Let me know if you have any questions or would like to move forward.",
-      "Thanks so much,\n\nSean",
-    ].join("\n\n");
+    return [hi, [`Here's my bid for ${work}${forWhom ? ` for ${forWhom}` : ""}.`, options].filter(Boolean).join(" "), `${signHere(!!options)} ${QUESTIONS}`, SIGNATURE].join("\n\n");
   }
-
-  if (type === "insurance") {
-    return [
-      hi,
-      `Here is my estimate for the ${work}${street ? ` at ${street}` : ""}. ${upgradeSentence(offered)}`.trim(),
-      "Please let me know if you have any questions.",
-      `Thanks so much,\n\n${SIGNATURE}`,
-    ].join("\n\n");
-  }
-
   return [
     hi,
-    `Here is the quote for ${work} on your home${city ? ` in ${city}` : ""}. ${upgradeSentence(offered)}`.trim(),
-    "Let me know if you have any questions or if you'd like to move forward and get it scheduled. We have a lifetime workmanship warranty, so if you ever have an issue caused by our workmanship, we'll come out and fix it. We stand by our work.",
-    `Thanks so much,\n\n${SIGNATURE}`,
+    ["Thanks for having me out.", `Here's my ${type === "insurance" ? "estimate" : "proposal"} for ${work}.`, options].filter(Boolean).join(" "),
+    `${signHere(!!options)} ${QUESTIONS}`,
+    SIGNATURE,
   ].join("\n\n");
 }

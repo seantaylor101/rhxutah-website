@@ -6,6 +6,8 @@ RUN npm install
 COPY client/ ./
 # house geometry shared with the server (imported as ../../shared from client/src)
 COPY shared/ /app/shared/
+# estimating rules/prices (repair presets are shown in the questionnaire)
+COPY estimating/ /app/estimating/
 RUN npm run build
 
 # ---- runtime: server + built client ----
@@ -19,6 +21,8 @@ COPY server/package*.json ./server/
 RUN npm --prefix server install --omit=dev
 COPY server/ ./server/
 COPY shared/ ./shared/
+# the single source of truth for estimating: rules.md, pricing.json, jobtread.json
+COPY estimating/ ./estimating/
 COPY --from=client-build /app/client/dist ./client/dist
 
 ENV NODE_ENV=production

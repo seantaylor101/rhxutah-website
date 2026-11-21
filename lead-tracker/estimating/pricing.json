@@ -1,0 +1,267 @@
+{
+  "_about": "Every rate the Lead Hammer estimator uses. Prices are what the customer pays for an INSTALLED line (material + labor combined, never shown split). Costs for catalog work come live from the JobTread catalog; the costs here are only for items that have no catalog cost. Edit this file, not the code. See rules.md for how each rate is applied.",
+  "rounding": {
+    "_about": "Unit prices per LF / SF / square round to the nearest $0.25; each / lump-sum prices round to the nearest $5.",
+    "perUnitStep": 0.25,
+    "lumpStep": 5
+  },
+  "tax": {
+    "_about": "Sales tax goes on insurance proposals only. Retail and GC proposals use taxRate 0.",
+    "rateByCustomerType": {
+      "retail": 0,
+      "gc": 0,
+      "insurance": 0.0745
+    }
+  },
+  "waste": {
+    "_about": "Siding: wall area + 10% on material and labor alike; no opening deductions.",
+    "siding": 1.1
+  },
+  "gutters": {
+    "_about": "Per LF of gutter + downspout footage (box miters count as 3 ft of gutter; no miter line). Tear-off is included in the rate.",
+    "ratesPerFoot": {
+      "retail": {
+        "5": 12,
+        "6": 15
+      },
+      "gc": {
+        "5": 8.5,
+        "6": 8.5
+      },
+      "insurance": {
+        "5": 10.5,
+        "6": 15
+      }
+    },
+    "customerRates": {
+      "_about": "GCs with their own deal, by JobTread customer account id. They are treated as GC for minimums.",
+      "22PLZFJ8Yrtd": {
+        "name": "Erick Funn / Big West Roofing",
+        "rates": {
+          "5": 7.5,
+          "6": 7.5
+        }
+      }
+    },
+    "minimum": {
+      "_about": "Small jobs: the customer's per-foot rate x minimumFeet, rounded to $5, never below the floor.",
+      "minimumFeet": 29.1667,
+      "floor": {
+        "retail": 500,
+        "insurance": 500,
+        "gc": 350
+      }
+    },
+    "takeoff": {
+      "feetPerMiter": 3,
+      "downspoutFeetByStory": {
+        "1": 13,
+        "2": 23,
+        "3": 33
+      },
+      "feetPerOffset": 2
+    }
+  },
+  "gutterGuards": {
+    "_about": "Bulldog guards installed, per LF. Catalog split: material $6.50 + labor $3 (cost $2.18 + $1). 6-inch has no set price yet: catalog material + labor, rounded.",
+    "ratesPerFoot": {
+      "5": 9.5,
+      "6": 10.25
+    },
+    "difficultAccess": {
+      "pricePerFoot": 3,
+      "costPerFoot": 1.5,
+      "_about": "Tree cover, steep grade drops, or 2nd story."
+    }
+  },
+  "gutterRepairs": {
+    "_about": "Repair and odd-job presets. Prices are starting points; every house differs, so Sean adjusts per job. None carry a lifetime warranty.",
+    "presets": {
+      "cleanPartial": {
+        "name": "Gutter cleaning (partial, approx. {qty} LF)",
+        "unit": "lump",
+        "price": 150,
+        "cost": 50,
+        "qtyLabel": "LF cleaned"
+      },
+      "relocateDownspout": {
+        "name": "Relocate downspout around corner",
+        "unit": "each",
+        "price": 225,
+        "cost": 75
+      },
+      "cancelDownspout": {
+        "name": "Cancel downspout & patch outlet",
+        "unit": "each",
+        "price": 100,
+        "cost": 30
+      },
+      "reslope": {
+        "name": "Re-slope gutters to new downspout locations",
+        "unit": "lump",
+        "price": 250,
+        "cost": 80
+      },
+      "corrugatedExtension": {
+        "name": "10' corrugated downspout extension",
+        "unit": "each",
+        "priceFrom": "corrugatedExtension"
+      },
+      "removeGuards": {
+        "name": "Remove improperly installed gutter guards & seal roof",
+        "unit": "lf",
+        "price": 5,
+        "cost": 1.75
+      },
+      "other": {
+        "name": "{name}",
+        "unit": "lump",
+        "price": 0,
+        "cost": 0
+      }
+    },
+    "corrugatedExtension": {
+      "_about": "Home Depot parts + $50, rounded to $5.",
+      "parts": {
+        "pipe4x10": 14.97,
+        "elbow4in90": 11.1
+      },
+      "elbowsPerExtension": 2,
+      "laborAdd": 50
+    }
+  },
+  "drainage": {
+    "_about": "In-ground downspout drains, installed. Home Depot materials only. Concrete always quoted by a sub first; no fixed price promised with concrete, long runs, roots or landscaping.",
+    "standardEach": 500,
+    "highCapacityEach": 630,
+    "includedRunFeet": 8,
+    "extraPipeSection": 35,
+    "extraPerFoot": 15,
+    "crewExtraPerFoot": 5
+  },
+  "siding": {
+    "_about": "Per sq ft of wall area x waste. Labor is always estimated at Alex Romero's rates (includes trim and house wrap install). Painting (LP/Hardie) is absorbed into the siding price.",
+    "ratesPerSF": {
+      "lp": {
+        "retail": 14,
+        "gc": 12,
+        "insurance": 14
+      },
+      "hardie": {
+        "retail": 14,
+        "gc": 12,
+        "insurance": 14
+      },
+      "ascend": {
+        "retail": 12.5,
+        "gc": 11,
+        "insurance": 12.5
+      },
+      "vinyl": {
+        "retail": 9,
+        "gc": 8,
+        "insurance": 6
+      },
+      "vinylShake": {
+        "retail": 14.25,
+        "gc": 13.25,
+        "insurance": 11.25
+      }
+    },
+    "styleRatesPerSF": {
+      "_about": "Board & batten and shake areas (LP and Hardie), same margin as lap. Vinyl shake areas use the vinylShake rates.",
+      "batten": {
+        "retail": 17.5,
+        "gc": 15,
+        "insurance": 17.5
+      },
+      "shake": {
+        "retail": 25.5,
+        "gc": 22,
+        "insurance": 25.5
+      }
+    },
+    "dumpster": {
+      "price": {
+        "retail": 500,
+        "gc": 500,
+        "insurance": 650
+      },
+      "cost": 350
+    },
+    "houseWrapRollSF": 1300,
+    "tearOffPerSF": {
+      "_about": "Installed price per SF torn off (catalog $0.90 / $3.60 / $3.60, rounded to quarters).",
+      "vinyl": 1,
+      "wood": 3.5,
+      "stucco": 3.5
+    },
+    "resheathPerSF": {
+      "_about": "OSB + labor per SF resheathed (catalog $0.79 x 1.1 + $3.60, rounded).",
+      "price": 4.5
+    },
+    "metalWrapEach": 450,
+    "insulatedWrapUpgradePerSF": {
+      "_about": "Per SF of wall x waste (catalog $1.80, rounded to quarters).",
+      "price": 1.75
+    }
+  },
+  "soffitFascia": {
+    "_about": "Aluminum only. Both together per LF; half that for only one of the two.",
+    "bothPerFoot": {
+      "retail": 25,
+      "gc": 22,
+      "insurance": 25
+    },
+    "porchCapPerSF": {
+      "retail": 9,
+      "gc": 9,
+      "insurance": 9
+    }
+  },
+  "stucco": {
+    "_about": "Luis Martinez. Full jobs per SF on wall area + 10%.",
+    "fullPerSF": {
+      "retail": 10,
+      "gc": 8,
+      "insurance": 10
+    },
+    "repairMinimum": {
+      "price": 2700,
+      "cost": 1800
+    },
+    "popoutPerWindow": 750,
+    "foundationPlasterPerFoot": 10,
+    "gutterWall": {
+      "cutBack": 350,
+      "stuccoRepair": 3000
+    }
+  },
+  "painting": {
+    "_about": "Same prices for every customer; costs come from the catalog. Eave painting is its own line.",
+    "wallPerSF": 4,
+    "eavePerFoot": 7,
+    "garageDoorEach": 400,
+    "manDoorEach": 300,
+    "minimum": 500
+  },
+  "lighting": {
+    "perFoot": 30,
+    "controller": 500
+  },
+  "other": {
+    "_about": "Priced per job; these are reference figures for the questionnaire and Claude's review.",
+    "columnWrapEach": 250,
+    "beamWrapPer10Ft": 250,
+    "postWrap4x4Each": 200,
+    "windowGlass": {
+      "labor": 200,
+      "minimum": 750
+    },
+    "fasciaBoard": {
+      "materialPerFoot": 10,
+      "laborPerFoot": 3
+    },
+    "vinylBellyBandPer16Ft": 80
+  }
+}

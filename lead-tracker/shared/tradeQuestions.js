@@ -14,7 +14,16 @@ export const TRADE_QUESTIONS = {
   gutters: {
     label: "Gutters",
     questions: [
-      { key: "gutterLF", label: "Gutter footage (LF)", type: "number", required: true, param: "Gutter LF" },
+      // new gutters are optional: a repairs/guards-only job (like Scott
+      // Peterson's) has no new gutter footage
+      {
+        key: "gutterLF",
+        label: "New gutter footage (LF; blank for repairs/guards only)",
+        type: "number",
+        required: (a) => !(a?.repairs?.length || a?.guardOptions?.length),
+        param: "Gutter LF",
+      },
+      { key: "color", label: "Gutter color (e.g. Dark Bronze)", type: "text", required: false },
       {
         key: "size",
         label: "Gutter size (blank = 5\")",
@@ -29,7 +38,7 @@ export const TRADE_QUESTIONS = {
       { key: "twoStory", label: "2-story downspouts", type: "number", required: false, param: "Two Story Downspouts" },
       { key: "threeStory", label: "3-story downspouts", type: "number", required: false, param: "Three Story Downspouts" },
       { key: "offsets", label: "Downspout offsets (brick, etc.)", type: "number", required: false, param: "Downspout Offsets" },
-      { key: "miters", label: "Miters (corners)", type: "number", required: false, param: "Miters" },
+      { key: "miters", label: "Box miters (corners; each counts as 3 ft)", type: "number", required: false, param: "Miters" },
       {
         key: "tearOffLF",
         label: "Old gutter to tear off (LF)",
@@ -53,6 +62,19 @@ export const TRADE_QUESTIONS = {
         type: "number",
         required: false,
       },
+      {
+        key: "difficultAccessLF",
+        label: "Guard footage with difficult access (tree cover, grade drop, 2nd story)",
+        type: "number",
+        required: false,
+        upgrade: "guards",
+      },
+      // repair / odd-job lines, priced per job from the presets in
+      // estimating/pricing.json (gutterRepairs); never lifetime warranty
+      { key: "repairs", label: "Repairs & odd jobs", type: "repairs", required: false },
+      // good/better/best gutter guard options, each with its footage and the
+      // reason (what was found on site); one is marked recommended
+      { key: "guardOptions", label: "Gutter guard options", type: "guardOptions", required: false },
       // the upgrade options — only asked when that upgrade is offered
       {
         key: "drains",
@@ -291,14 +313,16 @@ export function upgradesFor(basics, answers = {}) {
   const gutters = trades.has("gutters");
   const siding = trades.has("siding");
   return {
-    guards: gutters && answers?.gutters?.trees === "yes",
+    // guard options entered by hand replace the single trees upgrade
+    guards: gutters && answers?.gutters?.trees === "yes" && !answers?.gutters?.guardOptions?.length,
     // when Drainage is its own trade on the lead, drains are bid there instead
     drains: gutters && !trades.has("drainage") && defaultDrainCount(answers?.gutters) > 0,
     lighting: gutters && retail && siding && !trades.has("lighting"),
     // siding jobs: insulated wrap for everyone; Emerald is the paint upgrade
     // on GC bids (retail bids already get Emerald)
     insulatedWrap: siding,
-    emeraldPaint: siding && !retail && PAINTED_SIDING.includes(sidingProduct(answers)),
+    // all Hardie jobs get Emerald, so the upgrade is only for GC LP bids
+    emeraldPaint: siding && !retail && sidingProduct(answers) === "lp",
   };
 }
 
@@ -333,11 +357,68 @@ export function cleanTradeAnswers(input) {
         if (n !== null && !Number.isNaN(n)) answers[q.key] = n;
       } else if (q.type === "single") {
         if (q.options.some((o) => o.key === String(v))) answers[q.key] = String(v);
+      } else if (q.type === "text") {
+        const t = v == null ? "" : String(v).trim().slice(0, 60);
+        if (t) answers[q.key] = t;
+      } else if (q.type === "repairs") {
+        const list = cleanRepairs(v);
+        if (list.length) answers[q.key] = list;
+      } else if (q.type === "guardOptions") {
+        const list = cleanGuardOptions(v);
+        if (list.length) answers[q.key] = list;
       }
     }
     out[trade] = answers;
   }
   return out;
+}
+
+const num = (v) => {
+  const n = toNumber(v);
+  return n === null || Number.isNaN(n) ? null : n;
+};
+const text = (v, max) => (v == null ? "" : String(v).trim().slice(0, max));
+
+// [{ preset, qty, price, name }]: preset is a key of gutterRepairs.presets in
+// estimating/pricing.json (checked again when drafting); price blank = the
+// preset's price; name only for "other"
+export function cleanRepairs(v) {
+  if (!Array.isArray(v)) return [];
+  return v
+    .slice(0, 20)
+    .map((r) => {
+      const preset = /^[a-zA-Z]{1,40}$/.test(String(r?.preset || "")) ? String(r.preset) : "";
+      const out = { preset };
+      const qty = num(r?.qty);
+      const price = num(r?.price);
+      if (qty !== null) out.qty = qty;
+      if (price !== null) out.price = price;
+      const name = text(r?.name, 120);
+      if (name) out.name = name;
+      return out;
+    })
+    .filter((r) => r.preset && (r.preset !== "other" || r.name));
+}
+
+// [{ label, lf, difficultLF, reason, recommended }]: at most one recommended
+export function cleanGuardOptions(v) {
+  if (!Array.isArray(v)) return [];
+  let recommended = false;
+  return v
+    .slice(0, 4)
+    .map((o) => {
+      const out = { label: text(o?.label, 60), lf: num(o?.lf) || 0 };
+      const d = num(o?.difficultLF);
+      if (d) out.difficultLF = d;
+      // what makes it difficult, e.g. "tree cover & 8' grade drop"
+      const note = text(o?.difficultNote, 60);
+      if (d && note) out.difficultNote = note;
+      const reason = text(o?.reason, 400);
+      if (reason) out.reason = reason;
+      if (o?.recommended && !recommended) out.recommended = recommended = true;
+      return out;
+    })
+    .filter((o) => o.label && o.lf > 0);
 }
 
 // a question's required can depend on the other answers (e.g. stucco wall
@@ -348,6 +429,6 @@ export function isQuestionRequired(q, tradeAnswers) {
 
 export function missingTradeAnswers(trade, answers, basics) {
   return questionsFor(trade, basics, { [trade]: answers })
-    .filter((q) => isQuestionRequired(q, answers) && (answers?.[q.key] === undefined || answers?.[q.key] === ""))
+    .filter((q) => isQuestionRequired(q, answers) && (answers?.[q.key] === undefined || answers?.[q.key] === "" || (Array.isArray(answers?.[q.key]) && !answers[q.key].length)))
     .map((q) => ({ key: q.key, label: q.label }));
 }

@@ -116,3 +116,53 @@ test("a long Job field never becomes the job name", () => {
   ];
   for (const n of names) assert.ok(n.length > 0 && n.length <= 30, n);
 });
+
+test("duplicate guard: same name or street (no phone/email match) stops and asks", async () => {
+  const { PossibleDuplicateError } = await import("./jobtread.js");
+  const calls = mockFetch((q) => {
+    if (q.currentGrant) return { currentGrant: { organization: { id: "org1" } } };
+    if (q.organization?.contacts) return { organization: { contacts: { nodes: [] } } };
+    if (q.organization)
+      return {
+        organization: {
+          accounts: { nodes: [{ id: "a1", name: "Pat  Doe" }, { id: "a2", name: "Rena Doe" }] },
+          locations: { nodes: [{ id: "l9", address: "123 Main Street, Lehi, UT", account: { id: "a3", name: "Old Owner" } }] },
+        },
+      };
+    return {};
+  });
+  await assert.rejects(syncLeadToJobTread(lead, basics, {}), (err) => {
+    assert.ok(err instanceof PossibleDuplicateError);
+    assert.deepEqual(
+      err.candidates.map((c) => [c.accountId, c.matchedOn]),
+      [["a1", ["name"]], ["a3", ["address"]]]
+    );
+    return true;
+  });
+  assert.ok(!calls.some((c) => c.createAccount), "nothing created while it's unclear");
+});
+
+test("duplicate guard: Sean's choice — reuse that customer, or create new anyway", async () => {
+  mockFetch((q) => {
+    if (q.currentGrant) return { currentGrant: { organization: { id: "org1" } } };
+    if (q.account) return { account: { id: "a3", name: "Old Owner", type: "customer", locations: { nodes: [{ id: "l9", address: "123 Main St, Lehi" }] } } };
+    if (q.createJob) return { createJob: { createdJob: { id: "j1", number: "500" } } };
+    return {};
+  });
+  const reused = await syncLeadToJobTread(lead, basics, {}, { useAccountId: "a3" });
+  assert.equal(reused.accountId, "a3");
+  assert.equal(reused.locationId, "l9", "same street → same location");
+
+  const calls = mockFetch((q) => {
+    if (q.currentGrant) return { currentGrant: { organization: { id: "org1" } } };
+    if (q.organization) return { organization: { contacts: { nodes: [] } } };
+    if (q.createAccount) return { createAccount: { createdAccount: { id: "new", name: "Pat Doe 2" } } };
+    if (q.createContact) return { createContact: { createdContact: { id: "c" } } };
+    if (q.createLocation) return { createLocation: { createdLocation: { id: "loc" } } };
+    if (q.createJob) return { createJob: { createdJob: { id: "j2", number: "501" } } };
+    return {};
+  });
+  const created = await syncLeadToJobTread(lead, basics, {}, { createNew: true });
+  assert.equal(created.accountId, "new");
+  assert.equal(calls.filter((c) => c.organization).length, 1, "no similar-customer search once Sean chose");
+});

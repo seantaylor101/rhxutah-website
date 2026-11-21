@@ -10,6 +10,7 @@ import {
   sidingProduct,
   isQuestionRequired,
 } from "../../shared/tradeQuestions.js";
+import PRICING from "../../estimating/pricing.json";
 import { ESTIMATE_BASICS_QUESTIONS, emptyEstimateBasics, missingEstimateBasics, requiredCount, isRequired } from "../../shared/estimateBasics.js";
 import { pushSupported, getPushSubscription, enablePush, disablePush, syncPushSubscriptionRole, ensurePushSubscription } from "./push.js";
 import MeasureScreen from "./measure/MeasureScreen.jsx";
@@ -2011,8 +2012,8 @@ function App() {
 
   // Start Estimate: links the lead to a JobTread customer + job. Throws so
   // the profile can show JobTread's message inline.
-  const startEstimate = async (id) => {
-    const updated = await api.startEstimate(id);
+  const startEstimate = async (id, choice) => {
+    const updated = await api.startEstimate(id, choice);
     leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     return updated;
@@ -2043,6 +2044,14 @@ function App() {
   // drafts the JobTread estimate; throws so the profile shows the message
   const draftLeadEstimate = async (id) => {
     const updated = await api.draftEstimate(id);
+    leadsVersionRef.current++;
+    setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    return updated;
+  };
+
+  // sends ONE drafted proposal Sean approved in the Review & send panel
+  const sendLeadEstimate = async (id, documentId, approval) => {
+    const updated = await api.sendEstimate(id, documentId, approval);
     leadsVersionRef.current++;
     setLeads((prev) => prev.map((l) => (l.id === id ? updated : l)));
     return updated;
@@ -3036,6 +3045,7 @@ function App() {
           onStartEstimate={startEstimate}
           onSaveTradeAnswers={saveTradeAnswers}
           onDraftEstimate={draftLeadEstimate}
+          onSendEstimate={sendLeadEstimate}
           onUploadMedia={uploadLeadMedia}
           onDeleteMedia={deleteLeadMedia}
           onUpdateMediaMeasure={updateMediaMeasure}
@@ -8663,16 +8673,20 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
   const [addressDraft, setAddressDraft] = useState(lead.address || "");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
+  // same-name / same-address customers already in JobTread: Sean picks
+  const [duplicates, setDuplicates] = useState(null);
   const link = lead.jobtread;
 
-  const start = async () => {
+  const start = async (choice) => {
     if (!complete || starting || !onStartEstimate) return;
     setStarting(true);
     setStartError("");
     try {
-      await onStartEstimate(lead.id);
+      await onStartEstimate(lead.id, choice);
+      setDuplicates(null);
     } catch (err) {
-      setStartError(err.message || "Couldn't reach JobTread — try again.");
+      if (err.status === 409 && err.data && Array.isArray(err.data.duplicates)) setDuplicates(err.data.duplicates);
+      else setStartError(err.message || "Couldn't reach JobTread — try again.");
     } finally {
       setStarting(false);
     }
@@ -8757,8 +8771,8 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
         </div>
       ) : (
         <button
-          onClick={start}
-          disabled={!complete || starting}
+          onClick={() => start()}
+          disabled={!complete || starting || !!duplicates}
           style={{ ...addBtn, width: "100%", justifyContent: "center", marginTop: 10, opacity: complete && !starting ? 1 : 0.5 }}
         >
           {starting ? "Adding to JobTread…" : complete ? "Start Estimate" : "Start Estimate (answer the basics first)"}
@@ -8766,6 +8780,33 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
       )}
       {startError && (
         <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.rust, marginTop: 6 }}>{startError}</div>
+      )}
+      {duplicates && !link && (
+        <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 10, padding: 10, border: `1px solid ${COLORS.rust}`, borderRadius: 8 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Already in JobTread? Pick one, or create a new customer.</div>
+          {duplicates.map((d) => (
+            <div key={d.accountId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <span>
+                {d.name}
+                <span style={{ color: COLORS.muted }}>
+                  {" "}· same {d.matchedOn.join(" & ")}
+                  {d.address ? ` · ${d.address}` : ""}
+                </span>
+              </span>
+              <button type="button" disabled={starting} onClick={() => start({ useAccountId: d.accountId })} style={{ ...addBtn, padding: "6px 10px" }}>
+                Use this customer
+              </button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button type="button" disabled={starting} onClick={() => start({ createNew: true })} style={{ ...addBtn, padding: "6px 10px" }}>
+              Create new customer
+            </button>
+            <button type="button" onClick={() => setDuplicates(null)} style={{ ...addBtn, padding: "6px 10px", background: COLORS.surface, color: COLORS.ink }}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
       {open && (
         <div>
@@ -8834,7 +8875,7 @@ function EstimateBasicsSection({ lead, onSave, onEditField, onStartEstimate }) {
 // questions for the work picked in the basics (shared/tradeQuestions.js),
 // then "Build draft estimate", which drafts a Proposal on the JobTread job.
 // Drafts are never sent from here.
-function TradeQuestionsSection({ lead, onSave, onDraft }) {
+function TradeQuestionsSection({ lead, onSave, onDraft, onSend }) {
   const basics = lead.estimateBasics || {};
   const answers = lead.tradeAnswers || {};
   const trades = (basics.trades || []).filter((t) => AUTOMATED_TRADES.includes(t));
@@ -8937,6 +8978,25 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
                       </button>
                     ))}
                   </div>
+                ) : q.type === "text" ? (
+                  <input
+                    value={`${trade}.${q.key}` in drafts ? drafts[`${trade}.${q.key}`] : value || ""}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [`${trade}.${q.key}`]: e.target.value }))}
+                    onBlur={() => {
+                      const id = `${trade}.${q.key}`;
+                      if (!(id in drafts)) return;
+                      const t = String(drafts[id]).trim();
+                      if (t !== (value || "")) onSave(lead.id, { [trade]: { [q.key]: t } });
+                      setDrafts(({ [id]: _drop, ...rest }) => rest);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    placeholder="Leave blank if none"
+                    style={modalInput}
+                  />
+                ) : q.type === "repairs" ? (
+                  <RepairsEditor value={value || []} onChange={(list) => onSave(lead.id, { [trade]: { [q.key]: list } })} />
+                ) : q.type === "guardOptions" ? (
+                  <GuardOptionsEditor value={value || []} onChange={(list) => onSave(lead.id, { [trade]: { [q.key]: list } })} />
                 ) : (
                   <input
                     type="number"
@@ -8972,8 +9032,10 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
                 o.insulatedWrap && "insulated reflective house wrap",
                 o.emeraldPaint && "Emerald Rain Refresh paint",
               ].filter(Boolean);
+              const guardOpts = (answers.gutters && answers.gutters.guardOptions) || [];
+              if (guardOpts.length) names.unshift(`${guardOpts.length} gutter guard option${guardOpts.length > 1 ? "s" : ""}`);
               return names.length
-                ? `Optional upgrades on this bid: ${names.join(", ")}.`
+                ? `Options on this bid: ${names.join(", ")}.`
                 : "No upgrade options fit this job.";
             })()}
           </div>
@@ -8994,25 +9056,244 @@ function TradeQuestionsSection({ lead, onSave, onDraft }) {
       )}
       {buildError && <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.rust, marginTop: 6 }}>{buildError}</div>}
       {estimates.map((e) => (
-        <div key={e.documentId} style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 10 }}>
-          Draft {e.fullName} · ${Number(e.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ·{" "}
-          <a href={lead.jobtread.jobUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, fontWeight: 600 }}>
-            Review in JobTread
-          </a>
-          {e.reviewedAt ? (
-            <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>
-              {e.deleted
-                ? "Deleted in JobTread."
-                : e.changes && e.changes.length
-                  ? `Sent. You changed: ${e.changes.join("; ")}.`
-                  : "Sent as drafted."}
-            </div>
-          ) : (
-            <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>Not sent — review it and send it from JobTread when it looks right.</div>
-          )}
-        </div>
+        <DraftCard key={e.documentId} lead={lead} estimate={e} onSend={onSend} />
       ))}
     </ProfileSection>
+  );
+}
+
+const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+const smallBtn = (extra = {}) => ({ ...addBtn, padding: "6px 10px", ...extra });
+const editorBox = { border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, marginTop: 6 };
+// a small caption over an input, since placeholders vanish once filled
+const Field = ({ label, children }) => (
+  <label style={{ display: "block", flex: 1, fontFamily: FONT_UTIL, fontSize: 11.5, color: COLORS.muted, marginTop: 4 }}>
+    {label}
+    {children}
+  </label>
+);
+
+// Repair / odd-job lines from the presets in estimating/pricing.json. Price
+// blank = the preset's price; Sean adjusts it per job.
+function RepairsEditor({ value, onChange }) {
+  const presets = PRICING.gutterRepairs.presets;
+  const [adding, setAdding] = useState("");
+  const update = (i, patch) => onChange(value.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  const num = (v) => (v === "" ? undefined : Number(v));
+  return (
+    <div>
+      {value.map((r, i) => {
+        const p = presets[r.preset] || {};
+        const needsQty = p.unit === "lf" || !!p.qtyLabel || p.unit === "each";
+        return (
+          <div key={i} style={editorBox}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_UTIL, fontSize: 13 }}>
+              <b>{r.preset === "other" ? "Other" : (p.name || r.preset).replace(/\s*\(.*\{qty\}.*\)/, "")}</b>
+              <button type="button" onClick={() => onChange(value.filter((_, n) => n !== i))} style={smallBtn({ background: COLORS.surface, color: COLORS.rust })}>
+                Remove
+              </button>
+            </div>
+            {r.preset === "other" && (
+              <input defaultValue={r.name || ""} onBlur={(e) => update(i, { name: e.target.value })} placeholder="What's the work?" style={modalInput} />
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              {needsQty && (
+                <Field label={p.qtyLabel || (p.unit === "lf" ? "Feet" : "How many")}>
+                  <input type="number" inputMode="decimal" defaultValue={r.qty ?? ""} onBlur={(e) => update(i, { qty: num(e.target.value) })} placeholder={p.unit === "each" ? "1" : ""} style={modalInput} />
+                </Field>
+              )}
+              <Field label={`Price${p.unit === "lf" ? " per ft" : ""}`}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  defaultValue={r.price ?? ""}
+                  onBlur={(e) => update(i, { price: num(e.target.value) })}
+                  placeholder={p.price ? `$${p.price}` : r.preset === "corrugatedExtension" ? "Parts + $50" : ""}
+                  style={modalInput}
+                />
+              </Field>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        <select value={adding} onChange={(e) => setAdding(e.target.value)} style={{ ...modalInput, flex: 1 }}>
+          <option value="">Add a repair…</option>
+          {Object.entries(presets)
+            .filter(([k]) => !k.startsWith("_"))
+            .map(([k, p]) => (
+              <option key={k} value={k}>
+                {k === "other" ? "Other (describe it)" : p.name.replace(/\s*\(.*\{qty\}.*\)/, "")}
+              </option>
+            ))}
+        </select>
+        <button type="button" disabled={!adding} onClick={() => (onChange([...value, { preset: adding }]), setAdding(""))} style={smallBtn()}>
+          Add
+        </button>
+      </div>
+      <div style={{ fontFamily: FONT_UTIL, fontSize: 12, color: COLORS.muted, marginTop: 4 }}>Repairs never carry the lifetime warranty.</div>
+    </div>
+  );
+}
+
+// Good/better/best gutter guard options: footage, difficult-access footage,
+// the reason (what you found on site; nothing private), one recommended.
+function GuardOptionsEditor({ value, onChange }) {
+  const update = (i, patch) => onChange(value.map((o, n) => (n === i ? { ...o, ...patch } : o)));
+  const num = (v) => (v === "" ? undefined : Number(v));
+  return (
+    <div>
+      {value.map((o, i) => (
+        <div key={i} style={editorBox}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: FONT_UTIL, fontSize: 13 }}>
+            <b>Option {"ABCD"[i]}</b>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button type="button" onClick={() => onChange(value.map((x, n) => ({ ...x, recommended: n === i })))} style={smallBtn(o.recommended ? {} : { background: COLORS.surface, color: COLORS.ink })}>
+                {o.recommended ? "Recommended ✓" : "Recommend"}
+              </button>
+              <button type="button" onClick={() => onChange(value.filter((_, n) => n !== i))} style={smallBtn({ background: COLORS.surface, color: COLORS.rust })}>
+                Remove
+              </button>
+            </span>
+          </div>
+          <Field label="Which sides">
+            <input defaultValue={o.label || ""} onBlur={(e) => update(i, { label: e.target.value })} placeholder="e.g. West & North Sides" style={modalInput} />
+          </Field>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Field label="Guard footage (LF)">
+              <input type="number" inputMode="decimal" defaultValue={o.lf ?? ""} onBlur={(e) => update(i, { lf: num(e.target.value) })} style={modalInput} />
+            </Field>
+            <Field label="Difficult-access LF">
+              <input type="number" inputMode="decimal" defaultValue={o.difficultLF ?? ""} onBlur={(e) => update(i, { difficultLF: num(e.target.value) })} placeholder="0" style={modalInput} />
+            </Field>
+          </div>
+          {Number(o.difficultLF) > 0 && (
+            <Field label="Why it's difficult">
+              <input defaultValue={o.difficultNote || ""} onBlur={(e) => update(i, { difficultNote: e.target.value })} placeholder="e.g. tree cover & 8' grade drop" style={modalInput} />
+            </Field>
+          )}
+          <Field label="Reason (shown to the customer; what you found on site, nothing private)">
+            <textarea defaultValue={o.reason || ""} onBlur={(e) => update(i, { reason: e.target.value })} style={modalTextarea} />
+          </Field>
+        </div>
+      ))}
+      {value.length < 4 && (
+        <button type="button" onClick={() => onChange([...value, { label: "", lf: 0, recommended: value.length === 0 }])} style={smallBtn({ marginTop: 6 })}>
+          Add guard option
+        </button>
+      )}
+    </div>
+  );
+}
+
+// One drafted proposal: Claude's flags, past pricing, and Review & send.
+// Sending needs Sean to look at the exact recipient, message, attachments
+// and total and tap Approve; anything changing after that needs a new look.
+function DraftCard({ lead, estimate: e, onSend }) {
+  const [preview, setPreview] = useState(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const review = e.review || {};
+  const sent = e.sent || (e.status && e.status !== "draft");
+
+  const loadPreview = async (msg) => {
+    setBusy(true);
+    setErr("");
+    try {
+      const p = await api.sendPreview(lead.id, e.documentId, msg);
+      setPreview(p);
+      setMessage(p.emailMessage);
+    } catch (x) {
+      setErr(x.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const approve = async () => {
+    if (!preview || message !== preview.emailMessage) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onSend(lead.id, e.documentId, { approvalKey: preview.approvalKey, emailMessage: preview.emailMessage });
+      setPreview(null);
+    } catch (x) {
+      setErr(x.message);
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const edited = preview && message !== preview.emailMessage;
+
+  return (
+    <div style={{ fontFamily: FONT_UTIL, fontSize: 13, color: COLORS.ink, marginTop: 12, ...editorBox }}>
+      <div>
+        <b>{e.fullName}</b> · {money(e.price)} ·{" "}
+        <a href={lead.jobtread.jobUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, fontWeight: 600 }}>
+          Open in JobTread
+        </a>
+      </div>
+      {[...(e.flags || []), ...(review.flags || []).map((f) => `${f.severity === "fix" ? "Fix" : "Check"}: ${f.line ? `${f.line}: ` : ""}${f.issue}`)].map((f, i) => (
+        <div key={i} style={{ color: /^Fix/.test(f) ? COLORS.rust : COLORS.ink, marginTop: 4 }}>⚑ {f}</div>
+      ))}
+      {review.reviewSkipped && <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 4 }}>Rule review skipped: {review.reviewSkipped}</div>}
+      {review.history && review.history.length > 0 && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: "pointer" }}>Past pricing ({review.history.length} lines)</summary>
+          {review.history.map((h) => (
+            <div key={h.name} style={{ fontSize: 12, marginTop: 2 }}>
+              {h.name}: drafted {money(h.draftPrice)} · before {money(h.median)} median ({money(h.min)}–{money(h.max)}, {h.count})
+            </div>
+          ))}
+        </details>
+      )}
+      {e.reviewedAt ? (
+        <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 4 }}>
+          {e.deleted ? "Deleted in JobTread." : e.changes && e.changes.length ? `Sent. You changed: ${e.changes.join("; ")}.` : "Sent as drafted."}
+        </div>
+      ) : sent ? (
+        <div style={{ color: COLORS.accent, fontSize: 12, marginTop: 4 }}>
+          Sent{e.sent ? ` to ${e.sent.to}` : ""}
+          {e.sent && e.sent.emailDeliveryStatus ? ` · email ${e.sent.emailDeliveryStatus}` : ""}
+          {e.sent && !e.sent.statusOk ? " · couldn't set it to pending: check it in JobTread" : " · pending signature"}
+        </div>
+      ) : !preview ? (
+        <button type="button" disabled={busy || !onSend} onClick={() => loadPreview()} style={smallBtn({ marginTop: 8 })}>
+          {busy ? "Loading…" : "Review & send…"}
+        </button>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          <div>
+            <b>To:</b> {preview.recipient.name} &lt;{preview.recipient.emailAddress || "no email!"}&gt;
+          </div>
+          <div>
+            <b>Total:</b> {money(preview.total)}
+          </div>
+          <div>
+            <b>Attachments:</b> {preview.attachments.length ? preview.attachments.join(", ") : "none"}
+          </div>
+          <div style={{ ...modalLabel, marginTop: 8 }}>Message (JobTread adds the subject)</div>
+          <textarea value={message} onChange={(x) => setMessage(x.target.value)} style={{ ...modalTextarea, minHeight: 160 }} />
+          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            {edited ? (
+              <button type="button" disabled={busy} onClick={() => loadPreview(message)} style={smallBtn()}>
+                Use this message (review again)
+              </button>
+            ) : (
+              <button type="button" disabled={busy || !preview.recipient.emailAddress || preview.alreadySent} onClick={approve} style={smallBtn()}>
+                {busy ? "Sending…" : `Approve & send to ${preview.recipient.emailAddress}`}
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={() => setPreview(null)} style={smallBtn({ background: COLORS.surface, color: COLORS.ink })}>
+              Cancel
+            </button>
+          </div>
+          {preview.alreadySent && <div style={{ color: COLORS.rust, marginTop: 4 }}>This proposal was already sent.</div>}
+        </div>
+      )}
+      {err && <div style={{ color: COLORS.rust, marginTop: 4 }}>{err}</div>}
+    </div>
   );
 }
 
@@ -9177,6 +9458,7 @@ function LeadProfileModal({
   onStartEstimate,
   onSaveTradeAnswers,
   onDraftEstimate,
+  onSendEstimate,
   onUploadMedia,
   onDeleteMedia,
   onUpdateMediaMeasure,
@@ -9489,7 +9771,7 @@ function LeadProfileModal({
           />
         )}
         {editable && lead.jobtread && onSaveTradeAnswers && (
-          <TradeQuestionsSection lead={lead} onSave={onSaveTradeAnswers} onDraft={onDraftEstimate} />
+          <TradeQuestionsSection lead={lead} onSave={onSaveTradeAnswers} onDraft={onDraftEstimate} onSend={onSendEstimate} />
         )}
 
         {/* instructions */}

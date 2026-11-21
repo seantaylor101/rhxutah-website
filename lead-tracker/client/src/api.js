@@ -11,6 +11,7 @@ async function request(path, options = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `Request failed (${res.status})`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -89,7 +90,12 @@ export const api = {
     request(`/leads/${id}/job-details`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateEstimateBasics: (id, patch) =>
     request(`/leads/${id}/estimate-basics`, { method: "PATCH", body: JSON.stringify(patch) }),
-  startEstimate: (id) => request(`/leads/${id}/start-estimate`, { method: "POST" }),
+  // choice: { useAccountId } or { createNew: true } after a possible duplicate
+  startEstimate: (id, choice = {}) => request(`/leads/${id}/start-estimate`, { method: "POST", body: JSON.stringify(choice) }),
+  sendPreview: (id, documentId, emailMessage) =>
+    request(`/leads/${id}/estimates/${documentId}/send-preview`, { method: "POST", body: JSON.stringify(emailMessage == null ? {} : { emailMessage }) }),
+  sendEstimate: (id, documentId, { approvalKey, emailMessage }) =>
+    request(`/leads/${id}/estimates/${documentId}/send`, { method: "POST", body: JSON.stringify({ approved: true, approvalKey, emailMessage }) }),
   updateTradeAnswers: (id, patch) =>
     request(`/leads/${id}/trade-answers`, { method: "PATCH", body: JSON.stringify(patch) }),
   draftEstimate: (id) => request(`/leads/${id}/draft-estimate`, { method: "POST" }),

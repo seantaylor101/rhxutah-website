@@ -1,126 +1,29 @@
-// Drafts a JobTread estimate (a "Proposal" customer order) on a lead's job
-// from the catalog assemblies, using the trade questionnaire answers as job
-// parameters. The draft is never sent — Sean reviews and sends it himself.
+// Drafts a JobTread estimate (a "Proposal" customer order) on a lead's job.
+// The draft is NEVER sent from here; sending is a separate step that needs
+// Sean's approval of that specific proposal (proposalSend.js).
 //
-// The assembly is read from the JobTread catalog every time, so price
-// changes there (including the supplier price watcher's) flow straight into
-// new drafts.
+// Where things come from:
+//   - prices: estimating/pricing.json (the single source of truth)
+//   - IDs and Proposal defaults: estimating/jobtread.json
+//   - wording/warranty text: estimating/wording.json
+//   - costs: the JobTread catalog assemblies, read live every time, so
+//     supplier price changes flow into new drafts
+//
+// Every proposal line is one "installed" line (material + labor combined,
+// cost type Other). Material and labor are never shown separately.
 
 import { pave } from "./jobtread.js";
 import { proposalMessage } from "./proposalMessage.js";
 import { snapshotLines } from "./editDiff.js";
-import {
-  TRADE_QUESTIONS,
-  upgradesFor,
-  defaultDrainCount,
-  sidingProduct,
-  tearOffType,
-  AUTOMATED_SIDING,
-} from "../../shared/tradeQuestions.js";
+import { PRICING, JOBTREAD, WORDING, roundPriceFor, roundLumpPrice, customerTypeOf, byType, taxRateFor } from "../../estimating/index.js";
+import { upgradesFor, defaultDrainCount, sidingProduct, tearOffType, AUTOMATED_SIDING, PAINTED_SIDING } from "../../shared/tradeQuestions.js";
 
-export const ASSEMBLIES = {
-  gutters: { id: "22PiKu7hJgmr", name: "Seamless Gutter System" },
-  siding_lp: { id: "22PiLt4qNebY", name: "LP SmartSide Siding System" },
-  siding_hardie: { id: "22PiLwHsrbUv", name: "James Hardie Siding System" },
-  siding_ascend: { id: "22PiLwLfsi72", name: "Alside Ascend Siding System" },
-  siding_vinyl: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
-  // all-shake vinyl uses the vinyl assembly with the whole wall as shake
-  siding_vinylShake: { id: "22PiLwPwWcMs", name: "Vinyl Siding System" },
-  stucco: { id: "22PiLznBbZJs", name: "Stucco" },
-  soffitFascia: { id: "22PiMNbFW8gC", name: "Aluminum Soffit & Fascia" },
-  painting: { id: "22PiMST4Jc9E", name: "Exterior Painting" },
-  drainage: { id: "22PiMTePxQft", name: "In-Ground Drains" },
-  lighting: { id: "22PiMWbxM8tF", name: "Permanent Holiday & Accent Lighting" },
-};
+const P = PRICING;
+const JT = JOBTREAD;
+const round2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+const sum = (arr, f = (x) => x) => arr.reduce((t, x) => t + Number(f(x) || 0), 0);
 
-// painting prices (same for retail and GC); costs come from the catalog
-export const PAINTING_MINIMUM = 500;
-
-// aluminum soffit & fascia, per linear foot: $25 retail / $22 GC for both,
-// half when only one is done. Line items keep real costs (Lansing material,
-// Alex's $4/ft both or $2/ft one); prices are scaled to land on these rates.
-export const SOFFIT_FASCIA_RATES = { retail: 25, insurance: 25, gc: 22 };
-// porch caps (aluminum soffit ceilings), per sq ft; Alex $2/sq ft
-export const PORCH_CAP_RATES = { retail: 9, insurance: 9, gc: 9 };
-
-// Stucco: full jobs per sq ft on wall area + 10% (Luis $6/sq ft all-in);
-// general repairs a flat $2,700 (cost $1,800); popout cut-backs $750 a
-// window with no minimum; foundation plaster $10/LF; a gutter butted against
-// the wall: $350 per gutter cut-back + $3,000 for the stucco repair there.
-export const STUCCO_RATES = { retail: 10, insurance: 10, gc: 8 };
-
-// Siding prices per square foot, charged on the wall area plus 10% (Sean's
-// waste rule, applied to material and labor alike). Covers siding, trim,
-// house wrap, sundries and paint (LP and Hardie); tear-off, resheathing, the
-// dumpster and metal wraps are priced on their own, and upgrades keep their
-// own prices. LP, Hardie and Ascend don't come through insurance, so those
-// get the retail rate on an insurance lead.
-// vinyl shake (Foundry 7" Staggered Shake, $4.61/sq ft cost vs $1.69 for
-// Ovation lap): installs at the same labor as vinyl lap, so it's the vinyl
-// rate plus the extra material at the same 1.8x markup (+$5.26/sq ft)
-export const VINYL_SHAKE_RATES = { retail: 14.25, insurance: 11.25, gc: 13.25 };
-export const SIDING_RATES = {
-  lp: { retail: 14, insurance: 14, gc: 12 },
-  hardie: { retail: 14, insurance: 14, gc: 12 },
-  ascend: { retail: 12.5, insurance: 12.5, gc: 11 },
-  // vinyl insurance: adjusters pay about $6.75-7/sq ft all-in, so the base
-  // starts at $6 and tear-off + dumpster bring it to about $7
-  vinyl: { retail: 9, insurance: 6, gc: 8 },
-  vinylShake: VINYL_SHAKE_RATES,
-};
-// board-and-batten and shake areas (LP and Hardie), priced per square foot
-// of that area + 10% instead of the lap rate. Set to keep about the same
-// margin as lap: panels, battens and shakes cost more, and Alex charges
-// $350/square for board-and-batten and $400 for shake vs $250 for lap.
-export const SIDING_STYLE_RATES = {
-  batten: { retail: 17.5, insurance: 17.5, gc: 15 },
-  shake: { retail: 25.5, insurance: 25.5, gc: 22 },
-};
-export const STYLED_SIDING = ["lp", "hardie"];
-// products with a shake area on the questionnaire
-export const SHAKE_SIDING = ["lp", "hardie", "vinyl"];
-export const SIDING_WASTE = 1.1;
-const PROPOSAL_TEMPLATE_ID = "22PJfnqzbFfh";
-// the minimum is the same footage for everyone: $350 at the $12 retail rate
-// is about 29 ft, so each customer's minimum is their own rate x that
-// footage (GC $250, Erick $220, insurance $305, 6" retail $440), rounded
-// to $5
-const GUTTER_MINIMUM_FEET = 350 / 12;
-// floors (Sean): never below $500 for retail or insurance, or $350 for any GC (Erick included)
-const GUTTER_MINIMUM_FLOOR = { retail: 500, insurance: 500, gc: 350 };
-export function gutterMinimum(rates, six, customerType) {
-  const rate = rates[six ? 6 : 5] ?? rates[5];
-  const prorated = Math.round((rate * GUTTER_MINIMUM_FEET) / 5) * 5;
-  return Math.max(prorated, GUTTER_MINIMUM_FLOOR[customerType] || 0);
-}
-// Sean's gutter prices, per foot of gutter PLUS downspout (he bills the
-// downspout footage too). Miters and tear-off are included. The line items
-// keep their real costs; their prices are scaled so the bid lands on these
-// rates. Upgrade options keep their own prices; the small-job minimum (gutterMinimum) still applies.
-export const GUTTER_RATES = {
-  retail: { 5: 12, 6: 15 },
-  insurance: { 5: 10.5, 6: 15 },
-  gc: { 5: 8.5, 6: 8.5 },
-};
-// customers with their own deal, by JobTread customer account
-export const CUSTOMER_GUTTER_RATES = {
-  "22PLZFJ8Yrtd": { name: "Erick Funn", rates: { 5: 7.5, 6: 7.5 } },
-};
-
-export function gutterRatesFor(basics, { accountId } = {}) {
-  if (accountId && CUSTOMER_GUTTER_RATES[accountId]) return CUSTOMER_GUTTER_RATES[accountId].rates;
-  return GUTTER_RATES[basics?.customerType] || GUTTER_RATES.retail;
-}
-
-// gutter + downspout footage billed (downspouts per Sean's takeoff rule)
-export function billedFootage(answers = {}) {
-  const n = (k) => Number(answers[k] || 0);
-  return n("gutterLF") + 13 * n("oneStory") + 23 * n("twoStory") + 33 * n("threeStory") + 2 * n("offsets");
-}
-const UTAH_TAX_RATE = 0.0745; // line items are non-taxable; kept to match existing proposals
-const GUTTERS_COST_CODE = "22PiKU5iG4cy";
-const OTHER_COST_TYPE = "22PJfnqzbFfM";
-const EACH_UNIT = "22PJfnqzbFeZ";
+// ---------- reading the catalog ----------
 
 const ITEM_FIELDS = {
   id: {},
@@ -131,10 +34,7 @@ const ITEM_FIELDS = {
   quantityFormula: {},
   unitCost: {},
   unitPrice: {},
-  isTaxable: {},
-  showQuantity: {},
   costGroup: { id: {} },
-  organizationCostItem: { id: {} },
   costCode: { id: {} },
   costType: { id: {} },
   unit: { id: {} },
@@ -142,17 +42,9 @@ const ITEM_FIELDS = {
 const GROUP_FIELDS = {
   id: {},
   name: {},
-  description: {},
-  position: {},
-  quantity: {},
-  quantityFormula: {},
   isSelected: {},
   minSelectionsRequired: {},
   maxSelectionsAllowed: {},
-  showChildDeltas: {},
-  showChildren: {},
-  showChildCosts: {},
-  showDescription: {},
   parentCostGroup: { id: {} },
 };
 
@@ -170,76 +62,7 @@ export async function fetchAssembly(id) {
   return root;
 }
 
-// Turns a catalog assembly into document line items, keeping the quantity
-// formulas (they read the job parameters). `selectGroup(group)` returns true
-// / false to override which selection option is picked; `dropGroup(group)`
-// removes a group (and everything under it).
-//
-// JobTread's API stores formulas but doesn't calculate them (only its web
-// screen does), so each quantity is worked out here from `params` and sent as
-// a number, with the formula kept alongside.
-export function assemblyToLineItems(
-  root,
-  { params = {}, selectGroup = () => undefined, dropGroup = () => false, dropItem = () => false } = {}
-) {
-  const groups = root.descendentCostGroups?.nodes || [];
-  const items = root.descendentCostItems?.nodes || [];
-  const byPos = (a, b) => String(a.position ?? "").localeCompare(String(b.position ?? ""), undefined, { numeric: true });
-
-  const itemLine = (i) => {
-    const line = {
-      _type: "costItem",
-      name: i.name,
-      description: i.description ?? null,
-      quantity: i.quantityFormula ? Math.round(evalFormula(i.quantityFormula, params) * 100) / 100 : i.quantity,
-      quantityFormula: i.quantityFormula ?? null,
-      unitCost: i.unitCost,
-      unitPrice: i.unitPrice,
-      isTaxable: !!i.isTaxable,
-      showQuantity: !!i.showQuantity,
-      costCodeId: i.costCode?.id ?? null,
-      costTypeId: i.costType?.id ?? null,
-      unitId: i.unit?.id ?? null,
-      organizationCostItemId: i.organizationCostItem?.id ?? null,
-    };
-    return line;
-  };
-
-  const childrenOf = (groupId) => {
-    const kids = [
-      ...groups.filter((g) => g.parentCostGroup?.id === groupId && !dropGroup(g)).map((g) => ({ kind: "g", v: g })),
-      ...items
-        .filter((i) => i.costGroup?.id === groupId)
-        .filter((i) => !dropItem(i, i.quantityFormula ? evalFormula(i.quantityFormula, params) : Number(i.quantity || 0)))
-        .map((i) => ({ kind: "i", v: i })),
-    ].sort((a, b) => byPos(a.v, b.v));
-    return kids.map((k) => (k.kind === "i" ? itemLine(k.v) : groupLine(k.v)));
-  };
-
-  const groupLine = (g) => {
-    const override = selectGroup(g);
-    return {
-      _type: "costGroup",
-      name: g.name,
-      description: g.description ?? null,
-      quantity: g.quantityFormula ? null : g.quantity ?? null,
-      quantityFormula: g.quantityFormula ?? null,
-      isSelected: override === undefined ? !!g.isSelected : override,
-      minSelectionsRequired: g.minSelectionsRequired ?? null,
-      maxSelectionsAllowed: g.maxSelectionsAllowed ?? null,
-      showChildDeltas: !!g.showChildDeltas,
-      showChildren: g.showChildren ?? true,
-      showChildCosts: g.showChildCosts ?? true,
-      showDescription: g.showDescription ?? true,
-      lineItems: childrenOf(g.id),
-    };
-  };
-
-  return [groupLine(root)];
-}
-
-// Evaluates the assembly formulas the way JobTread will ({Param} * numbers),
-// to total the selected (non-optional) lines for the minimum-charge check.
+// Evaluates the assembly formulas the way JobTread does ({Param} * numbers).
 export function evalFormula(formula, params) {
   const expr = String(formula).replace(/\{([^}]+)\}/g, (_, name) => `(${Number(params[name] ?? 0)})`);
   if (!/^[\d\s+\-*/().]+$/.test(expr)) return 0;
@@ -248,176 +71,476 @@ export function evalFormula(formula, params) {
   return Number.isFinite(v) ? v : 0;
 }
 
-// sum of price for what the customer gets by default: groups that are
-// selection options count only when selected; optional-upgrade groups
-// (min 0) count only their selected children
+// Every catalog item with its quantity for these parameters and the names of
+// the groups it sits in (outermost first, root excluded). Used for COSTS
+// only; prices come from pricing.json.
+export function catalogItems(root, params = {}) {
+  const groups = new Map((root.descendentCostGroups?.nodes || []).map((g) => [g.id, g]));
+  const path = (groupId) => {
+    const out = [];
+    let g = groups.get(groupId);
+    while (g) {
+      out.unshift(g.name);
+      g = groups.get(g.parentCostGroup?.id);
+    }
+    return out;
+  };
+  return (root.descendentCostItems?.nodes || []).map((i) => {
+    const qty = i.quantityFormula ? evalFormula(i.quantityFormula, params) : Number(i.quantity || 0);
+    return {
+      name: i.name,
+      groups: path(i.costGroup?.id),
+      qty,
+      unitCost: Number(i.unitCost || 0),
+      unitPrice: Number(i.unitPrice || 0),
+      cost: qty * Number(i.unitCost || 0),
+    };
+  });
+}
+
+const inGroup = (re) => (i) => i.groups.some((g) => re.test(g));
+const named = (re) => (i) => re.test(i.name);
+const costOf = (items) => sum(items, (i) => i.cost);
+// per-unit cost of catalog items matching `re` (ignores quantities; for
+// lines priced per unit when the parameter isn't set, e.g. guard options)
+const unitCostOf = (items, re) => sum(items.filter(named(re)), (i) => i.unitCost);
+
+// ---------- building proposal lines ----------
+
+// one installed line: material + labor combined, cost type Other
+export function installedLine({ name, description = null, unit = "lf", qty, unitPrice, cost = 0, costCode, insurance = false }) {
+  const q = round2(qty);
+  return {
+    _type: "costItem",
+    name,
+    description: description || null,
+    quantity: q,
+    quantityFormula: null,
+    unitCost: q ? round2(cost / q) : 0,
+    unitPrice: roundPriceFor(unit, unitPrice),
+    isTaxable: !!insurance,
+    showQuantity: false,
+    costCodeId: costCode ?? null,
+    costTypeId: JT.costTypes.other,
+    unitId: JT.units[unit],
+    organizationCostItemId: null,
+  };
+}
+
+export function group(name, lineItems, { description = null, isSelected = false, min = null, max = null } = {}) {
+  return {
+    _type: "costGroup",
+    name,
+    description: description || null,
+    quantity: null,
+    quantityFormula: null,
+    isSelected,
+    minSelectionsRequired: min,
+    maxSelectionsAllowed: max,
+    showChildDeltas: false,
+    showChildren: true,
+    showChildCosts: true,
+    showDescription: true,
+    lineItems,
+  };
+}
+
+// a parent with each option as a child group. Exclusive choices are min 0 /
+// max 1 (min 1 when one must be picked, like gutter size); the recommended
+// option is pre-selected. Independent add-ons (exclusive: false) allow as
+// many picks as there are options.
+export function optionSet(name, options, { required = false, exclusive = true, description } = {}) {
+  return group(name, options, {
+    description,
+    min: required ? 1 : 0,
+    max: exclusive ? 1 : Math.max(1, options.length),
+  });
+}
+
+const sentence = (...parts) => parts.filter(Boolean).join(" ");
+function manufacturerNote(key) {
+  const m = WORDING.manufacturers[key];
+  if (!m) return "";
+  return WORDING.warranty.manufacturer.replace("{maker}", m.maker).replace("{link}", m.registrationUrl ? ` Register at ${m.registrationUrl}.` : "");
+}
+const LIFETIME = WORDING.warranty.lifetime;
+
+// what the customer gets by default: option children count only when
+// selected; plain groups always count
 export function selectedPriceTotal(lines) {
   let total = 0;
   const walk = (list, parentIsSelectionSet) => {
     for (const l of list) {
-      if (l._type === "costItem") {
-        const qty = Number(l.quantity || 0);
-        total += qty * Number(l.unitPrice || 0);
-      } else {
+      if (l._type === "costItem") total += Number(l.quantity || 0) * Number(l.unitPrice || 0);
+      else {
         if (parentIsSelectionSet && !l.isSelected) continue;
-        const isSelectionSet = l.maxSelectionsAllowed != null || l.minSelectionsRequired != null;
-        walk(l.lineItems || [], isSelectionSet);
+        walk(l.lineItems || [], l.maxSelectionsAllowed != null || l.minSelectionsRequired != null);
       }
     }
   };
   walk(lines, false);
-  return Math.round(total * 100) / 100;
+  return round2(total);
 }
 
-export function gutterParams(answers, basics) {
-  const params = {};
-  for (const q of TRADE_QUESTIONS.gutters.questions) {
-    if (!q.param) continue;
-    params[q.param] = Number(answers[q.key] ?? 0);
-  }
-  // upgrade options still need sensible quantities when they're shown
+// ---------- gutters ----------
+
+export function gutterRatesFor(basics, { accountId } = {}) {
+  const deal = accountId && P.gutters.customerRates[accountId];
+  return deal ? deal.rates : byType(P.gutters.ratesPerFoot, basics);
+}
+
+// minimum = rate x minimumFeet rounded to $5, never below the floor
+export function gutterMinimum(rates, six, customerType) {
+  const rate = rates[six ? 6 : 5] ?? rates[5];
+  const prorated = roundLumpPrice(rate * P.gutters.minimum.minimumFeet);
+  return Math.max(prorated, P.gutters.minimum.floor[customerType] || 0);
+}
+
+// gutter + downspout footage billed: box miters 3 ft each, downspouts
+// 13/23/33 ft by story, +2 ft per offset
+export function billedFootage(answers = {}) {
+  const n = (k) => Number(answers[k] || 0);
+  const t = P.gutters.takeoff;
+  const ds = t.downspoutFeetByStory;
+  return (
+    n("gutterLF") +
+    t.feetPerMiter * n("miters") +
+    ds[1] * n("oneStory") +
+    ds[2] * n("twoStory") +
+    ds[3] * n("threeStory") +
+    t.feetPerOffset * n("offsets")
+  );
+}
+
+export function gutterParams(answers = {}, basics = {}) {
+  const n = (k) => Number(answers[k] || 0);
   const offered = upgradesFor(basics, { gutters: answers });
-  if (offered.lighting && !answers.lightingLF) params["Lighting LF"] = params["Gutter LF"];
-  params["In-Ground Drains"] = offered.drains ? defaultDrainCount(answers) : 0;
-  // one more pipe section per drain past 8 ft; if only the footage is known,
-  // one section per 10 ft of it
-  if (!answers.drainsPast8 && answers.drainExtraLF) params["Drain Extra Pipe Sections"] = Math.ceil(answers.drainExtraLF / 10);
-  return params;
-}
-
-export function buildGutterLines(assembly, answers, basics, { accountId } = {}) {
-  const six = answers.size === "6";
-  const isGc = (basics?.customerType || "") === "gc";
-  const offered = upgradesFor(basics, { gutters: answers });
-  const anyUpgrade = offered.guards || offered.drains || offered.lighting;
-  const params = gutterParams(answers, basics);
-  const lines = assemblyToLineItems(assembly, {
-    params,
-    selectGroup: (g) => {
-      // the 12x12 is the customer's choice on the proposal; standard is picked
-      // (matched by basin size, so renaming the options in JobTread is safe)
-      if (/9x9/i.test(g.name)) return true;
-      if (/12x12/i.test(g.name)) return false;
-      if (g.name.startsWith('5"')) return !six;
-      if (g.name.startsWith('6"') && !/guard/i.test(g.name)) return six;
-      return undefined;
-    },
-    // only upgrades that fit the job (shared/tradeQuestions.js upgradesFor);
-    // GC bids show just the gutter size being bid
-    dropGroup: (g) =>
-      (/optional upgrades/i.test(g.name) && !anyUpgrade) ||
-      (/gutter guards/i.test(g.name) && !offered.guards) ||
-      (/guards for 6"/i.test(g.name) && !six) ||
-      (/guards for 5"/i.test(g.name) && six) ||
-      (/in-ground/i.test(g.name) && !offered.drains) ||
-      (/lighting/i.test(g.name) && !offered.lighting) ||
-      (isGc && g.name.startsWith(six ? '5"' : '6"')),
-    // extra-pipe lines only when a long run was entered
-    dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
-  });
-  fitOptionalLimits(lines);
-  const rates = gutterRatesFor(basics, { accountId });
-  applyPerFootRate(lines, rates, billedFootage(answers), six);
-  const GUTTER_MINIMUM = gutterMinimum(rates, six, accountId && CUSTOMER_GUTTER_RATES[accountId] ? "gc" : basics?.customerType || "retail");
-  const total = selectedPriceTotal(lines);
-  if (total > 0 && total < GUTTER_MINIMUM) {
-    lines[0].lineItems.push({
-      _type: "costItem",
-      name: "Small job minimum",
-      description: `Our minimum for a gutter job is $${GUTTER_MINIMUM}.`,
-      quantity: 1,
-      quantityFormula: null,
-      unitCost: 0,
-      unitPrice: Math.round((GUTTER_MINIMUM - total) * 100) / 100,
-      isTaxable: false,
-      showQuantity: false,
-      costCodeId: GUTTERS_COST_CODE,
-      costTypeId: OTHER_COST_TYPE,
-      unitId: EACH_UNIT,
-      organizationCostItemId: null,
-    });
-  }
-  return { lines, params, total: Math.max(total, total > 0 ? GUTTER_MINIMUM : 0) };
-}
-
-// Prices the base bid (everything but the optional upgrades) at the
-// per-foot rate: shared lines (labor, tear-off) plus the picked size's lines
-// come to rate x footage, and the other size option — when it's shown — is
-// priced so picking it comes to its own rate x footage.
-export function applyPerFootRate(lines, rates, footage, six) {
-  if (!rates || !footage) return;
-  const shared = [];
-  const sizes = { 5: [], 6: [] };
-  const collect = (list, bucket) => {
-    for (const l of list) {
-      if (l._type === "costItem") bucket.push(l);
-      else if (/optional upgrades/i.test(l.name)) continue;
-      else if (/^5"/.test(l.name)) collect(l.lineItems || [], sizes[5]);
-      else if (/^6"/.test(l.name)) collect(l.lineItems || [], sizes[6]);
-      else collect(l.lineItems || [], bucket);
-    }
+  const extraLF = n("drainExtraLF");
+  return {
+    "Gutter LF": n("gutterLF"),
+    "One Story Downspouts": n("oneStory"),
+    "Two Story Downspouts": n("twoStory"),
+    "Three Story Downspouts": n("threeStory"),
+    "Downspout Offsets": n("offsets"),
+    Miters: n("miters"),
+    "Gutter Tear-off LF": n("tearOffLF"),
+    "In-Ground Drains": offered.drains ? defaultDrainCount(answers) : 0,
+    "Drain Extra Pipe Sections": n("drainsPast8") || Math.ceil(extraLF / 10),
+    "Drain Extra LF": extraLF,
+    "Lighting LF": offered.lighting ? n("lightingLF") || n("gutterLF") : 0,
   };
-  collect(lines, shared);
-  const sum = (arr) => arr.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
-  const scale = (arr, f) => arr.forEach((l) => (l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100));
-  const picked = six ? 6 : 5;
-  const other = six ? 5 : 6;
+}
 
-  const pickedTarget = rates[picked] * footage;
-  const before = sum(shared) + sum(sizes[picked]);
-  if (!before) return;
-  scale(shared, pickedTarget / before);
-  scale(sizes[picked], pickedTarget / before);
-  absorbCents([...sizes[picked], ...shared], pickedTarget - sum(shared) - sum(sizes[picked]));
+const upgradeGroup = inGroup(/optional upgrades/i);
+const sizeOf = (i) => (i.groups.find((g) => /^[56]"/.test(g)) || "")[0];
 
-  if (sizes[other].length && sum(sizes[other])) {
-    const otherTarget = rates[other] * footage - sum(shared);
-    scale(sizes[other], otherTarget / sum(sizes[other]));
-    absorbCents(sizes[other], otherTarget - sum(sizes[other]));
+function gutterLine({ size, footage, rate, minimum, color, tearOff, catalog, insurance }) {
+  const cost = costOf(catalog.filter((i) => !upgradeGroup(i) && !inGroup(/drain|lighting/i)(i) && (!sizeOf(i) || sizeOf(i) === String(size))));
+  const name = `${size}" seamless gutters & ${size === 6 ? "3x4" : "2x3"} downspouts${color ? `, ${color}` : ""} - installed`;
+  const description = sentence(WORDING.gutters.description, tearOff ? WORDING.gutters.tearOff : "", LIFETIME);
+  const costCode = JT.costCodes.gutters;
+  if (rate * footage < minimum) {
+    // small job: one lump-sum line at the minimum
+    return installedLine({ name: `${name} (${Math.round(footage)} LF)`, description, unit: "lump", qty: 1, unitPrice: minimum, cost, costCode, insurance });
   }
+  return installedLine({ name, description, unit: "lf", qty: footage, unitPrice: rate, cost, costCode, insurance });
 }
 
-// whole-cent prices leave the total a few cents off; the line with the
-// smallest quantity takes the difference most exactly
-function absorbCents(arr, drift) {
-  drift = Math.round(drift * 100) / 100;
-  if (!drift) return;
-  const pick = arr.filter((l) => Number(l.quantity) > 0).sort((a, b) => a.quantity - b.quantity)[0];
-  if (pick) pick.unitPrice = Math.round((pick.unitPrice + drift / pick.quantity) * 100) / 100;
+export function repairUnitPrice(preset) {
+  if (preset.priceFrom === "corrugatedExtension") {
+    const c = P.gutterRepairs.corrugatedExtension;
+    return roundLumpPrice(c.parts.pipe4x10 + c.elbowsPerExtension * c.parts.elbow4in90 + c.laborAdd);
+  }
+  return preset.price;
+}
+function repairUnitCost(preset) {
+  if (preset.priceFrom === "corrugatedExtension") {
+    const c = P.gutterRepairs.corrugatedExtension;
+    return round2(c.parts.pipe4x10 + c.elbowsPerExtension * c.parts.elbow4in90);
+  }
+  return preset.cost || 0;
 }
 
-// An optional-choices group ("Optional Upgrades", min 0) shows "select up to
-// N" on the proposal. Some options get dropped per job, so N is set to the
-// number of options actually left in it.
-export function fitOptionalLimits(lines) {
-  for (const l of lines) {
-    if (l._type !== "costGroup") continue;
-    fitOptionalLimits(l.lineItems || []);
-    if (l.minSelectionsRequired === 0 && l.maxSelectionsAllowed != null) {
-      const options = (l.lineItems || []).filter((c) => c._type === "costGroup").length;
-      l.maxSelectionsAllowed = Math.max(1, options);
+// repair / odd-job lines from the presets; the price can be changed per job
+export function repairLines(repairs = [], { insurance = false } = {}) {
+  const presets = P.gutterRepairs.presets;
+  const lines = [];
+  for (const r of repairs) {
+    const preset = presets[r.preset];
+    if (!preset) continue;
+    const name = preset.name.replace("{name}", r.name || "").replace("{qty}", r.qty ?? "");
+    const unit = preset.unit;
+    // a per-foot item is quantity x price; lump/each items: qty is a count
+    // (the cleaning preset's qty is just the footage in its name)
+    const qty = unit === "lf" ? Number(r.qty || 0) : preset.qtyLabel ? 1 : Number(r.qty || 1);
+    if (!qty) continue;
+    const unitPrice = r.price ?? repairUnitPrice(preset);
+    lines.push(
+      installedLine({
+        name,
+        unit,
+        qty,
+        unitPrice,
+        cost: repairUnitCost(preset) * qty,
+        costCode: /clean|guard/i.test(r.preset) ? JT.costCodes.gutterGuards : JT.costCodes.gutters,
+        insurance,
+      })
+    );
+  }
+  return lines;
+}
+
+function guardLines({ size, lf, difficultLF, difficultNote, color, catalog, insurance }) {
+  const guardGroup = new RegExp(`guards for ${size}"`, "i");
+  const unitCost = sum(catalog.filter(inGroup(guardGroup)), (i) => i.unitCost);
+  const out = [
+    installedLine({
+      name: `${size}" Bulldog gutter guards${color ? `, ${color}` : ""} - installed`,
+      description: sentence(LIFETIME, manufacturerNote("bulldog")),
+      unit: "lf",
+      qty: lf,
+      unitPrice: P.gutterGuards.ratesPerFoot[size],
+      cost: unitCost * lf,
+      costCode: JT.costCodes.gutterGuards,
+      insurance,
+    }),
+  ];
+  if (difficultLF > 0) {
+    const d = P.gutterGuards.difficultAccess;
+    out.push(
+      installedLine({
+        name: `Difficult access - ${difficultNote || "tree cover, grade drop or 2nd story"}`,
+        unit: "lf",
+        qty: difficultLF,
+        unitPrice: d.pricePerFoot,
+        cost: d.costPerFoot * difficultLF,
+        costCode: JT.costCodes.gutterGuards,
+        insurance,
+      })
+    );
+  }
+  return out;
+}
+
+const LETTERS = "ABCD";
+export function guardOptionSet(options, { size, color, catalog, insurance }) {
+  const children = options.map((o, n) =>
+    group(
+      `Option ${LETTERS[n]}: ${o.label} (${Math.round(o.lf)} LF)${o.recommended ? " - Recommended" : ""}`,
+      guardLines({ size, lf: o.lf, difficultLF: o.difficultLF || 0, difficultNote: o.difficultNote, color, catalog, insurance }),
+      { description: o.reason, isSelected: !!o.recommended }
+    )
+  );
+  return optionSet("Gutter Guard Options", children);
+}
+
+// drain lines: standard 9x9 or high-capacity 12x12, plus run past 8 ft
+function drainOption({ high, count, catalog, insurance }) {
+  const d = P.drainage;
+  const re = high ? /12x12/i : /9x9/i;
+  const unitCost = sum(catalog.filter(inGroup(re)), (i) => i.unitCost);
+  return group(
+    high ? "Higher-Capacity In-Ground Drain (12x12 catch basin)" : "Standard In-Ground Drain (9x9 catch basin)",
+    [
+      installedLine({
+        name: `In-ground downspout drain, ${high ? "12x12" : "9x9"} catch basin - installed`,
+        description: LIFETIME,
+        unit: "each",
+        qty: count,
+        unitPrice: high ? d.highCapacityEach : d.standardEach,
+        cost: unitCost * count,
+        costCode: JT.costCodes.drainage,
+        insurance,
+      }),
+    ],
+    { isSelected: !high }
+  );
+}
+
+function drainRunLines({ sections, extraLF, catalog, insurance }) {
+  const d = P.drainage;
+  const out = [];
+  if (extraLF > 0) {
+    out.push(
+      installedLine({
+        name: `Extended drain run past ${d.includedRunFeet} ft - installed`,
+        unit: "lf",
+        qty: extraLF,
+        unitPrice: d.extraPerFoot,
+        cost: d.crewExtraPerFoot * extraLF,
+        costCode: JT.costCodes.drainage,
+        insurance,
+      })
+    );
+  }
+  if (sections > 0) {
+    out.push(
+      installedLine({
+        name: "Additional 10 ft drain pipe section - installed",
+        unit: "each",
+        qty: sections,
+        unitPrice: d.extraPipeSection,
+        cost: unitCostOf(catalog, /additional drain pipe/i) * sections,
+        costCode: JT.costCodes.drainage,
+        insurance,
+      })
+    );
+  }
+  return out;
+}
+
+// drains: a size choice (9x9 picked unless `optional`) + any long-run lines
+export function drainGroup({ count, sections, extraLF, catalog, insurance, optional = false }) {
+  const sizes = [drainOption({ high: false, count, catalog, insurance }), drainOption({ high: true, count, catalog, insurance })];
+  if (optional) sizes[0].isSelected = false;
+  return group(
+    "In-Ground Downspout Drains",
+    [optionSet("Drain Size", sizes, { required: !optional }), ...drainRunLines({ sections, extraLF, catalog, insurance })],
+    { description: WORDING.drains }
+  );
+}
+
+function lightingLines({ lf, catalog, insurance }) {
+  const l = P.lighting;
+  const perFootCost = unitCostOf(catalog, /permanent holiday lighting - /i);
+  return [
+    installedLine({
+      name: "Permanent holiday & accent lighting - installed",
+      description: LIFETIME,
+      unit: "lf",
+      qty: lf,
+      unitPrice: l.perFoot,
+      cost: perFootCost * lf,
+      costCode: JT.costCodes.lighting,
+      insurance,
+    }),
+    installedLine({
+      name: "Permanent lighting controller",
+      unit: "each",
+      qty: 1,
+      unitPrice: l.controller,
+      cost: unitCostOf(catalog, /control box/i),
+      costCode: JT.costCodes.lighting,
+      insurance,
+    }),
+  ];
+}
+
+export function buildGutterLines(assembly, answers = {}, basics = {}, { accountId } = {}) {
+  const type = customerTypeOf(basics);
+  const insurance = type === "insurance";
+  const deal = accountId && P.gutters.customerRates[accountId];
+  const minType = deal ? "gc" : type;
+  const isGc = minType === "gc";
+  const rates = gutterRatesFor(basics, { accountId });
+  const six = answers.size === "6";
+  const picked = six ? 6 : 5;
+  const offered = upgradesFor(basics, { gutters: answers });
+  const params = gutterParams(answers, basics);
+  const catalog = catalogItems(assembly, params);
+  const footage = billedFootage(answers);
+  const color = answers.color || "";
+  const flags = [];
+  const lines = [];
+
+  if (Number(answers.gutterLF) > 0) {
+    const line = (size) =>
+      gutterLine({ size, footage, rate: rates[size], minimum: gutterMinimum(rates, size === 6, minType), color, tearOff: Number(answers.tearOffLF) > 0, catalog, insurance });
+    if (isGc) {
+      // GC bids show just the size being bid
+      lines.push(group("Seamless Gutters & Downspouts", [line(picked)]));
+    } else {
+      const sizes = [5, 6].map((s) =>
+        group(s === 5 ? '5" K-Style Gutters with 2x3 Downspouts' : '6" K-Style Gutters with 3x4 Downspouts (more capacity)', [line(s)], { isSelected: s === picked })
+      );
+      lines.push(optionSet("Seamless Gutters & Downspouts", sizes, { required: true }));
     }
   }
+
+  const repairs = repairLines(answers.repairs, { insurance });
+  if (repairs.length) lines.push(group("Gutter Cleaning, Downspout & Repair Work", repairs, { description: WORDING.repairs }));
+
+  if (answers.guardOptions?.length) {
+    lines.push(guardOptionSet(answers.guardOptions, { size: picked, color: answers.guardColor || color, catalog, insurance }));
+  }
+
+  const upgrades = [];
+  if (offered.guards && Number(answers.gutterLF) > 0) {
+    upgrades.push(
+      group(`Gutter Guards for ${picked}" Gutters`, guardLines({ size: picked, lf: Number(answers.gutterLF), difficultLF: Number(answers.difficultAccessLF || 0), color, catalog, insurance }), {
+        description: "Recommended for the trees near the gutters.",
+      })
+    );
+  }
+  if (offered.lighting && params["Lighting LF"] > 0) {
+    upgrades.push(group("Permanent Holiday & Accent Lighting", lightingLines({ lf: params["Lighting LF"], catalog, insurance })));
+  }
+  if (upgrades.length) lines.push(optionSet("Optional Upgrades", upgrades, { exclusive: false }));
+
+  if (offered.drains && params["In-Ground Drains"] > 0) {
+    lines.push(
+      drainGroup({
+        count: params["In-Ground Drains"],
+        sections: params["Drain Extra Pipe Sections"],
+        extraLF: params["Drain Extra LF"],
+        catalog,
+        insurance,
+        optional: true,
+      })
+    );
+    lines[lines.length - 1].name = "Optional In-Ground Downspout Drains";
+    if (params["Drain Extra LF"] > 0) flags.push("Drain runs past 8 ft: no fixed drain price until concrete, roots and landscaping are checked.");
+  }
+
+  return { lines, params, total: selectedPriceTotal(lines), flags };
 }
+
+// ---------- drainage / lighting on their own ----------
+
+export function drainageParams(answers = {}) {
+  const n = (k) => Math.max(0, Number(answers[k] || 0));
+  const extraLF = n("drainExtraLF");
+  return {
+    "In-Ground Drains": n("drains"),
+    "Drain Extra Pipe Sections": n("drainsPast8") || Math.ceil(extraLF / 10),
+    "Drain Extra LF": extraLF,
+  };
+}
+
+export function buildDrainageLines(assembly, answers = {}, basics = {}) {
+  const insurance = customerTypeOf(basics) === "insurance";
+  const params = drainageParams(answers);
+  const catalog = catalogItems(assembly, params);
+  const lines = [
+    drainGroup({ count: params["In-Ground Drains"], sections: params["Drain Extra Pipe Sections"], extraLF: params["Drain Extra LF"], catalog, insurance }),
+  ];
+  const flags = params["Drain Extra LF"] > 0 ? ["Drain runs past 8 ft: no fixed drain price until concrete, roots and landscaping are checked."] : [];
+  return { lines, params, total: selectedPriceTotal(lines), flags };
+}
+
+export function buildLightingLines(assembly, answers = {}, basics = {}) {
+  const insurance = customerTypeOf(basics) === "insurance";
+  const lf = Math.max(0, Number(answers.lightingLF || 0));
+  const params = { "Lighting LF": lf, "Lighting Control Boxes": lf > 0 ? 1 : 0 };
+  const catalog = catalogItems(assembly, params);
+  const lines = [group("Permanent Holiday & Accent Lighting", lightingLines({ lf, catalog, insurance }))];
+  return { lines, params, total: selectedPriceTotal(lines), flags: [] };
+}
+
+// ---------- siding ----------
+
+export const STYLED_SIDING = ["lp", "hardie"];
+export const SHAKE_SIDING = ["lp", "hardie", "vinyl"];
 
 export function sidingParams(answers = {}, basics = {}) {
   const wall = Number(answers.wallSF || 0);
   const type = tearOffType(basics, answers);
   const tearSF = type === "none" ? 0 : Number(answers.tearOffSF ?? wall) || 0;
-  // every siding job needs a dumpster — tear-off or not, there's a lot of
-  // cut-off waste on install
-  const dumpsters =
-    answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : wall > 0 ? 1 : 0;
-  // board-and-batten (LP/Hardie) and shake (LP/Hardie/vinyl) are part of
-  // the wall area
+  // every siding job gets a dumpster: lots of cut-off waste even without tear-off
+  const dumpsters = answers.dumpsters !== undefined && answers.dumpsters !== "" ? Number(answers.dumpsters) || 0 : wall > 0 ? 1 : 0;
   const styled = STYLED_SIDING.includes(answers.product);
   const batten = styled ? Math.min(Number(answers.battenSF || 0), wall) : 0;
-  const shake =
-    answers.product === "vinylShake"
-      ? wall
-      : SHAKE_SIDING.includes(answers.product)
-        ? Math.min(Number(answers.shakeSF || 0), wall - batten)
-        : 0;
+  const shake = answers.product === "vinylShake" ? wall : SHAKE_SIDING.includes(answers.product) ? Math.min(Number(answers.shakeSF || 0), wall - batten) : 0;
   return {
     "Wall SF": wall,
     "Batten SF": batten,
@@ -431,73 +554,118 @@ export function sidingParams(answers = {}, basics = {}) {
   };
 }
 
-// drops groups left with nothing in them (e.g. tear-off on new construction)
-function pruneEmpty(lines) {
-  return lines
-    .map((l) => (l._type === "costGroup" ? { ...l, lineItems: pruneEmpty(l.lineItems || []) } : l))
-    .filter((l) => l._type !== "costGroup" || (l.lineItems || []).length > 0);
-}
+export function buildSidingLines(assembly, answers = {}, basics = {}, product = "lp") {
+  const type = customerTypeOf(basics);
+  const insurance = type === "insurance";
+  const isGc = type === "gc";
+  const words = WORDING.siding[product] || WORDING.siding.lp;
+  const offered = upgradesFor(basics, { siding: { ...answers, product } });
+  const params = sidingParams({ ...answers, product }, basics);
+  const catalog = catalogItems(assembly, params);
+  const waste = P.waste.siding;
+  const wall = params["Wall SF"];
+  const batten = params["Batten SF"];
+  const shake = params["Shake SF"];
+  const lapSF = wall - batten - shake;
+  const painted = PAINTED_SIDING.includes(product);
+  // retail and every Hardie job: Emerald; GC LP: contractor-grade
+  const emerald = !isGc || product === "hardie";
+  const flags = [];
 
-// kept for the LP tests and callers
-export function buildLpSidingLines(assembly, answers, basics) {
-  return buildSidingLines(assembly, answers, basics, "lp");
-}
+  // costs: base items (not tear-off, metal wraps, upgrades or the paint
+  // that isn't used), split by style; shared costs go by area
+  const notPaint = emerald ? /contractor-grade/i : /emerald/i;
+  const base = catalog.filter((i) => !inGroup(/tear-off|metal wraps|optional upgrades/i)(i) && !inGroup(notPaint)(i));
+  const battenItems = base.filter(named(/batten|panel/i));
+  const shakeItems = base.filter((i) => !battenItems.includes(i) && named(/shake|shingle/i)(i));
+  const shared = base.filter((i) => !battenItems.includes(i) && !shakeItems.includes(i));
+  const sharedCost = costOf(shared);
+  const share = (sf) => (wall ? (sharedCost * sf) / wall : 0);
 
-export function buildSidingLines(assembly, answers, basics, product = "lp") {
-  const isGc = (basics?.customerType || "") === "gc";
-  const offered = upgradesFor(basics, { siding: answers });
-  const params = sidingParams(answers, basics);
-  let lines = assemblyToLineItems(assembly, {
-    params,
-    selectGroup: (g) => {
-      // retail gets Emerald; GC bids are priced on contractor-grade paint
-      // with Emerald shown as the upgrade
-      if (/emerald/i.test(g.name)) return !isGc;
-      if (/contractor-grade/i.test(g.name)) return isGc;
-      return undefined;
-    },
-    dropGroup: (g) =>
-      (!isGc && /contractor-grade/i.test(g.name)) ||
-      (/optional upgrades/i.test(g.name) && !offered.insulatedWrap) ||
-      (/insulated reflective/i.test(g.name) && !offered.insulatedWrap),
-    // tear-off, resheathing, dumpster and metal wrap lines only when they apply
-    dropItem: (i, qty) => /tear off|sheathing|dumpster|metal wrap|batten|panel|shingle|shake|lap/i.test(i.name) && !qty,
-  });
-  lines = pruneEmpty(lines);
-  fitOptionalLimits(lines);
+  const paintNote = painted ? sentence(emerald ? WORDING.siding.paintRetail : WORDING.siding.paintGc, WORDING.warranty.paint) : "";
+  const description = sentence(words.description, paintNote, LIFETIME, manufacturerNote(product));
+  const costCode = JT.costCodes[`siding_${product}`] || JT.costCodes.siding_lp;
+  const rates = P.siding.ratesPerSF[product] || P.siding.ratesPerSF.lp;
+  const styleRate = (k) => byType(k === "shake" && /^vinyl/.test(product) ? P.siding.ratesPerSF.vinylShake : P.siding.styleRatesPerSF[k], basics);
 
-  // price the base bid at the per-square-foot rate on wall area + 10%
-  const rates = SIDING_RATES[product] || SIDING_RATES.lp;
-  const rate = rates[basics?.customerType] ?? rates.retail;
-  const batten = params["Batten SF"] || 0;
-  const shake = params["Shake SF"] || 0;
-  const lapSF = params["Wall SF"] - batten - shake;
-  const styleRates = (k) => (k === "shake" && /^vinyl/.test(product) ? VINYL_SHAKE_RATES : SIDING_STYLE_RATES[k]);
-  const style = (k) => styleRates(k)[basics?.customerType] ?? styleRates(k).retail;
-  const billedSF = params["Wall SF"] * SIDING_WASTE;
-  const shared = [];
-  const paint = { picked: [], other: [] };
-  const collect = (list, bucket) => {
-    for (const l of list) {
-      if (l._type === "costItem") bucket.push(l);
-      else if (/optional upgrades|tear-off|metal wraps/i.test(l.name)) continue;
-      else if (/emerald|contractor-grade/i.test(l.name)) collect(l.lineItems || [], l.isSelected ? paint.picked : paint.other);
-      else collect(l.lineItems || [], bucket);
-    }
-  };
-  collect(lines, shared);
-  const sum = (arr) => arr.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
-  const before = sum(shared) + sum(paint.picked);
-  if (billedSF && before) {
-    const target = SIDING_WASTE * (rate * lapSF + style("batten") * batten + style("shake") * shake);
-    const f = target / before;
-    for (const l of [...shared, ...paint.picked, ...paint.other]) {
-      l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100;
-    }
-    absorbCents([...paint.picked, ...shared], target - sum(shared) - sum(paint.picked));
+  const main = [];
+  if (lapSF > 0 && words.lap) {
+    main.push(installedLine({ name: `${words.lap} - installed`, description, unit: "sf", qty: lapSF * waste, unitPrice: byType(rates, basics), cost: share(lapSF), costCode, insurance }));
   }
-  return { lines, params, total: selectedPriceTotal(lines) };
+  if (batten > 0 && words.batten) {
+    main.push(installedLine({ name: `${words.batten} - installed`, description, unit: "sf", qty: batten * waste, unitPrice: styleRate("batten"), cost: share(batten) + costOf(battenItems), costCode, insurance }));
+  }
+  if (shake > 0 && words.shake) {
+    main.push(installedLine({ name: `${words.shake} - installed`, description, unit: "sf", qty: shake * waste, unitPrice: styleRate("shake"), cost: share(shake) + costOf(shakeItems), costCode, insurance }));
+  }
+  const lines = [group(words.lap ? words.lap.replace(/ with .*/, "") : words.shake.replace(/ with .*/, ""), main)];
+
+  // tear-off & prep: no lifetime warranty
+  const prep = [];
+  const prepCode = JT.costCodes.sidingPrep;
+  const tear = [
+    ["vinyl", "Vinyl Tear-off SF", "Tear off existing vinyl/aluminum siding", /tear off vinyl/i],
+    ["wood", "Wood Tear-off SF", "Tear off existing wood siding", /tear off wood/i],
+    ["stucco", "Stucco Tear-off SF", "Tear off existing stucco", /stucco tear off/i],
+  ];
+  for (const [k, param, name, re] of tear) {
+    const sf = params[param];
+    if (sf > 0) prep.push(installedLine({ name, unit: "sf", qty: sf, unitPrice: P.siding.tearOffPerSF[k], cost: unitCostOf(catalog, re) * sf, costCode: prepCode, insurance }));
+  }
+  if (params["Resheathing SF"] > 0) {
+    const sf = params["Resheathing SF"];
+    const cost = costOf(catalog.filter(named(/sheathing/i)));
+    prep.push(installedLine({ name: "OSB resheathing - installed", unit: "sf", qty: sf, unitPrice: P.siding.resheathPerSF.price, cost, costCode: prepCode, insurance }));
+  }
+  if (params.Dumpsters > 0) {
+    prep.push(installedLine({ name: "Dumpster", unit: "each", qty: params.Dumpsters, unitPrice: byType(P.siding.dumpster.price, basics), cost: P.siding.dumpster.cost * params.Dumpsters, costCode: prepCode, insurance }));
+  }
+  if (params["Metal Wraps"] > 0) {
+    const n = params["Metal Wraps"];
+    prep.push(installedLine({ name: "Metal wrap (window, man door, garage door) - installed", unit: "each", qty: n, unitPrice: P.siding.metalWrapEach, cost: unitCostOf(catalog, /metal wrap/i) * n, costCode, insurance }));
+  }
+  if (prep.length) lines.push(group("Tear-off & Prep", prep));
+
+  // upgrades: insulated reflective house wrap (all siding jobs); Emerald
+  // paint on GC LP bids
+  const upgrades = [];
+  if (offered.insulatedWrap && wall > 0) {
+    const qty = wall * waste;
+    upgrades.push(
+      group("Insulated Reflective House Wrap", [
+        installedLine({
+          name: "Insulated reflective house wrap upgrade - installed",
+          description: "Premium insulated, reflective wrap in place of standard house wrap, to help keep the walls cooler in summer and warmer in winter.",
+          unit: "sf",
+          qty,
+          unitPrice: P.siding.insulatedWrapUpgradePerSF.price,
+          cost: unitCostOf(catalog, /insulated reflective/i) * qty,
+          costCode,
+          insurance,
+        }),
+      ])
+    );
+  }
+  if (offered.emeraldPaint && painted && !emerald && wall > 0) {
+    const gallons = wall / 150;
+    const priceOf = (re) => unitCostOf(catalog.map((i) => ({ ...i, unitCost: i.unitPrice })), re);
+    const delta = (priceOf(/emerald rain refresh - material/i) - priceOf(/contractor-grade exterior paint/i)) * gallons;
+    const costDelta = (unitCostOf(catalog, /emerald rain refresh - material/i) - unitCostOf(catalog, /contractor-grade exterior paint/i)) * gallons;
+    if (delta > 0) {
+      upgrades.push(
+        group("Sherwin-Williams Emerald Rain Refresh Paint", [
+          installedLine({ name: "Upgrade to Sherwin-Williams Emerald Rain Refresh paint", description: WORDING.warranty.paint, unit: "lump", qty: 1, unitPrice: delta, cost: costDelta, costCode, insurance }),
+        ])
+      );
+    }
+  }
+  if (upgrades.length) lines.push(optionSet("Optional Upgrades", upgrades, { exclusive: false }));
+
+  if (insurance) flags.push("Insurance siding: match the adjuster's estimate line by line before sending (adjusters pay about $6.75–7/sq ft for vinyl).");
+  return { lines, params, total: selectedPriceTotal(lines), flags };
 }
+
+// ---------- stucco ----------
 
 export function stuccoParams(answers = {}) {
   const full = answers.jobType === "full";
@@ -514,20 +682,44 @@ export function stuccoParams(answers = {}) {
 }
 
 export function hasStuccoWork(answers = {}) {
-  const p = stuccoParams(answers);
-  return Object.values(p).some((v) => v > 0);
+  return Object.values(stuccoParams(answers)).some((v) => v > 0);
 }
 
-export function buildStuccoLines(assembly, answers, basics) {
+export function buildStuccoLines(assembly, answers = {}, basics = {}) {
+  const insurance = customerTypeOf(basics) === "insurance";
   const params = stuccoParams(answers);
-  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
-  lines = pruneEmpty(lines);
-  const rate = STUCCO_RATES[basics?.customerType] ?? STUCCO_RATES.retail;
-  for (const l of lines[0]?.lineItems || []) {
-    if (/full job/i.test(l.name)) l.unitPrice = rate;
+  const catalog = catalogItems(assembly, params);
+  const s = P.stucco;
+  const code = JT.costCodes.stucco;
+  const cost = (re) => costOf(catalog.filter(named(re)));
+  const colorNote = WORDING.warranty.stuccoColorMatch;
+  const items = [];
+  if (params["Stucco SF"] > 0) {
+    items.push(installedLine({ name: "Stucco, full job - installed", description: LIFETIME, unit: "sf", qty: params["Stucco SF"] * P.waste.siding, unitPrice: byType(s.fullPerSF, basics), cost: cost(/full job/i), costCode: code, insurance }));
   }
-  return { lines, params, total: selectedPriceTotal(lines) };
+  if (params["Stucco Repairs"] > 0) {
+    items.push(installedLine({ name: "Stucco repair", description: colorNote, unit: "lump", qty: 1, unitPrice: s.repairMinimum.price, cost: cost(/^stucco repair$/i) || s.repairMinimum.cost, costCode: code, insurance }));
+  }
+  if (params["Popout Windows"] > 0) {
+    items.push(installedLine({ name: "Stucco popout cut-back (per window)", description: colorNote, unit: "each", qty: params["Popout Windows"], unitPrice: s.popoutPerWindow, cost: cost(/popout/i), costCode: code, insurance }));
+  }
+  if (params["Foundation Plaster LF"] > 0) {
+    items.push(installedLine({ name: "Foundation plaster", unit: "lf", qty: params["Foundation Plaster LF"], unitPrice: s.foundationPlasterPerFoot, cost: cost(/foundation plaster/i), costCode: code, insurance }));
+  }
+  const lines = [];
+  if (items.length) lines.push(group("Stucco", items));
+  if (params["Gutter Wall Spots"] > 0) {
+    lines.push(
+      group("Gutter Against Stucco Wall Repair", [
+        installedLine({ name: "Gutter cut-back from stucco wall + new end cap", unit: "each", qty: params["Gutter Wall Spots"], unitPrice: s.gutterWall.cutBack, cost: cost(/cut-back from stucco/i), costCode: code, insurance }),
+        installedLine({ name: "Stucco repair where the gutter met the wall", description: colorNote, unit: "lump", qty: 1, unitPrice: s.gutterWall.stuccoRepair, cost: cost(/where gutter met/i), costCode: code, insurance }),
+      ])
+    );
+  }
+  return { lines, params, total: selectedPriceTotal(lines), flags: [] };
 }
+
+// ---------- soffit & fascia ----------
 
 export function soffitFasciaParams(answers = {}) {
   const n = (k) => Math.max(0, Number(answers[k] || 0));
@@ -540,7 +732,7 @@ export function soffitFasciaParams(answers = {}) {
     "Fascia Only LF": fasciaOnly,
     "Soffit LF": soffitLF,
     "Fascia LF": both + fasciaOnly,
-    "Soffit SF": Math.round(((soffitLF * depth) / 12) * 100) / 100,
+    "Soffit SF": round2((soffitLF * depth) / 12),
     "Porch Cap SF": n("porchCapSF"),
   };
 }
@@ -550,28 +742,32 @@ export function hasSoffitFasciaWork(answers = {}) {
   return p["Soffit LF"] + p["Fascia LF"] + p["Porch Cap SF"] > 0;
 }
 
-export function buildSoffitFasciaLines(assembly, answers, basics) {
+export function buildSoffitFasciaLines(assembly, answers = {}, basics = {}) {
+  const insurance = customerTypeOf(basics) === "insurance";
   const params = soffitFasciaParams(answers);
-  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
-  lines = pruneEmpty(lines);
-  const rate = SOFFIT_FASCIA_RATES[basics?.customerType] ?? SOFFIT_FASCIA_RATES.retail;
-  const porch = PORCH_CAP_RATES[basics?.customerType] ?? PORCH_CAP_RATES.retail;
-  const target =
-    rate * params["Soffit And Fascia LF"] +
-    (rate / 2) * (params["Soffit Only LF"] + params["Fascia Only LF"]) +
-    porch * params["Porch Cap SF"];
+  const catalog = catalogItems(assembly, params);
+  const code = JT.costCodes.soffitFascia;
+  const rate = byType(P.soffitFascia.bothPerFoot, basics);
+  const porchRate = byType(P.soffitFascia.porchCapPerSF, basics);
+  const notPorch = (i) => !/porch cap/i.test(i.name);
+  // material cost per LF of soffit / fascia, then labor per line
+  const soffitMatPerLF = params["Soffit LF"] ? costOf(catalog.filter((i) => notPorch(i) && /soffit/i.test(i.name) && !/labor/i.test(i.name))) / params["Soffit LF"] : 0;
+  const fasciaMatPerLF = params["Fascia LF"] ? costOf(catalog.filter((i) => notPorch(i) && /fascia/i.test(i.name) && !/labor/i.test(i.name) && !/soffit/i.test(i.name))) / params["Fascia LF"] : 0;
+  const laborBoth = unitCostOf(catalog, /soffit & fascia install/i);
+  const laborOne = unitCostOf(catalog, /soffit only or fascia only/i);
+  const both = params["Soffit And Fascia LF"], soffitOnly = params["Soffit Only LF"], fasciaOnly = params["Fascia Only LF"];
   const items = [];
-  const walk = (l) => l.forEach((x) => (x._type === "costItem" ? items.push(x) : walk(x.lineItems || [])));
-  walk(lines);
-  const sum = () => items.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0);
-  const before = sum();
-  if (target && before) {
-    const f = target / before;
-    for (const l of items) l.unitPrice = Math.round(Number(l.unitPrice || 0) * f * 100) / 100;
-    absorbCents(items, target - sum());
+  if (both > 0) items.push(installedLine({ name: 'Aluminum soffit & 6" fascia - installed', description: LIFETIME, unit: "lf", qty: both, unitPrice: rate, cost: (soffitMatPerLF + fasciaMatPerLF + laborBoth) * both, costCode: code, insurance }));
+  if (soffitOnly > 0) items.push(installedLine({ name: "Aluminum soffit - installed", description: LIFETIME, unit: "lf", qty: soffitOnly, unitPrice: rate / 2, cost: (soffitMatPerLF + laborOne) * soffitOnly, costCode: code, insurance }));
+  if (fasciaOnly > 0) items.push(installedLine({ name: 'Aluminum 6" fascia - installed', description: LIFETIME, unit: "lf", qty: fasciaOnly, unitPrice: rate / 2, cost: (fasciaMatPerLF + laborOne) * fasciaOnly, costCode: code, insurance }));
+  if (params["Porch Cap SF"] > 0) {
+    items.push(installedLine({ name: "Aluminum porch cap (soffit ceiling) - installed", description: LIFETIME, unit: "sf", qty: params["Porch Cap SF"], unitPrice: porchRate, cost: costOf(catalog.filter(named(/porch cap/i))), costCode: code, insurance }));
   }
-  return { lines, params, total: selectedPriceTotal(lines) };
+  const lines = items.length ? [group("Aluminum Soffit & Fascia", items)] : [];
+  return { lines, params, total: selectedPriceTotal(lines), flags: [] };
 }
+
+// ---------- painting ----------
 
 export function paintingParams(answers = {}) {
   const n = (k) => Math.max(0, Number(answers[k] || 0));
@@ -590,107 +786,97 @@ export function hasPaintingWork(answers = {}) {
   return Object.values(paintingParams(answers)).some((v) => v > 0);
 }
 
-export function buildPaintingLines(assembly, answers) {
+export function buildPaintingLines(assembly, answers = {}, basics = {}) {
+  const insurance = customerTypeOf(basics) === "insurance";
   const params = paintingParams(answers);
-  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
-  lines = pruneEmpty(lines);
-  const total = selectedPriceTotal(lines);
-  if (total > 0 && total < PAINTING_MINIMUM) {
-    lines[0].lineItems.push({
-      _type: "costItem",
-      name: "Small job minimum",
-      description: `Our minimum for a painting job is $${PAINTING_MINIMUM}.`,
-      quantity: 1,
-      quantityFormula: null,
-      unitCost: 0,
-      unitPrice: Math.round((PAINTING_MINIMUM - total) * 100) / 100,
-      isTaxable: false,
-      showQuantity: false,
-      costCodeId: "22PJfnqzbFf9",
-      costTypeId: OTHER_COST_TYPE,
-      unitId: EACH_UNIT,
-      organizationCostItemId: null,
-    });
+  const catalog = catalogItems(assembly, params);
+  const p = P.painting;
+  const code = JT.costCodes.painting;
+  const cost = (re) => costOf(catalog.filter(named(re)));
+  const note = WORDING.warranty.paint;
+  const eaves = params["Eave LF With Repaint"] + params["Eave LF Only"];
+  const items = [];
+  if (params["Paint Wall SF"] > 0) items.push(installedLine({ name: "Exterior repaint, Sherwin-Williams Emerald Rain Refresh", description: note, unit: "sf", qty: params["Paint Wall SF"], unitPrice: p.wallPerSF, cost: cost(/exterior repaint/i), costCode: code, insurance }));
+  if (eaves > 0) items.push(installedLine({ name: "Paint eaves", description: note, unit: "lf", qty: eaves, unitPrice: p.eavePerFoot, cost: cost(/paint eaves/i), costCode: code, insurance }));
+  if (params["Garage Doors"] > 0) items.push(installedLine({ name: "Paint garage door", description: note, unit: "each", qty: params["Garage Doors"], unitPrice: p.garageDoorEach, cost: cost(/garage door/i), costCode: code, insurance }));
+  if (params["Man Doors"] > 0) items.push(installedLine({ name: "Paint man door", description: note, unit: "each", qty: params["Man Doors"], unitPrice: p.manDoorEach, cost: cost(/man door/i), costCode: code, insurance }));
+  const subtotal = selectedPriceTotal(items);
+  if (subtotal > 0 && subtotal < p.minimum) {
+    items.push(installedLine({ name: "Small job minimum", description: `Our minimum for a painting job is $${p.minimum}.`, unit: "lump", qty: 1, unitPrice: p.minimum - subtotal, cost: 0, costCode: code, insurance }));
   }
-  return { lines, params, total: Math.max(total, total > 0 ? PAINTING_MINIMUM : 0) };
+  const lines = items.length ? [group("Exterior Painting", items)] : [];
+  return { lines, params, total: selectedPriceTotal(lines), flags: [] };
 }
 
-export function drainageParams(answers = {}) {
-  const n = (k) => Math.max(0, Number(answers[k] || 0));
-  const extraLF = n("drainExtraLF");
-  return {
-    "In-Ground Drains": n("drains"),
-    // one more pipe section per drain past 8 ft; if only the footage is
-    // known, one section per 10 ft of it
-    "Drain Extra Pipe Sections": n("drainsPast8") || Math.ceil(extraLF / 10),
-    "Drain Extra LF": extraLF,
-  };
-}
-
-// catalog prices as they are: $500 a standard drain, $630 for the 12x12
-// option, $35 per extra pipe section, $15/ft past 8 ft
-export function buildDrainageLines(assembly, answers) {
-  const params = drainageParams(answers);
-  let lines = assemblyToLineItems(assembly, {
-    params,
-    selectGroup: (g) => (/9x9/i.test(g.name) ? true : /12x12/i.test(g.name) ? false : undefined),
-    dropItem: (i, qty) => /extended drain run|additional drain pipe/i.test(i.name) && !qty,
-  });
-  lines = pruneEmpty(lines);
-  return { lines, params, total: selectedPriceTotal(lines) };
-}
-
-// $30/ft ($22.30 material + $7.70 install) + $500 control box, catalog prices
-export function buildLightingLines(assembly, answers) {
-  const lf = Math.max(0, Number(answers.lightingLF || 0));
-  const params = { "Lighting LF": lf, "Lighting Control Boxes": lf > 0 ? 1 : 0 };
-  let lines = assemblyToLineItems(assembly, { params, dropItem: (i, qty) => !qty });
-  lines = pruneEmpty(lines);
-  return { lines, params, total: selectedPriceTotal(lines) };
-}
+// ---------- the draft ----------
 
 // merges our parameters into whatever the job already has
 export function mergeParameters(existing, params) {
   const list = Array.isArray(existing) ? existing.filter((p) => !(p.name in params)) : [];
-  // keep only the fields updateJob accepts for number/formula parameters
   const kept = list.map((p) => (p.formula ? { name: p.name, formula: p.formula } : { name: p.name, value: p.value ?? 0 }));
   return [...kept, ...Object.entries(params).map(([name, value]) => ({ name, value }))];
 }
 
-// creates the draft Proposal on the job; returns { documentId, fullName, total }
-export async function draftEstimate({ lead, basics, answers, link }) {
+// which trades this lead's answers can draft
+export function draftPlan(basics = {}, answers = {}) {
   const trades = basics.trades || [];
-  const doGutters = trades.includes("gutters");
+  const g = answers.gutters || {};
   const product = sidingProduct(answers);
-  const doSiding = trades.includes("siding") && AUTOMATED_SIDING.includes(product);
-  const doStucco = trades.includes("stucco") && hasStuccoWork(answers.stucco);
-  const doSoffit = trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia);
-  const doPainting = trades.includes("painting") && hasPaintingWork(answers.painting);
-  const doDrainage = trades.includes("drainage") && Number(answers.drainage?.drains) > 0;
-  const doLighting = trades.includes("lighting") && Number(answers.lighting?.lightingLF) > 0;
-  if (!doGutters && !doSiding && !doStucco && !doSoffit && !doPainting && !doDrainage && !doLighting) throw new Error("None of the work on this lead is automated yet");
+  return {
+    gutters: trades.includes("gutters") && (Number(g.gutterLF) > 0 || !!g.repairs?.length || !!g.guardOptions?.length),
+    siding: trades.includes("siding") && AUTOMATED_SIDING.includes(product),
+    stucco: trades.includes("stucco") && hasStuccoWork(answers.stucco),
+    soffitFascia: trades.includes("soffitFascia") && hasSoffitFasciaWork(answers.soffitFascia),
+    painting: trades.includes("painting") && hasPaintingWork(answers.painting),
+    drainage: trades.includes("drainage") && Number(answers.drainage?.drains) > 0,
+    lighting: trades.includes("lighting") && Number(answers.lighting?.lightingLF) > 0,
+    product,
+  };
+}
 
-  const [gutterAssembly, sidingAssembly, stuccoAssembly, soffitAssembly, paintingAssembly, drainageAssembly, lightingAssembly, jobData, templateData] = await Promise.all([
-    doGutters ? fetchAssembly(ASSEMBLIES.gutters.id) : null,
-    doSiding ? fetchAssembly(ASSEMBLIES[`siding_${product}`].id) : null,
-    doStucco ? fetchAssembly(ASSEMBLIES.stucco.id) : null,
-    doSoffit ? fetchAssembly(ASSEMBLIES.soffitFascia.id) : null,
-    doPainting ? fetchAssembly(ASSEMBLIES.painting.id) : null,
-    doDrainage ? fetchAssembly(ASSEMBLIES.drainage.id) : null,
-    doLighting ? fetchAssembly(ASSEMBLIES.lighting.id) : null,
-    pave({
-      job: {
-        $: { id: link.jobId },
-        parameters: {},
-        location: { name: {}, address: {}, account: { id: {}, name: {} } },
-      },
-    }),
+// builds every trade's lines (no JobTread writes); the order the work goes
+// on the house: siding, stucco, soffit & fascia, painting, gutters, drains,
+// lighting
+export function buildAllLines({ basics, answers, assemblies, accountId }) {
+  const plan = draftPlan(basics, answers);
+  const out = { lines: [], params: {}, total: 0, flags: [] };
+  const add = (r) => {
+    out.lines.push(...r.lines);
+    Object.assign(out.params, r.params);
+    out.total += r.total;
+    out.flags.push(...(r.flags || []));
+  };
+  if (plan.siding) add(buildSidingLines(assemblies.siding, answers.siding || {}, basics, plan.product));
+  if (plan.stucco) add(buildStuccoLines(assemblies.stucco, answers.stucco || {}, basics));
+  if (plan.soffitFascia) add(buildSoffitFasciaLines(assemblies.soffitFascia, answers.soffitFascia || {}, basics));
+  if (plan.painting) add(buildPaintingLines(assemblies.painting, answers.painting || {}, basics));
+  if (plan.gutters) add(buildGutterLines(assemblies.gutters, answers.gutters || {}, basics, { accountId }));
+  if (plan.drainage) add(buildDrainageLines(assemblies.drainage, answers.drainage || {}, basics));
+  if (plan.lighting) add(buildLightingLines(assemblies.lighting, answers.lighting || {}, basics));
+  out.total = round2(out.total);
+  if (customerTypeOf(basics) === "insurance") out.flags.push("Insurance job: price off the adjuster's estimate and follow the claim's line structure before sending.");
+  return out;
+}
+
+const toE164 = (phone) => {
+  const d = String(phone || "").replace(/\D/g, "");
+  return d.length === 10 ? `+1${d}` : d.length === 11 && d.startsWith("1") ? `+${d}` : null;
+};
+
+// creates the draft Proposal on the job; returns { documentId, fullName, total, ... }
+export async function draftEstimate({ lead, basics, answers, link }) {
+  const plan = draftPlan(basics, answers);
+  const tradesToDraft = ["gutters", "siding", "stucco", "soffitFascia", "painting", "drainage", "lighting"].filter((t) => plan[t]);
+  if (!tradesToDraft.length) throw new Error("None of the work on this lead is automated yet");
+
+  const assemblyKey = (t) => (t === "siding" ? `siding_${plan.product}` : t);
+  const [assemblyList, jobData, templateData] = await Promise.all([
+    Promise.all(tradesToDraft.map((t) => fetchAssembly(JT.assemblies[assemblyKey(t)]))),
+    pave({ job: { $: { id: link.jobId }, parameters: {}, location: { name: {}, address: {}, account: { id: {}, name: {} } } } }),
     pave({
       documentTemplate: {
-        $: { id: PROPOSAL_TEMPLATE_ID },
+        $: { id: JT.proposalTemplateId },
         footer: {},
-        dueDays: {},
-        requireSignature: {},
         showFinancing: {},
         includeInBudget: {},
         showChildCosts: {},
@@ -698,94 +884,49 @@ export async function draftEstimate({ lead, basics, answers, link }) {
       },
     }),
   ]);
+  const assemblies = Object.fromEntries(tradesToDraft.map((t, n) => [t, assemblyList[n]]));
   const job = jobData?.job;
   if (!job) throw new Error("Couldn't find the JobTread job for this lead");
   const tpl = templateData?.documentTemplate || {};
 
-  const lines = [];
-  const params = {};
-  let total = 0;
-  // siding, stucco, soffit & fascia, painting, gutters, drains, then lighting — the order the work goes on the house
-  if (doSiding) {
-    const r = buildSidingLines(sidingAssembly, answers.siding || {}, basics, product);
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doStucco) {
-    const r = buildStuccoLines(stuccoAssembly, answers.stucco || {}, basics);
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doSoffit) {
-    const r = buildSoffitFasciaLines(soffitAssembly, answers.soffitFascia || {}, basics);
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doPainting) {
-    const r = buildPaintingLines(paintingAssembly, answers.painting || {});
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doGutters) {
-    const r = buildGutterLines(gutterAssembly, answers.gutters || {}, basics, { accountId: job.location.account.id });
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doDrainage) {
-    const r = buildDrainageLines(drainageAssembly, answers.drainage || {});
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
-  if (doLighting) {
-    const r = buildLightingLines(lightingAssembly, answers.lighting || {});
-    lines.push(...r.lines);
-    Object.assign(params, r.params);
-    total += r.total;
-  }
+  const built = buildAllLines({ basics, answers, assemblies, accountId: job.location.account.id });
 
-  await pave({ updateJob: { $: { id: link.jobId, parameters: mergeParameters(job.parameters, params) } } });
+  await pave({ updateJob: { $: { id: link.jobId, parameters: mergeParameters(job.parameters, built.params) } } });
 
-  const e164 = (() => {
-    const d = String(lead.phone || "").replace(/\D/g, "");
-    return d.length === 10 ? `+1${d}` : d.length === 11 && d.startsWith("1") ? `+${d}` : null;
-  })();
+  const d = JT.proposal;
+  const emailMessage = proposalMessage({ lead, basics, answers, offered: upgradesFor(basics, answers) });
   const created = await pave({
     createDocument: {
       $: {
         jobId: link.jobId,
         accountId: job.location.account.id,
-        type: "customerOrder",
-        name: "Proposal",
-        taxRate: UTAH_TAX_RATE,
-        fromName: "Sean Taylor",
-        fromOrganizationName: "Ridgeline Home Exteriors",
-        fromAddress: "2051 Wallflower Cir, Saratoga Springs, UT 84045, USA",
-        fromEmailAddress: "sean@rhxutah.com",
-        fromPhoneNumber: "+18018000831",
+        type: d.type,
+        name: d.name,
+        taxRate: taxRateFor(basics),
+        fromName: d.fromName,
+        fromOrganizationName: d.fromOrganizationName,
+        fromAddress: d.fromAddress,
+        fromEmailAddress: d.fromEmailAddress,
+        fromPhoneNumber: d.fromPhoneNumber,
         toName: lead.name,
         toOrganizationName: job.location.account.name,
         toAddress: job.location.address,
         toEmailAddress: String(lead.email || "").trim() || null,
-        toPhoneNumber: e164,
+        toPhoneNumber: toE164(lead.phone),
         jobLocationName: job.location.name,
         jobLocationAddress: job.location.address,
         footer: tpl.footer ?? null,
-        dueDays: tpl.dueDays ?? 30,
-        requireSignature: tpl.requireSignature ?? true,
+        dueDays: d.dueDays,
+        requireSignature: d.requireSignature,
         showFinancing: tpl.showFinancing ?? true,
         includeInBudget: tpl.includeInBudget ?? true,
         showChildCosts: tpl.showChildCosts ?? true,
         showCostItemFiles: tpl.showCostItemFiles ?? true,
-        showQuantity: false,
-        // pre-filled email for JobTread's Send screen, in Sean's words
-        emailMessage: proposalMessage({ lead, basics, answers, offered: upgradesFor(basics, answers) }),
-        lineItems: lines,
+        showQuantity: d.showQuantity,
+        // the cover email body (JobTread supplies the subject); only sent
+        // after Sean approves this proposal in Lead Hammer
+        emailMessage,
+        lineItems: built.lines,
       },
       createdDocument: { id: {}, fullName: {}, status: {}, price: {} },
     },
@@ -796,10 +937,14 @@ export async function draftEstimate({ lead, basics, answers, link }) {
     documentId: doc.id,
     fullName: doc.fullName,
     status: doc.status,
-    price: doc.price ?? total,
-    estimatedTotal: total,
+    price: doc.price ?? built.total,
+    estimatedTotal: built.total,
+    flags: built.flags,
     createdAt: new Date().toISOString(),
     // what Lead Hammer priced, to compare with what Sean sends (editReview.js)
-    snapshot: snapshotLines(lines, doc.price ?? total),
+    snapshot: snapshotLines(built.lines, doc.price ?? built.total),
+    // for the review only; not stored on the lead
+    lines: built.lines,
+    emailMessage,
   };
 }
