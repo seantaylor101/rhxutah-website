@@ -33,7 +33,7 @@ import { deleteMeasureDataForLead } from "./measure.js";
 const router = Router();
 
 const SOURCES = new Set(["referral", "referral_bni", "google", "facebook", "website", "other"]);
-const STAGES = new Set(["new", "bid", "lost", "won", "scheduled", "progress", "completed", "paid"]);
+const STAGES = new Set(["new", "insurance", "bid", "lost", "won", "scheduled", "progress", "completed", "paid"]);
 const EDITABLE_FIELDS = new Set([
   "createdAt",
   "startDate",
@@ -62,6 +62,32 @@ function parseWorkDays(value) {
 }
 
 const VALID_MANAGERS = new Set(["Sean", "Dave"]);
+
+// the insurance stage's checklist, in order — checking "jobWon" moves the
+// lead on to "won" like any other win
+export const INSURANCE_STEPS = [
+  "initialInspection",
+  "claimLetterSent",
+  "itelSent",
+  "supplementSent",
+  "costingComplete",
+  "finalEstimateSent",
+  "jobWon",
+];
+const INSURANCE_STEP_SET = new Set(INSURANCE_STEPS);
+
+function parseInsuranceChecklist(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const key of INSURANCE_STEPS) if (typeof parsed[key] === "string") out[key] = parsed[key];
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 function shareTokenFor(leadId) {
   const row = db.prepare(`SELECT token FROM lead_shares WHERE leadId = ?`).get(leadId);
@@ -98,11 +124,11 @@ function rowToLead(row) {
       followUps = [];
     }
   }
-  return { ...row, archived: !!row.archived, scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), jobtread: parseJobtreadLink(row.jobtread), tradeAnswers: parseTradeAnswers(row.tradeAnswers), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
+  return { ...row, archived: !!row.archived, insurance: !!row.insurance, insuranceChecklist: parseInsuranceChecklist(row.insuranceChecklist), scopeOfWork, followUps, jobDetails: parseJobDetails(row.jobDetails), estimateBasics: parseEstimateBasics(row.estimateBasics), jobtread: parseJobtreadLink(row.jobtread), tradeAnswers: parseTradeAnswers(row.tradeAnswers), media: mediaFor(row.id), shareToken: shareTokenFor(row.id), payees: parsePayees(row.payees), reportTags: parseReportTags(row.reportTags) };
 }
 
 // shared by the authenticated create route and the public website-intake route
-export function insertLead(db, { name, job, phone, email, source, sourceOther }) {
+export function insertLead(db, { name, job, phone, email, source, sourceOther, insurance }) {
   const lead = {
     id: randomUUID(),
     name: String(name).trim(),
@@ -110,7 +136,10 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
     phone: String(phone || "").trim(),
     email: String(email || "").trim(),
     address: "",
-    stage: "new",
+    // insurance jobs skip "new" and start in their own bucket
+    stage: insurance ? "insurance" : "new",
+    insurance: insurance ? 1 : 0,
+    insuranceChecklist: "",
     createdAt: new Date().toISOString(),
     startDate: "",
     revenue: null,
@@ -135,8 +164,8 @@ export function insertLead(db, { name, job, phone, email, source, sourceOther })
   );
 
   db.prepare(
-    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork, contactId)
-     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork, @contactId)`
+    `INSERT INTO leads (id, name, job, phone, email, address, stage, createdAt, startDate, revenue, bidSentAt, wonAt, completedAt, paidAt, source, sourceOther, archived, archivedAt, scopeOfWork, contactId, insurance, insuranceChecklist)
+     VALUES (@id, @name, @job, @phone, @email, @address, @stage, @createdAt, @startDate, @revenue, @bidSentAt, @wonAt, @completedAt, @paidAt, @source, @sourceOther, @archived, @archivedAt, @scopeOfWork, @contactId, @insurance, @insuranceChecklist)`
   ).run(lead);
 
   return lead;
@@ -201,11 +230,11 @@ router.get("/", requireAuth("viewer"), (req, res) => {
 });
 
 router.post("/", requireAuth("owner"), (req, res) => {
-  const { name, job, phone, email, source, sourceOther } = req.body || {};
+  const { name, job, phone, email, source, sourceOther, insurance } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required" });
   if (!source || !SOURCES.has(source)) return res.status(400).json({ error: "Valid source is required" });
 
-  const lead = insertLead(db, { name, job, phone, email, source, sourceOther });
+  const lead = insertLead(db, { name, job, phone, email, source, sourceOther, insurance: insurance === true });
   res.status(201).json(forRole(req.role, rowToLead(lead)));
 });
 
@@ -300,11 +329,23 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     patch.actualWorkDays = null;
     patch.lostAt = ts;
   } else {
-    // new (reopen)
+    // new / insurance (reopen)
     patch.wonAt = null;
     patch.scheduledAt = null;
     patch.paidAt = null;
     patch.bidSentAt = null;
+  }
+
+  // back in the insurance bucket means it isn't won anymore — uncheck that
+  // step so the checklist matches where the lead actually sits
+  if (stage === "insurance") {
+    const checklist = parseInsuranceChecklist(row.insuranceChecklist);
+    delete checklist.jobWon;
+    patch.insuranceChecklist = JSON.stringify(checklist);
+    patch.insurance = 1;
+  } else if (stage === "new") {
+    // "not insurance — move to New" (or reopening a regular lead)
+    patch.insurance = 0;
   }
 
   const fields = Object.keys(patch);
@@ -694,6 +735,53 @@ router.post("/:id/draft-estimate", requireAuth("owner"), async (req, res) => {
     res.status(502).json({ error: `Couldn't build the estimate: ${err.message}` });
   } finally {
     draftingEstimate.delete(row.id);
+  }
+});
+
+// check/uncheck one insurance checklist step — owner-only like the rest of
+// the sales side. Checking "jobWon" on a lead still in the insurance bucket
+// also moves it to "won" (stamping wonAt), so it carries on through the
+// normal board from there.
+router.patch("/:id/insurance-checklist", requireAuth("owner"), (req, res) => {
+  const row = getLeadOr404(req.params.id, res);
+  if (!row) return;
+
+  const { step, done } = req.body || {};
+  if (!INSURANCE_STEP_SET.has(step)) return res.status(400).json({ error: "Unknown checklist step" });
+  if (typeof done !== "boolean") return res.status(400).json({ error: "done must be true or false" });
+
+  const checklist = parseInsuranceChecklist(row.insuranceChecklist);
+  const now = new Date().toISOString();
+  if (done) checklist[step] = checklist[step] || now;
+  else delete checklist[step];
+
+  const patch = { insuranceChecklist: JSON.stringify(checklist), insurance: 1 };
+  const winning = step === "jobWon" && done && row.stage === "insurance";
+  if (winning) {
+    patch.stage = "won";
+    patch.wonAt = now;
+    patch.scheduledAt = null;
+    patch.paidAt = null;
+    patch.lostAt = null;
+  }
+
+  const fields = Object.keys(patch);
+  db.prepare(`UPDATE leads SET ${fields.map((f) => `${f} = @${f}`).join(", ")} WHERE id = @id`).run({
+    ...patch,
+    id: row.id,
+  });
+
+  res.json(forRole(req.role, rowToLead(db.prepare(`SELECT * FROM leads WHERE id = ?`).get(row.id))));
+
+  if (winning) {
+    logMove({
+      type: "lead",
+      entityId: row.id,
+      entityName: row.name,
+      fromStage: row.stage,
+      toStage: "won",
+      role: req.role,
+    });
   }
 });
 

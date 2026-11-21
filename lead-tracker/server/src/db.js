@@ -158,6 +158,18 @@ if (!existingColumns.has("tradeAnswers")) {
   db.exec(`ALTER TABLE leads ADD COLUMN tradeAnswers TEXT DEFAULT ''`);
 }
 
+if (!existingColumns.has("insurance")) {
+  // 1 for an insurance-claim job — it starts in the "insurance" stage
+  // instead of "new" and works through insuranceChecklist before it's won
+  db.exec(`ALTER TABLE leads ADD COLUMN insurance INTEGER NOT NULL DEFAULT 0`);
+}
+
+if (!existingColumns.has("insuranceChecklist")) {
+  // JSON { [stepKey]: ISO timestamp it was checked } for the insurance
+  // stage's checklist (see INSURANCE_STEPS in routes/leads.js)
+  db.exec(`ALTER TABLE leads ADD COLUMN insuranceChecklist TEXT DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id TEXT PRIMARY KEY,
