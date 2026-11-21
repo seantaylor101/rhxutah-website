@@ -343,6 +343,9 @@ router.post("/:id/move", requireAuth("viewer"), (req, res) => {
     delete checklist.jobWon;
     patch.insuranceChecklist = JSON.stringify(checklist);
     patch.insurance = 1;
+  } else if (stage === "new") {
+    // "not insurance — move to New" (or reopening a regular lead)
+    patch.insurance = 0;
   }
 
   const fields = Object.keys(patch);

@@ -11839,8 +11839,11 @@ function DeleteConfirmModal({ label, itemName, onConfirm, onCancel }) {
 function LeadMoreMenu({ lead, onMove }) {
   const [open, setOpen] = useState(false);
   const prevStage = previousStageFor(lead);
-  if (!prevStage) return null;
-  const prevLabel = STAGES.find((s) => s.key === prevStage)?.short || prevStage;
+  const prevLabel = prevStage ? STAGES.find((s) => s.key === prevStage)?.short || prevStage : null;
+  // switch an existing lead into (or back out of) the insurance bucket
+  const canMoveToInsurance = lead.stage === "new" || lead.stage === "bid";
+  const canMoveOutOfInsurance = lead.stage === "insurance";
+  if (!prevStage && !canMoveToInsurance && !canMoveOutOfInsurance) return null;
 
   return (
     <div style={{ position: "relative" }}>
@@ -11851,15 +11854,39 @@ function LeadMoreMenu({ lead, onMove }) {
         <>
           <div style={moreMenuScrim} onClick={() => setOpen(false)} />
           <div style={moreMenuPopover}>
-            <button
-              onClick={() => {
-                onMove(lead.id, prevStage, undefined, true);
-                setOpen(false);
-              }}
-              style={moreMenuItem}
-            >
-              Move back to {prevLabel}
-            </button>
+            {prevStage && (
+              <button
+                onClick={() => {
+                  onMove(lead.id, prevStage, undefined, true);
+                  setOpen(false);
+                }}
+                style={moreMenuItem}
+              >
+                Move back to {prevLabel}
+              </button>
+            )}
+            {canMoveToInsurance && (
+              <button
+                onClick={() => {
+                  onMove(lead.id, "insurance");
+                  setOpen(false);
+                }}
+                style={moreMenuItem}
+              >
+                Move to Insurance
+              </button>
+            )}
+            {canMoveOutOfInsurance && (
+              <button
+                onClick={() => {
+                  onMove(lead.id, "new", undefined, true);
+                  setOpen(false);
+                }}
+                style={moreMenuItem}
+              >
+                Not insurance — move to New
+              </button>
+            )}
           </div>
         </>
       )}
