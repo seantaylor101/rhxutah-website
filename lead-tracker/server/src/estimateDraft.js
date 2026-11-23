@@ -158,10 +158,22 @@ export function optionSet(name, options, { required = false, exclusive = true, d
 }
 
 const sentence = (...parts) => parts.filter(Boolean).join(" ");
-function manufacturerNote(key) {
+// manufacturer warranty sentence with the maker's own registration/claims
+// links (estimating/wording.json); manufacturers with no confirmed official
+// page get the sentence without a link
+export function manufacturerNote(key) {
   const m = WORDING.manufacturers[key];
   if (!m) return "";
-  return WORDING.warranty.manufacturer.replace("{maker}", m.maker).replace("{link}", m.registrationUrl ? ` Register at ${m.registrationUrl}.` : "");
+  const links = (m.links || []).map((l) => ` ${l.label}: ${l.url}`).join(".");
+  return WORDING.warranty.manufacturer.replace("{maker}", m.maker).replace("{links}", links ? `${links}.` : "");
+}
+
+// manufacturers on these lines whose links Sean hasn't confirmed yet
+export function unverifiedManufacturerLinks(keys) {
+  return [...new Set(keys)].filter((k) => {
+    const m = WORDING.manufacturers[k];
+    return m && (m.links || []).length && !m.verified;
+  });
 }
 const LIFETIME = WORDING.warranty.lifetime;
 
@@ -855,6 +867,15 @@ export function buildAllLines({ basics, answers, assemblies, accountId }) {
   if (plan.lighting) add(buildLightingLines(assemblies.lighting, answers.lighting || {}, basics));
   out.total = round2(out.total);
   if (customerTypeOf(basics) === "insurance") out.flags.push("Insurance job: price off the adjuster's estimate and follow the claim's line structure before sending.");
+  const makers = [];
+  if (plan.siding) makers.push(plan.product);
+  if (out.lines.some(function has(l) { return l._type === "costItem" ? /Bulldog/.test(l.name) : (l.lineItems || []).some(has); })) makers.push("bulldog");
+  const unverified = unverifiedManufacturerLinks(makers);
+  if (unverified.length) out.flags.push(`Warranty links not confirmed yet for ${unverified.map((k) => WORDING.manufacturers[k].maker).join(", ")}: open them and set "verified": true in estimating/wording.json.`);
+  for (const k of makers) {
+    const m = WORDING.manufacturers[k];
+    if (m && !(m.links || []).length) out.flags.push(`No official warranty link on file for ${m.maker} yet.`);
+  }
   return out;
 }
 

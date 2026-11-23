@@ -1,23 +1,68 @@
 {
   "_about": "Customer-facing wording for proposal lines. Lifetime warranty goes ONLY on full installs (see rules.md). Keep lines short: no 'haul away debris' style filler.",
-
   "warranty": {
     "lifetime": "Covered by the Ridgeline Home Exteriors Lifetime Workmanship Warranty (see warranty terms).",
     "paint": "One coat applied in two passes. Paint workmanship covers missed coverage found within the first year.",
-    "manufacturer": "Manufacturer warranty from {maker}; registering it is the customer's responsibility.{link} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs.",
+    "manufacturer": "Manufacturer warranty from {maker}; registering it is the customer's responsibility.{links} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs.",
     "stuccoColorMatch": "Stucco repairs can't be perfectly color-matched to the existing wall."
   },
-
   "manufacturers": {
-    "_about": "registrationUrl is linked on the line when set. (CONFIRM) the registration/claims links Sean wants used.",
-    "lp": { "maker": "LP Building Solutions", "registrationUrl": null },
-    "hardie": { "maker": "James Hardie", "registrationUrl": null },
-    "ascend": { "maker": "Alside", "registrationUrl": null },
-    "vinyl": { "maker": "the siding manufacturer", "registrationUrl": null },
-    "vinylShake": { "maker": "Foundry", "registrationUrl": null },
-    "bulldog": { "maker": "Bulldog", "registrationUrl": null }
+    "_about": "Links shown on proposal lines come ONLY from the manufacturer's own website. 'verified' is set to true once Sean has opened the link and confirmed it. Unverified links are still shown, and the draft is flagged until they're checked. No link is better than a guessed one.",
+    "lp": {
+      "maker": "LP Building Solutions",
+      "verified": false,
+      "links": [
+        {
+          "label": "Warranty details & registration",
+          "url": "https://lpcorp.com/products/siding-trim/build-with-lp-smartside/warranty-information"
+        },
+        {
+          "label": "Claims",
+          "url": "https://lpcorp.com/project-resources/warranty-claims"
+        }
+      ]
+    },
+    "hardie": {
+      "maker": "James Hardie",
+      "verified": false,
+      "links": [
+        {
+          "label": "Claims",
+          "url": "https://claims.jameshardie.com/"
+        }
+      ]
+    },
+    "ascend": {
+      "maker": "Alside",
+      "verified": false,
+      "links": [
+        {
+          "label": "Warranty & claims",
+          "url": "https://www.alside.com/support/warranties/"
+        }
+      ]
+    },
+    "vinyl": {
+      "maker": "Ply Gem (Mastic)",
+      "verified": false,
+      "links": [
+        {
+          "label": "Warranty registration",
+          "url": "https://www.plygem.com/siding/warranty/register-your-warranty"
+        }
+      ]
+    },
+    "vinylShake": {
+      "maker": "Westlake Royal (Foundry)",
+      "verified": false,
+      "links": []
+    },
+    "bulldog": {
+      "maker": "GPI (Bulldog)",
+      "verified": false,
+      "links": []
+    }
   },
-
   "siding": {
     "lp": {
       "lap": "LP SmartSide lap siding with trim & house wrap",
@@ -47,13 +92,10 @@
     "paintRetail": "Painted with Sherwin-Williams Emerald Rain Refresh.",
     "paintGc": "Painted with contractor-grade exterior paint."
   },
-
   "gutters": {
     "description": "Seamless K-style aluminum gutters and downspouts.",
     "tearOff": "Includes removing the existing gutters."
   },
-
   "repairs": "Repair work isn't covered by the lifetime workmanship warranty.",
-
   "drains": "Price assumes no concrete, roots or landscaping in the drain path; if we find any, we'll quote it before doing that part."
 }
