@@ -398,7 +398,12 @@ test("manufacturer warranty links come only from wording.json (maker's own site)
     if (k.startsWith("_")) continue;
     for (const l of m.links || []) assert.match(l.url, /^https:\/\/(www\.|claims\.)?(lpcorp|jameshardie|alside|plygem)\.com\//, `${k}: ${l.url}`);
   }
-  assert.match(manufacturerNote("lp"), /LP Building Solutions; registering it is the customer's responsibility\. Warranty details & registration: https:\/\/lpcorp\.com\/.+ Claims: https:\/\/lpcorp\.com\/project-resources\/warranty-claims\. Manufacturer defects/);
+  // LP: no registration; the customer gets RHX's installation letter for a claim
+  const lp = manufacturerNote("lp");
+  assert.match(lp, /No registration is needed; if you ever need to file a claim, contact Ridgeline Home Exteriors/);
+  assert.ok(!/registering it is the customer's responsibility/.test(lp));
+  assert.match(lp, /Claims: https:\/\/lpcorp\.com\/project-resources\/warranty-claims\. Manufacturer defects/);
+  assert.match(manufacturerNote("ascend"), /registering it is the customer's responsibility\. Warranty & claims: https:\/\/www\.alside\.com/);
   assert.ok(!/https?:/.test(manufacturerNote("bulldog")), "no link until there's an official one");
 });
 
@@ -408,6 +413,6 @@ test("drafts flag warranty links Sean hasn't confirmed, and makers with no link"
     answers: cleanTradeAnswers({ siding: { product: "lp", wallSF: 1000 }, gutters: scott }),
     assemblies: { siding: lpAsm, gutters: gutterAsm },
   });
-  assert.ok(r.flags.some((f) => /not confirmed yet for LP Building Solutions/.test(f)));
+  assert.ok(!r.flags.some((f) => /not confirmed yet for LP/.test(f)), "LP confirmed by Sean");
   assert.ok(r.flags.some((f) => /No official warranty link on file for GPI \(Bulldog\)/.test(f)));
 });

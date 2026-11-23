@@ -78,8 +78,11 @@ Use good/better/best options and optional upgrades to capture more revenue.
 - **Paint:** no lifetime. Paint workmanship covers only missed coverage found
   within the first year. Standard is one coat applied in two passes unless the
   customer asks for more and it's noted before signing.
-- **Manufacturer warranty:** link registration/claims on the line and state
-  that registering it is the customer's responsibility. RHX doesn't cover
+- **Manufacturer warranty:** link the manufacturer's own registration/claims
+  pages on the line and state that registering it is the customer's
+  responsibility. **LP SmartSide has no registration:** for a claim LP needs a
+  letter from RHX on company letterhead with the install month/date and our GC
+  license number, so LP lines tell the customer to contact RHX for it. RHX doesn't cover
   manufacturer defects and charges labor on manufacturer-defect repairs.
 - Standard sentence: "Covered by the Ridgeline Home Exteriors Lifetime
   Workmanship Warranty (see warranty terms)."

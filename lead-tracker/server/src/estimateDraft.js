@@ -165,7 +165,7 @@ export function manufacturerNote(key) {
   const m = WORDING.manufacturers[key];
   if (!m) return "";
   const links = (m.links || []).map((l) => ` ${l.label}: ${l.url}`).join(".");
-  return WORDING.warranty.manufacturer.replace("{maker}", m.maker).replace("{links}", links ? `${links}.` : "");
+  return (m.note || WORDING.warranty.manufacturer).replace("{maker}", m.maker).replace("{links}", links ? `${links}.` : "");
 }
 
 // manufacturers on these lines whose links Sean hasn't confirmed yet
