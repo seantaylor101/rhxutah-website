@@ -80,9 +80,12 @@ Use good/better/best options and optional upgrades to capture more revenue.
   customer asks for more and it's noted before signing.
 - **Manufacturer warranty:** link the manufacturer's own registration/claims
   pages on the line and state that registering it is the customer's
-  responsibility. **LP SmartSide has no registration:** for a claim LP needs a
-  letter from RHX on company letterhead with the install month/date and our GC
-  license number, so LP lines tell the customer to contact RHX for it. RHX doesn't cover
+  responsibility. **LP SmartSide and James Hardie have no registration:**
+  their lines say no registration is needed and that, in the event of a
+  warranty claim, the customer just reaches out to us for any documentation
+  needed from us (LP needs proof of the install date and our GC license
+  number; Hardie needs our invoice). RHX invoices should show our GC license
+  number so the customer's printed invoice works for either claim. RHX doesn't cover
   manufacturer defects and charges labor on manufacturer-defect repairs.
 - Standard sentence: "Covered by the Ridgeline Home Exteriors Lifetime
   Workmanship Warranty (see warranty terms)."

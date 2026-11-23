@@ -398,10 +398,13 @@ test("manufacturer warranty links come only from wording.json (maker's own site)
     if (k.startsWith("_")) continue;
     for (const l of m.links || []) assert.match(l.url, /^https:\/\/(www\.|claims\.)?(lpcorp|jameshardie|alside|plygem)\.com\//, `${k}: ${l.url}`);
   }
-  // LP: no registration; the customer gets RHX's installation letter for a claim
+  // LP and Hardie: no registration; the customer contacts RHX for documentation
   const lp = manufacturerNote("lp");
-  assert.match(lp, /No registration is needed; if you ever need to file a claim, contact Ridgeline Home Exteriors/);
-  assert.ok(!/registering it is the customer's responsibility/.test(lp));
+  for (const note of [lp, manufacturerNote("hardie")]) {
+    assert.match(note, /No registration is needed; in the event of a warranty claim, just reach out to us for any documentation needed from us\./);
+    assert.ok(!/registering it is the customer's responsibility/.test(note));
+  }
+  assert.match(manufacturerNote("hardie"), /^Manufacturer warranty from James Hardie\..* Claims: https:\/\/claims\.jameshardie\.com\/\./);
   assert.match(lp, /Claims: https:\/\/lpcorp\.com\/project-resources\/warranty-claims\. Manufacturer defects/);
   assert.match(manufacturerNote("ascend"), /registering it is the customer's responsibility\. Warranty & claims: https:\/\/www\.alside\.com/);
   assert.ok(!/https?:/.test(manufacturerNote("bulldog")), "no link until there's an official one");

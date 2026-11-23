@@ -4,15 +4,16 @@
     "lifetime": "Covered by the Ridgeline Home Exteriors Lifetime Workmanship Warranty (see warranty terms).",
     "paint": "One coat applied in two passes. Paint workmanship covers missed coverage found within the first year.",
     "manufacturer": "Manufacturer warranty from {maker}; registering it is the customer's responsibility.{links} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs.",
-    "stuccoColorMatch": "Stucco repairs can't be perfectly color-matched to the existing wall."
+    "stuccoColorMatch": "Stucco repairs can't be perfectly color-matched to the existing wall.",
+    "manufacturerNoRegistration": "Manufacturer warranty from {maker}. No registration is needed; in the event of a warranty claim, just reach out to us for any documentation needed from us.{links} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs."
   },
   "manufacturers": {
-    "_about": "Links shown on proposal lines come ONLY from the manufacturer's own website. 'verified' is set to true once Sean has confirmed the maker's process and links. 'note' replaces the standard manufacturer sentence for makers with their own process ({links} is filled with the links). No link is better than a guessed one.",
+    "_about": "Links shown on proposal lines come ONLY from the manufacturer's own website. 'verified' is set to true once Sean has confirmed the maker's process and links. 'registration': false uses warranty.manufacturerNoRegistration (customer contacts RHX for documentation) instead of the standard 'registering it is the customer's responsibility' sentence. No link is better than a guessed one.",
     "lp": {
       "maker": "LP Building Solutions",
       "verified": true,
-      "_process": "LP has no homeowner registration. For a claim LP needs a letter from RHX on company letterhead stating the install month/date and our GC license number, so the customer contacts RHX for it.",
-      "note": "Manufacturer warranty from LP Building Solutions. No registration is needed; if you ever need to file a claim, contact Ridgeline Home Exteriors and we'll provide the installation letter LP requires.{links} Manufacturer defects aren't covered by our workmanship warranty, and labor is charged on manufacturer-defect repairs.",
+      "registration": false,
+      "_process": "No homeowner registration. For a claim LP needs a letter or invoice from RHX showing the install date and our GC license number; the customer contacts RHX for it.",
       "links": [
         {
           "label": "Warranty details",
@@ -27,6 +28,8 @@
     "hardie": {
       "maker": "James Hardie",
       "verified": false,
+      "registration": false,
+      "_process": "No homeowner registration. For a claim the customer needs our invoice (which should show our GC license number); they contact RHX if they need it.",
       "links": [
         {
           "label": "Claims",
