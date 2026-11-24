@@ -25,6 +25,7 @@ import {
   fromLocalInput,
   mapsLink,
   mailtoHref,
+  gmailHref,
 } from "./shared.js";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -699,7 +700,27 @@ function GpsLine({ label: text, p, withDay }) {
   );
 }
 
+// which app on this phone sends the payroll email — remembered per device
+const MAIL_APP_KEY = "rhxPayrollMailApp";
+function readMailApp() {
+  try {
+    return localStorage.getItem(MAIL_APP_KEY) === "mail" ? "mail" : "gmail";
+  } catch {
+    return "gmail";
+  }
+}
+
 function SubmitSheet({ employee, report, payrollEmail, onClose, onSubmitted }) {
+  const [mailApp, setMailAppState] = useState(readMailApp);
+  const setMailApp = (v) => {
+    setMailAppState(v);
+    try {
+      localStorage.setItem(MAIL_APP_KEY, v);
+    } catch {
+      // private mode — just won't be remembered
+    }
+  };
+  const hrefFor = (e, app = mailApp) => (app === "gmail" ? gmailHref(e) : mailtoHref(e));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [email, setEmail] = useState(null);
@@ -712,8 +733,8 @@ function SubmitSheet({ employee, report, payrollEmail, onClose, onSubmitted }) {
       const res = await api.submitPayroll(employee.id, report.periodStart);
       setEmail(res.email);
       onSubmitted(res.report);
-      // hand off to the phone's mail app with everything filled in
-      window.location.href = mailtoHref(res.email);
+      // hand off to Gmail / Mail with everything filled in
+      window.location.href = hrefFor(res.email);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -759,15 +780,41 @@ function SubmitSheet({ employee, report, payrollEmail, onClose, onSubmitted }) {
               This saves a copy and opens an email to <strong style={{ color: C.ink }}>{payrollEmail}</strong> with the report filled
               in — just hit send.
             </div>
-            <button disabled={busy} onClick={submit} style={{ ...btnPrimary, width: "100%", marginTop: 16, padding: "16px 14px", fontSize: 17 }}>
-              {busy ? "Submitting…" : "Submit & open email"}
+            <div style={{ fontSize: 13, color: C.muted, marginTop: 14, marginBottom: 6 }}>Send it from</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[
+                ["gmail", "Gmail app"],
+                ["mail", "iPhone Mail app"],
+              ].map(([key, text]) => (
+                <button
+                  key={key}
+                  onClick={() => setMailApp(key)}
+                  style={{
+                    ...btnSecondary,
+                    flex: 1,
+                    background: mailApp === key ? C.ink : C.surfaceMuted,
+                    color: mailApp === key ? "#fff" : C.ink,
+                  }}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+            <button disabled={busy} onClick={submit} style={{ ...btnPrimary, width: "100%", marginTop: 14, padding: "16px 14px", fontSize: 17 }}>
+              {busy ? "Submitting…" : mailApp === "gmail" ? "Submit & open in Gmail" : "Submit & open in Mail"}
             </button>
           </>
         ) : (
           <>
-            <div style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>If your mail app didn't open, tap below.</div>
-            <a href={mailtoHref(email)} style={{ ...btnPrimary, width: "100%", marginTop: 12, padding: "16px 14px", fontSize: 17, textDecoration: "none", boxSizing: "border-box" }}>
-              Open email to {email.to}
+            <div style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>If the email didn't open, tap below.</div>
+            <a href={hrefFor(email)} style={{ ...btnPrimary, width: "100%", marginTop: 12, padding: "16px 14px", fontSize: 17, textDecoration: "none", boxSizing: "border-box" }}>
+              Open in {mailApp === "gmail" ? "Gmail" : "Mail"}
+            </a>
+            <a
+              href={hrefFor(email, mailApp === "gmail" ? "mail" : "gmail")}
+              style={{ ...btnSecondary, width: "100%", marginTop: 8, textDecoration: "none", boxSizing: "border-box" }}
+            >
+              Open in {mailApp === "gmail" ? "iPhone Mail" : "Gmail"} instead
             </a>
             <button onClick={copy} style={{ ...btnSecondary, width: "100%", marginTop: 8 }}>
               Copy report text

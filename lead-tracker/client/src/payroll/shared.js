@@ -42,6 +42,12 @@ export function mapsLink(p) {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`;
 }
 
+// opens a filled-in draft straight in the Gmail app (iPhone/Android) — for
+// when the business account lives in Gmail, not the phone's built-in Mail
+export function gmailHref({ to, subject, body }) {
+  return `googlegmail:///co?to=${encodeURIComponent(to).replace(/%40/g, "@")}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 export function mailtoHref({ to, subject, body }) {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
